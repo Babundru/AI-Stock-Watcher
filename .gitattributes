@@ -1,0 +1,14 @@
+# Normalise line endings in the repository so checkouts are consistent
+# regardless of each contributor's core.autocrlf setting.
+* text=auto
+
+# Batch files MUST arrive with CRLF: cmd.exe mishandles label-based
+# subroutines (`goto :eof`, `call :probe`) in LF-only files, which would
+# break the launcher for anyone cloning with core.autocrlf=false.
+*.bat text eol=crlf
+
+# Everything else is fine with LF.
+*.py text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.txt text eol=lf

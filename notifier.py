@@ -16,6 +16,7 @@ class Notifier:
         from config import NTFY_TOPIC, NOTIFY_OWNERSHIP
         self.ntfy_topic = NTFY_TOPIC
         self.notify_ownership = NOTIFY_OWNERSHIP
+        self._warned_no_topic = False
 
     def is_market_open(self):
         """
@@ -112,6 +113,12 @@ class Notifier:
 
     def _send_ntfy(self, title, message, priority='default', url=None):
         if not self.ntfy_topic:
+            # Warn once rather than silently dropping every alert - otherwise
+            # a new user sees the app working but never gets a phone alert.
+            if not self._warned_no_topic:
+                print("No notification topic set - phone alerts are disabled. "
+                      "Set one in Settings to enable them.")
+                self._warned_no_topic = True
             return
 
         try:

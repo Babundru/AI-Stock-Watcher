@@ -52,7 +52,12 @@ OLLAMA_NUM_THREADS = 1
 # Set your real topic in data/settings.json (via Settings in the app). That
 # file is gitignored; this file is not, so never put your real topic here -
 # it would be published with the code.
-NTFY_TOPIC = "stocks-watcher-change-me"
+#
+# Empty on purpose: phone notifications stay off until you choose a topic.
+# A shipped default would be a shared public channel - every user who never
+# changed it would be publishing their alerts to the same place, and reading
+# everyone else's.
+NTFY_TOPIC = ""
 
 # Whether to mark alerts about stocks you own with an "[OWNED]" tag in the
 # notification itself.

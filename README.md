@@ -58,10 +58,14 @@ Alerts are delivered through [ntfy.sh](https://ntfy.sh), a free push service.
 5. Back on the desktop, click **Send test alert**. It
    should arrive on your phone within a few seconds.
 
-> **Choose your own topic before using the app.** On the free ntfy server a
-> topic is a public channel — anyone who knows or guesses the name can read
-> every alert you send. A long random name is the only thing keeping it
-> private. Do not keep the default.
+> **There is no default topic — phone alerts are off until you set one.**
+> That is deliberate: a shipped default would be a shared public channel, with
+> every user who never changed it publishing alerts to the same place and
+> reading everyone else's.
+>
+> On the free ntfy server a topic is a public channel — anyone who knows or
+> guesses the name can read every alert you send. A long random name is the
+> only thing keeping it private, so make it long and random.
 >
 > Set it in the app (Settings), which writes to `data/settings.json`. That file
 > is gitignored. **Never put your real topic in `config.py`** — that file is
