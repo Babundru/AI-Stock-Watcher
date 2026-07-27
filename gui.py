@@ -147,7 +147,7 @@ class StockAppGUI(ctk.CTk):
     def open_settings(self):
         win = ctk.CTkToplevel(self)
         win.title("SYSTEM CONFIGURATION")
-        win.geometry("500x300")
+        win.geometry("500x520")
         win.configure(fg_color=COLOR_BG)
         win.transient(self)
         
@@ -167,18 +167,33 @@ class StockAppGUI(ctk.CTk):
         try:
             import config
             current_topic = config.NTFY_TOPIC
+            current_model = config.LOCAL_MODEL_NAME
+            current_threads = config.OLLAMA_NUM_THREADS
         except:
             current_topic = "stocks_ai_secret"
-        
+            current_model = "phi3:mini"
+            current_threads = 1
+
         e_topic = add_input("NTFY NOTIFICATION TOPIC:", current_topic)
-        
-        ctk.CTkLabel(scroll, text="ℹ️ Change this to a unique value for privacy", 
+
+        ctk.CTkLabel(scroll, text="ℹ️ Change this to a unique value for privacy",
                     text_color="#666", font=("Consolas", 9)).pack(pady=(5, 20))
-        
+
+        ctk.CTkLabel(scroll, text="LOCAL AI MODEL", font=("Segoe UI", 16, "bold"),
+                    text_color=COLOR_ACCENT).pack(pady=(10, 10))
+
+        e_model = add_input("OLLAMA MODEL NAME:", current_model)
+        e_threads = add_input("OLLAMA THREADS:", current_threads)
+
+        ctk.CTkLabel(scroll, text="ℹ️ Model must be pulled first: ollama pull <name>",
+                    text_color="#666", font=("Consolas", 9)).pack(pady=(5, 20))
+
         def save():
             import json
             new_settings = {
-                "NTFY_TOPIC": e_topic.get().strip()
+                "NTFY_TOPIC": e_topic.get().strip(),
+                "LOCAL_MODEL_NAME": e_model.get().strip(),
+                "OLLAMA_NUM_THREADS": e_threads.get().strip()
             }
             try:
                 with open("data/settings.json", "w") as f:
@@ -287,7 +302,8 @@ class StockAppGUI(ctk.CTk):
             self.log_queue.put("✓ Config reloaded")
             
             # If backend is running, reload analyzer keywords
-            if self.backend and hasattr(self.backend, 'analyzer'):
+            # The LLM analyzer has no keyword table to reload.
+            if self.backend and hasattr(self.backend.analyzer, 'reload_keywords'):
                 self.backend.analyzer.reload_keywords()
                 self.log_queue.put("✓ Analyzer updated with new keywords")
             
@@ -727,7 +743,8 @@ class StockAppGUI(ctk.CTk):
             entry_w.delete(0, tk.END)
             self.refresh_keywords_list()
             # Reload keywords in analyzer
-            if self.backend and hasattr(self.backend, 'analyzer'):
+            # The LLM analyzer has no keyword table to reload.
+            if self.backend and hasattr(self.backend.analyzer, 'reload_keywords'):
                 self.backend.analyzer.reload_keywords()
     
     def delete_keyword(self, keyword, keyword_type):
@@ -736,7 +753,8 @@ class StockAppGUI(ctk.CTk):
             self.log_queue.put(f"Removed {keyword_type} keyword: {keyword}")
             self.refresh_keywords_list()
             # Reload keywords in analyzer
-            if self.backend and hasattr(self.backend, 'analyzer'):
+            # The LLM analyzer has no keyword table to reload.
+            if self.backend and hasattr(self.backend.analyzer, 'reload_keywords'):
                 self.backend.analyzer.reload_keywords()
     
     def reset_keywords(self):
@@ -746,7 +764,8 @@ class StockAppGUI(ctk.CTk):
             self.log_queue.put("Keywords reset to defaults")
             self.refresh_keywords_list()
             # Reload keywords in analyzer
-            if self.backend and hasattr(self.backend, 'analyzer'):
+            # The LLM analyzer has no keyword table to reload.
+            if self.backend and hasattr(self.backend.analyzer, 'reload_keywords'):
                 self.backend.analyzer.reload_keywords()
     
     def refresh_keywords_list(self):

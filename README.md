@@ -1,11 +1,12 @@
 # Stocks Watcher
 
-A Windows desktop app that continuously scans financial news, scores each
-article with a weighted-keyword algorithm, and pushes a notification to your
-phone when it finds high-impact news about a traded company.
+A Windows desktop app that continuously scans financial news, has a **local AI
+model** judge each article's market impact, and pushes a notification to your
+phone when it finds something significant.
 
-Everything runs locally. There are no API keys, no accounts, and no server —
-news comes from public RSS feeds and your own list of sources.
+Everything runs on your machine. There are no API keys, no accounts, and no
+cloud service — news comes from public RSS feeds and your own list of sources,
+and the analysis runs on a local [Ollama](https://ollama.com) model.
 
 ---
 
@@ -15,7 +16,9 @@ news comes from public RSS feeds and your own list of sources.
 - **Python 3.12 or newer**, installed from [python.org](https://www.python.org/downloads/)
   - During install, tick **"Add Python to PATH"**
   - The **`py` launcher** must be installed (it is included by default)
+- **[Ollama](https://ollama.com/download)**, with one model pulled
 - An internet connection
+- Enough RAM for your chosen model (roughly 8 GB for a 12B model)
 
 ## 2. Install
 
@@ -24,6 +27,16 @@ Open a terminal in the project folder and install the dependencies:
 ```
 py -3.13 -m pip install -r requirements.txt
 ```
+
+Then pull a model for Ollama to run:
+
+```
+ollama pull gemma3:12b
+```
+
+You do not need to start Ollama yourself — the app starts it when you click
+**INITIALIZE WATCHER**, and attaches to it if it is already running. If you
+pull a different model, set its name in **SYSTEM OPTIONS**.
 
 > **Use the same Python version you intend to run the app with.** This is the
 > single most common setup problem: if you install the packages on one Python
@@ -111,29 +124,36 @@ watcher.
 
 ## How alerts are decided
 
-Understanding this will save you from thinking the app is broken.
+Each article is sent to the local model, which is asked to first judge whether
+the news could actually move a stock price. Routine reports, rehashes, opinion
+pieces and general fluff are rejected outright; earnings, mergers, FDA
+decisions, lawsuits, contracts, analyst moves and macro events are analysed
+further. For anything it keeps, the model returns the affected company, its
+ticker, a sentiment, an impact rating, and a short explanation.
 
-An article is scored by which keywords it contains and, importantly, **where**:
-
-- A keyword in the **headline** counts about **3×** what the same word counts
-  in the article body — a phrase in the headline is the story, the same phrase
-  buried in paragraph 30 is usually incidental.
-- Only the strongest handful of signals count, so a long article cannot
-  out-score a decisive headline just by being long.
-- Negations are detected: *"did not show breakthrough results"* is not read as
-  good news.
-- Overlapping phrases are not double-counted: *"FDA approval"* scores once, not
-  once as the phrase and again as *"approval"*.
-- The article must look like it concerns a traded company. General news,
-  politics, and personal-finance pieces are filtered out.
+Stocks in your PORTFOLIO are named in the prompt and explicitly treated as
+higher relevance.
 
 **You will only be notified when sentiment is clearly positive or negative
 *and* impact is HIGH or CRITICAL.** Everything else is logged but not sent.
 
-**Most articles produce no alert, and that is intended.** In a typical scan of
-around 100 headlines only one or two qualify. Long quiet stretches are normal —
-check the LOGS tab to confirm it is working. If you want more or fewer alerts,
-see Tuning below.
+**Analysis is slow, and that is normal.** A local model takes roughly one
+minute per article on CPU, so a scan of a dozen articles can take well over ten
+minutes. The LOGS tab shows the prompt sent and the reply received, so you can
+watch it work. Raising `OLLAMA_NUM_THREADS` speeds this up at the cost of
+making the machine busier.
+
+**Most articles produce no alert, and that is intended.** Long quiet stretches
+are normal — check the LOGS tab to confirm it is working.
+
+### Running without a model
+
+If you would rather not run an LLM, set `USE_LOCAL_LLM = False` in `config.py`.
+The app falls back to an offline weighted-keyword scorer that needs no model
+and analyses instantly. It is cruder — it matches vocabulary rather than
+understanding the article — but it weights headline mentions far above body
+text, handles negation, and filters non-market news. Its vocabulary is editable
+in the KEYWORDS tab.
 
 ---
 
@@ -147,14 +167,21 @@ Edit `config.py`:
 | `LOOKBACK_MINUTES` | `30` | How recent an article must be to be considered |
 | `GLOBAL_SCAN` | `True` | Scan all market news. Set `False` to watch only `TARGET_COMPANIES` |
 | `TARGET_COMPANIES` | `[]` | Company names to track when `GLOBAL_SCAN` is off |
+| `USE_LOCAL_LLM` | `True` | `False` uses the offline keyword scorer instead |
+| `LOCAL_MODEL_NAME` | `gemma3:12b` | Ollama model to run. Must be pulled first |
+| `OLLAMA_NUM_THREADS` | `1` | Threads the model may use. Higher is faster, but busier |
+| `OLLAMA_URL` | localhost:11434 | Change if Ollama runs on another host |
 
 > Do not set `LOOKBACK_MINUTES` much below 15. The news feeds only publish
 > every 10–30 minutes, so a narrower window filters out everything and the app
 > will find nothing at all.
 
-For alert sensitivity, edit the tunables at the top of `keyword_analyzer.py` —
-they are named and commented. Lower `IMPACT_HIGH` for more alerts, raise it for
-fewer.
+To change how the model judges articles, edit the prompt in
+`analyzer.py` — the relevance rules and the impact definitions (what counts as
+CRITICAL vs HIGH) are written out in plain English there.
+
+If you switched to the keyword scorer, its tunables are at the top of
+`keyword_analyzer.py`. Lower `IMPACT_HIGH` for more alerts, raise it for fewer.
 
 ---
 
@@ -181,8 +208,22 @@ step 2.
 
 **The app runs but never alerts**
 Usually normal (see above). Check the LOGS tab: if you see articles being
-fetched and scored, it is working. If you see no articles at all, check your
+fetched and analysed, it is working. If you see no articles at all, check your
 internet connection and the SOURCES tab.
+
+**Log shows `ERROR: 'ollama' command not found`**
+Ollama is not installed or not on PATH. Install it from
+[ollama.com/download](https://ollama.com/download) and restart the app.
+
+**Log shows `Local LLM Error:` or the model never responds**
+The model named in SYSTEM OPTIONS is probably not pulled. Run `ollama list` to
+see what you have, then `ollama pull <name>`, or change the name to match. If
+analysis simply times out, the model may be too large for your machine — try a
+smaller one such as `phi3:mini`.
+
+**Analysis is extremely slow**
+Expected on CPU. Raise `OLLAMA_NUM_THREADS`, use a smaller model, or set
+`USE_LOCAL_LLM = False` to use the instant keyword scorer.
 
 **Log shows `HTTP 401` or `HTTP 403` while scraping**
 Some publishers (MarketWatch, Investing.com) block automated access to full
@@ -201,9 +242,10 @@ note that some non-US listings need a suffix (for example `BMW.DE`).
 
 ## Important
 
-This tool is a **news-alerting aid, not investment advice**. It matches
-keywords; it does not understand context, sarcasm, or whether news is already
-priced in. It can be wrong in both directions — flagging harmless articles and
+This tool is a **news-alerting aid, not investment advice**. A small local
+language model can misread an article, invent a ticker, or miss that news is
+already priced in, and it will state wrong conclusions just as confidently as
+right ones. It can fail in both directions — flagging harmless articles and
 missing significant ones. Always read the linked article and do your own
 research before acting.
 

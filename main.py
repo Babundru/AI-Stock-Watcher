@@ -1,7 +1,9 @@
-from config import CHECK_INTERVAL, TARGET_COMPANIES
+from config import CHECK_INTERVAL, TARGET_COMPANIES, USE_LOCAL_LLM
 from news_collector import NewsCollector
+from analyzer import MarketAnalyzer
 from keyword_analyzer import KeywordAnalyzer
 from notifier import Notifier
+from ollama_manager import OllamaManager
 from portfolio_manager import PortfolioManager
 import time
 import datetime
@@ -15,7 +17,14 @@ class StockAppBackend:
         self.log_callback = log_callback
         self.running = False
         self.collector = NewsCollector()
-        self.analyzer = KeywordAnalyzer()
+        # LLM analysis when Ollama is configured, otherwise the offline
+        # keyword scorer so the app still works without a model installed.
+        if USE_LOCAL_LLM:
+            self.ollama = OllamaManager(log_callback=self.log)
+            self.analyzer = MarketAnalyzer(ai_log_callback=self.log)
+        else:
+            self.ollama = None
+            self.analyzer = KeywordAnalyzer()
         self.notifier = Notifier()
         self.portfolio_mgr = PortfolioManager()
         self.processed_urls_file = 'data/processed_urls.json'
@@ -80,6 +89,10 @@ class StockAppBackend:
 
     def start(self):
         self.running = True
+        # Bring the model server up before the first article arrives.
+        # Attaches to an already-running Ollama rather than starting a second.
+        if self.ollama:
+            self.ollama.start()
         self.log(f"Monitoring started. Check interval: {CHECK_INTERVAL//60} minutes")
         self.thread = threading.Thread(target=self._run_loop)
         self.thread.daemon = True
@@ -89,6 +102,10 @@ class StockAppBackend:
         self.running = False
         # Save processed URLs before stopping
         self._save_processed_urls()
+        # Only shuts down a server we spawned; an externally-started Ollama
+        # is left alone.
+        if self.ollama:
+            self.ollama.stop()
         self.log("Monitoring stopped. Processed URLs saved.")
 
     def _run_loop(self):
@@ -203,7 +220,8 @@ class StockAppBackend:
         portfolio_tickers = list(self.portfolio_mgr.get_portfolio().keys())
         
         # Analyze
-        self.log(f"   🔍 Analyzing with keyword matcher...")
+        engine = "local LLM" if USE_LOCAL_LLM else "keyword matcher"
+        self.log(f"   🔍 Analyzing with {engine}...")
         analysis = self.analyzer.analyze_article(company_hint, article, market_is_open, portfolio_tickers)
         if not analysis:
             self.log(f"   ⊘ No analysis results (article may not match criteria)")
