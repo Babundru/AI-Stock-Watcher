@@ -13,8 +13,9 @@ class Notifier:
     def __init__(self):
         self.timezone = pytz.timezone('US/Eastern')
         # Import config here to avoid circular imports at top level if any
-        from config import NTFY_TOPIC
+        from config import NTFY_TOPIC, NOTIFY_OWNERSHIP
         self.ntfy_topic = NTFY_TOPIC
+        self.notify_ownership = NOTIFY_OWNERSHIP
 
     def is_market_open(self):
         """
@@ -67,9 +68,11 @@ class Notifier:
         elif sentiment == "NEGATIVE":
             emoji = "📉"
 
-        # Add [OWNED] tag for negative news about owned stocks
+        # Ownership is deliberately NOT broadcast by default: the ntfy topic
+        # is a public channel, and this tag would disclose which stocks are
+        # actually held. The Alerts tab shows it locally instead.
         ownership_tag = ""
-        if sentiment == "NEGATIVE" and is_owned:
+        if sentiment == "NEGATIVE" and is_owned and self.notify_ownership:
             ownership_tag = " [OWNED]"
 
         title = f"{company} ({analysis.get('ticker', '???')}){ownership_tag}"

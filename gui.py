@@ -500,15 +500,27 @@ class StockAppGUI(ctk.CTk):
 
         def save():
             import json
-            new_settings = {
-                "NTFY_TOPIC": e_topic.get().strip(),
-                "LOCAL_MODEL_NAME": e_model.get().strip(),
-                "OLLAMA_NUM_THREADS": e_threads.get().strip()
-            }
+            import os
             try:
-                with open("data/settings.json", "w") as f:
-                    json.dump(new_settings, f, indent=4)
-                messagebox.showinfo("System Update", "Saved. Please RESTART app/watcher.")
+                # Merge rather than replace: writing a fresh dict would drop
+                # any setting this dialog does not expose (NOTIFY_OWNERSHIP,
+                # USE_LOCAL_LLM), silently reverting it to the default.
+                existing = {}
+                if os.path.exists("data/settings.json"):
+                    try:
+                        with open("data/settings.json", "r", encoding="utf-8") as f:
+                            existing = json.load(f)
+                    except Exception:
+                        existing = {}
+
+                existing.update({
+                    "NTFY_TOPIC": e_topic.get().strip(),
+                    "LOCAL_MODEL_NAME": e_model.get().strip(),
+                    "OLLAMA_NUM_THREADS": e_threads.get().strip(),
+                })
+                with open("data/settings.json", "w", encoding="utf-8") as f:
+                    json.dump(existing, f, indent=4)
+                messagebox.showinfo("Settings saved", "Saved. Restart the app to apply.")
                 win.destroy()
             except Exception as e:
                 messagebox.showerror("Error", f"Save failed: {e}")

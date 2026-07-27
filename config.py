@@ -43,9 +43,24 @@ LOCAL_MODEL_NAME = "gemma3:12b"
 OLLAMA_NUM_THREADS = 1
 
 # --- NOTIFICATION SETTINGS ---
-# Ntfy.sh Topic Name
-# IMPORTANT: This is public if you use the free server! Choose a long, random name to make it "private" effectively.
-NTFY_TOPIC = "stocks-watcher-change-me" # CHANGE THIS TO SOMETHING UNIQUE
+# Ntfy.sh topic name.
+#
+# On the free ntfy server a topic is a PUBLIC channel: anyone who knows or
+# guesses the name can read every alert you send. The name is the only thing
+# keeping it private, so it must be long and random.
+#
+# Set your real topic in data/settings.json (via Settings in the app). That
+# file is gitignored; this file is not, so never put your real topic here -
+# it would be published with the code.
+NTFY_TOPIC = "stocks-watcher-change-me"
+
+# Whether to mark alerts about stocks you own with an "[OWNED]" tag in the
+# notification itself.
+#
+# Off by default: the tag would tell anyone reading the public topic which
+# stocks you actually hold. The app still shows an "Owned" badge on the
+# Alerts tab, which stays on this machine.
+NOTIFY_OWNERSHIP = False
 
 # --- DYNAMIC SETTINGS LOADING ---
 import json
@@ -69,6 +84,9 @@ if os.path.exists(SETTINGS_FILE):
 
         if "USE_LOCAL_LLM" in user_settings:
             USE_LOCAL_LLM = bool(user_settings["USE_LOCAL_LLM"])
+
+        if "NOTIFY_OWNERSHIP" in user_settings:
+            NOTIFY_OWNERSHIP = bool(user_settings["NOTIFY_OWNERSHIP"])
 
         print(f"Loaded custom settings: Topic={NTFY_TOPIC}, Model={LOCAL_MODEL_NAME}")
         

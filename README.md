@@ -59,9 +59,13 @@ Alerts are delivered through [ntfy.sh](https://ntfy.sh), a free push service.
    should arrive on your phone within a few seconds.
 
 > **Choose your own topic before using the app.** On the free ntfy server a
-> topic is effectively a public channel — anyone who knows or guesses the name
-> receives your alerts. A long random name is what keeps it private. Do not
-> keep the default.
+> topic is a public channel — anyone who knows or guesses the name can read
+> every alert you send. A long random name is the only thing keeping it
+> private. Do not keep the default.
+>
+> Set it in the app (Settings), which writes to `data/settings.json`. That file
+> is gitignored. **Never put your real topic in `config.py`** — that file is
+> tracked, so it would be published along with the code.
 
 ## 4. Run
 
@@ -210,6 +214,25 @@ If you switched to the keyword scorer, its tunables are at the top of
 `keyword_analyzer.py`. Lower `IMPACT_HIGH` for more alerts, raise it for fewer.
 
 ---
+
+## Privacy
+
+Your holdings are the most sensitive thing here. Where they go:
+
+| Destination | What it learns | Notes |
+|---|---|---|
+| **Local AI (Ollama)** | Your ticker list, included in each prompt | Stays on your machine, as long as `OLLAMA_URL` points at localhost |
+| **Yahoo Finance** | Your tickers, whenever prices refresh | Unavoidable if you want live prices. Leave the Portfolio empty to avoid it |
+| **ntfy.sh** | The alerts you receive | The topic is public — see above |
+
+`portfolio.json` and `settings.json` are gitignored, so holdings and your topic
+are never committed.
+
+By default the app does **not** disclose ownership in notifications.
+`NOTIFY_OWNERSHIP = False` in `config.py` keeps the `[OWNED]` marker out of the
+notification, since it would tell anyone reading the public topic which stocks
+you actually hold. The Alerts tab still shows an `Owned` badge locally. Set it
+to `True` only if your topic is genuinely private.
 
 ## Your data
 
