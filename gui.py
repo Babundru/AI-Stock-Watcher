@@ -3,6 +3,8 @@ import tkinter as tk
 from tkinter import messagebox
 import threading
 import queue
+import webbrowser
+import datetime
 import yfinance as yf
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -25,6 +27,9 @@ COLOR_DANGER = "#FF2A6D"   # Neon Red/Pink
 COLOR_SUCCESS = "#05FFA1"  # Neon Green
 COLOR_TEXT = "#E0E0E0"
 COLOR_TEXT_DIM = "#808080"
+COLOR_PANEL = "#0B0B0E"   # Slightly lifted from the void, for cards
+COLOR_LINE = "#242428"    # Hairline borders
+COLOR_WARN = "#FFA500"
 FONT_MONO = ("Consolas", 12)
 FONT_HEAD = ("Segoe UI", 16, "bold")
 FONT_DATA = ("Segoe UI", 13)
@@ -56,6 +61,13 @@ class StockAppGUI(ctk.CTk):
         self.keyword_mgr = KeywordManager()
         self.backend = None
         self.log_queue = queue.Queue()
+        # Backend callbacks fire on the worker thread; queue them and drain on
+        # the UI thread rather than touching widgets from another thread.
+        self.alert_queue = queue.Queue()
+        self.status_queue = queue.Queue()
+        self.alerts = []
+        self.show_ai_traffic = ctk.BooleanVar(value=False)
+        self.autoscroll = ctk.BooleanVar(value=True)
 
         # Redirect Console
         sys.stdout = ConsoleRedirector(self.log_queue)
@@ -67,23 +79,58 @@ class StockAppGUI(ctk.CTk):
         # --- Sidebar (HUD Panel) ---
         self.sidebar_frame = ctk.CTkFrame(self, width=220, corner_radius=0, fg_color=COLOR_SIDEBAR)
         self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
+        self.sidebar_frame.grid_columnconfigure(0, weight=1)
+        # Row 6 is an empty spacer: it pushes the live counters and the
+        # diagnostic button to the bottom instead of leaving a dead gap.
         self.sidebar_frame.grid_rowconfigure(6, weight=1)
 
         # Logo
-        self.logo_label = ctk.CTkLabel(self.sidebar_frame, text="STOCKS WATCHER\n[OWL_SYSTEM]", 
+        self.logo_label = ctk.CTkLabel(self.sidebar_frame, text="STOCKS WATCHER\n[OWL_SYSTEM]",
                                       font=("Segoe UI", 20, "bold"), text_color=COLOR_ACCENT)
-        self.logo_label.grid(row=0, column=0, padx=20, pady=(30, 20))
+        self.logo_label.grid(row=0, column=0, padx=20, pady=(26, 14))
 
-        # Status Indicator
-        self.status_label = ctk.CTkLabel(self.sidebar_frame, text="STATUS: OFFLINE", text_color=COLOR_DANGER, font=("Consolas", 12, "bold"))
-        self.status_label.grid(row=1, column=0, padx=20, pady=(0, 20))
+        # --- Status panel: state, active engine, and current activity ---
+        status_box = ctk.CTkFrame(self.sidebar_frame, fg_color=COLOR_PANEL, corner_radius=0,
+                                  border_width=1, border_color=COLOR_LINE)
+        status_box.grid(row=1, column=0, padx=16, pady=(0, 18), sticky="ew")
+
+        self.status_label = ctk.CTkLabel(status_box, text="● OFFLINE", text_color=COLOR_DANGER,
+                                         font=("Consolas", 13, "bold"), anchor="w")
+        self.status_label.pack(fill='x', padx=12, pady=(10, 2))
+
+        self.engine_label = ctk.CTkLabel(status_box, text=self._engine_text(), text_color=COLOR_TEXT_DIM,
+                                         font=("Consolas", 9), anchor="w", justify="left")
+        self.engine_label.pack(fill='x', padx=12, pady=(0, 6))
+
+        self.activity_label = ctk.CTkLabel(status_box, text="Idle", text_color=COLOR_ACCENT,
+                                           font=("Consolas", 9), anchor="w", justify="left",
+                                           wraplength=170)
+        self.activity_label.pack(fill='x', padx=12, pady=(0, 10))
 
         # Controls
         self._create_sidebar_btn("INITIALIZE WATCHER", self.start_backend, COLOR_SUCCESS, 2)
         self._create_sidebar_btn("TERMINATE PROCESS", self.stop_backend, COLOR_DANGER, 3, state="disabled")
-        self._create_sidebar_btn("RELOAD SETTINGS", self.reload_settings, "#FFA500", 4)
+        self._create_sidebar_btn("RELOAD SETTINGS", self.reload_settings, COLOR_WARN, 4)
         self._create_sidebar_btn("SYSTEM OPTIONS", self.open_settings, COLOR_ACCENT, 5)
-        self._create_sidebar_btn("SYSTEM_DIAGNOSTIC", self.send_test_alert, COLOR_TEXT, 6)
+
+        # --- Live counters (bottom) ---
+        stats_box = ctk.CTkFrame(self.sidebar_frame, fg_color="transparent")
+        stats_box.grid(row=7, column=0, padx=16, pady=(0, 10), sticky="ew")
+        stats_box.grid_columnconfigure((0, 1, 2), weight=1)
+        self.stat_labels = {}
+        for col, (key, caption, color) in enumerate([
+            ('scanned', 'SCANNED', COLOR_TEXT),
+            ('alerts', 'ALERTS', COLOR_SUCCESS),
+            ('skipped', 'SKIPPED', COLOR_TEXT_DIM),
+        ]):
+            cell = ctk.CTkFrame(stats_box, fg_color="transparent")
+            cell.grid(row=0, column=col, sticky="ew")
+            value = ctk.CTkLabel(cell, text="0", text_color=color, font=("Consolas", 15, "bold"))
+            value.pack()
+            ctk.CTkLabel(cell, text=caption, text_color="#555", font=("Consolas", 7)).pack()
+            self.stat_labels[key] = value
+
+        self._create_sidebar_btn("SYSTEM_DIAGNOSTIC", self.send_test_alert, COLOR_TEXT, 8)
 
         # --- Main View ---
         self.main_area = ctk.CTkFrame(self, fg_color="transparent")
@@ -92,8 +139,8 @@ class StockAppGUI(ctk.CTk):
         self.main_area.grid_columnconfigure(0, weight=1)
 
         # Styled Tabs
-        self.tab_var =  ctk.StringVar(value="LOGS")
-        self.seg_button = ctk.CTkSegmentedButton(self.main_area, values=["LOGS", "PORTFOLIO", "SOURCES", "KEYWORDS"], 
+        self.tab_var =  ctk.StringVar(value="ALERTS")
+        self.seg_button = ctk.CTkSegmentedButton(self.main_area, values=["ALERTS", "LOGS", "PORTFOLIO", "SOURCES", "KEYWORDS"],
                                                 command=self.switch_tab,
                                                 selected_color=COLOR_SIDEBAR,
                                                 selected_hover_color=COLOR_SIDEBAR,
@@ -103,24 +150,51 @@ class StockAppGUI(ctk.CTk):
                                                 corner_radius=0,
                                                 border_width=1,
                                                 font=("Consolas", 12, "bold"))
-        self.seg_button.set("LOGS")
+        self.seg_button.set("ALERTS")
         self.seg_button.grid(row=0, column=0, sticky="ew", pady=(0, 15))
 
         # -- Views --
+        self.frame_alerts = ctk.CTkFrame(self.main_area, fg_color="transparent")
         self.frame_logs = ctk.CTkFrame(self.main_area, fg_color="transparent")
         self.frame_portfolio = ctk.CTkFrame(self.main_area, fg_color="transparent")
         self.frame_sources = ctk.CTkFrame(self.main_area, fg_color="transparent")
         self.frame_keywords = ctk.CTkFrame(self.main_area, fg_color="transparent")
-        
-        self.frame_logs.grid(row=1, column=0, sticky="nsew") # Default
 
-        # Tab 1: Terminal Logs
-        self.log_area = ctk.CTkTextbox(self.frame_logs, state='disabled', 
-                                      font=("Consolas", 11), 
-                                      fg_color="#000000", 
-                                      text_color=COLOR_SUCCESS,
+        # Alerts is the default view - it is what the app exists to produce.
+        self.frame_alerts.grid(row=1, column=0, sticky="nsew")
+
+        # Tab: Terminal Logs (toolbar + colour-coded output)
+        log_bar = ctk.CTkFrame(self.frame_logs, fg_color=COLOR_PANEL, corner_radius=0,
+                               border_width=1, border_color=COLOR_LINE)
+        log_bar.pack(fill='x', pady=(0, 8))
+
+        ctk.CTkLabel(log_bar, text="SYSTEM LOG", font=("Segoe UI", 13, "bold"),
+                     text_color=COLOR_ACCENT).pack(side='left', padx=16, pady=8)
+
+        ctk.CTkButton(log_bar, text="CLEAR", command=self.clear_log, width=80,
+                      fg_color="transparent", border_width=1, border_color="#444",
+                      text_color=COLOR_TEXT_DIM, hover_color="#222", corner_radius=0,
+                      font=("Consolas", 10, "bold")).pack(side='right', padx=10)
+
+        ctk.CTkCheckBox(log_bar, text="AI TRAFFIC", variable=self.show_ai_traffic,
+                        onvalue=True, offvalue=False, checkbox_width=16, checkbox_height=16,
+                        fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER,
+                        text_color=COLOR_TEXT_DIM, font=("Consolas", 10),
+                        corner_radius=0, border_color="#444").pack(side='right', padx=10)
+
+        ctk.CTkCheckBox(log_bar, text="AUTOSCROLL", variable=self.autoscroll,
+                        onvalue=True, offvalue=False, checkbox_width=16, checkbox_height=16,
+                        fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER,
+                        text_color=COLOR_TEXT_DIM, font=("Consolas", 10),
+                        corner_radius=0, border_color="#444").pack(side='right', padx=10)
+
+        self.log_area = ctk.CTkTextbox(self.frame_logs, state='disabled',
+                                      font=("Consolas", 11),
+                                      fg_color="#000000",
+                                      text_color=COLOR_TEXT_DIM,
                                       border_color=COLOR_SIDEBAR, border_width=2, corner_radius=0)
         self.log_area.pack(expand=True, fill='both')
+        self._init_log_tags()
 
         # Tab 2: Portfolio Charts Init
         self.figure_pie = None
@@ -128,12 +202,194 @@ class StockAppGUI(ctk.CTk):
         self.canvas_pie = None
         self.canvas_bar = None
         
+        self._setup_alerts_tab()
         self._setup_portfolio_tab()
         self._setup_sources_tab()
         self._setup_keywords_tab()
 
         self.after(100, self.process_log_queue)
         self.refresh_portfolio_list()
+
+    # --- Alerts -----------------------------------------------------------
+
+    def _engine_text(self):
+        """Describe which analysis engine is active."""
+        try:
+            import config
+            if config.USE_LOCAL_LLM:
+                return f"ENGINE  LLM\n        {config.LOCAL_MODEL_NAME}"
+            return "ENGINE  KEYWORDS\n        offline scoring"
+        except Exception:
+            return "ENGINE  unknown"
+
+    def _setup_alerts_tab(self):
+        """Alert history - the app's actual output, which used to only ever
+        scroll past in the log."""
+        self.frame_alerts.grid_rowconfigure(1, weight=1)
+        self.frame_alerts.grid_columnconfigure(0, weight=1)
+
+        bar = ctk.CTkFrame(self.frame_alerts, fg_color=COLOR_PANEL, corner_radius=0,
+                           border_width=1, border_color=COLOR_LINE)
+        bar.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+
+        self.alerts_title = ctk.CTkLabel(bar, text="TRIGGERED ALERTS", font=("Segoe UI", 14, "bold"),
+                                         text_color=COLOR_ACCENT)
+        self.alerts_title.pack(side='left', padx=20, pady=10)
+
+        ctk.CTkButton(bar, text="CLEAR", command=self.clear_alerts, width=90,
+                      fg_color="transparent", border_width=1, border_color=COLOR_DANGER,
+                      text_color=COLOR_DANGER, hover_color="#220000", corner_radius=0,
+                      font=("Consolas", 11, "bold")).pack(side='right', padx=10)
+
+        self.alerts_list = ctk.CTkScrollableFrame(self.frame_alerts, fg_color="transparent",
+                                                  corner_radius=0)
+        self.alerts_list.grid(row=1, column=0, sticky="nsew")
+        self.refresh_alerts_list()
+
+    def add_alert(self, alert):
+        """Called from the backend thread - queue for the UI thread."""
+        self.alert_queue.put(alert)
+
+    def clear_alerts(self):
+        self.alerts = []
+        self.refresh_alerts_list()
+
+    def refresh_alerts_list(self):
+        for widget in self.alerts_list.winfo_children():
+            widget.destroy()
+
+        self.alerts_title.configure(
+            text=f"TRIGGERED ALERTS  ({len(self.alerts)})" if self.alerts else "TRIGGERED ALERTS"
+        )
+
+        if not self.alerts:
+            empty = ctk.CTkFrame(self.alerts_list, fg_color="transparent")
+            empty.pack(expand=True, fill='both', pady=70)
+            ctk.CTkLabel(empty, text="NO ALERTS YET", font=("Consolas", 16, "bold"),
+                         text_color="#333").pack()
+            ctk.CTkLabel(empty,
+                         text="Alerts appear here when the analyzer finds\n"
+                              "HIGH or CRITICAL impact news.\n\n"
+                              "Most articles correctly produce no alert -\n"
+                              "check the LOGS tab to confirm it is scanning.",
+                         font=("Consolas", 10), text_color="#444", justify="center").pack(pady=12)
+            return
+
+        # Newest first
+        for alert in reversed(self.alerts):
+            self._build_alert_card(alert)
+
+    def _build_alert_card(self, alert):
+        positive = alert.get('sentiment') == 'POSITIVE'
+        accent = COLOR_SUCCESS if positive else COLOR_DANGER
+
+        card = ctk.CTkFrame(self.alerts_list, fg_color=COLOR_PANEL, corner_radius=0,
+                            border_width=1, border_color=COLOR_LINE)
+        card.pack(fill='x', pady=4, padx=2)
+
+        # Sentiment stripe down the left edge
+        stripe = ctk.CTkFrame(card, fg_color=accent, width=4, corner_radius=0)
+        stripe.pack(side='left', fill='y')
+
+        body = ctk.CTkFrame(card, fg_color="transparent")
+        body.pack(side='left', fill='both', expand=True, padx=14, pady=10)
+
+        header = ctk.CTkFrame(body, fg_color="transparent")
+        header.pack(fill='x')
+
+        ticker = alert.get('ticker')
+        name = alert.get('company') or 'Unknown'
+        title = f"{name} ({ticker})" if ticker else name
+        ctk.CTkLabel(header, text=title, font=("Segoe UI", 14, "bold"),
+                     text_color="#FFF", anchor="w").pack(side='left')
+
+        impact = alert.get('impact', 'HIGH')
+        badge_color = COLOR_DANGER if impact == 'CRITICAL' else COLOR_WARN
+        ctk.CTkLabel(header, text=f" {impact} ", font=("Consolas", 9, "bold"),
+                     text_color="#000", fg_color=badge_color, corner_radius=0).pack(side='left', padx=8)
+
+        ctk.CTkLabel(header, text=f"{'▲' if positive else '▼'} {alert.get('sentiment', '')}",
+                     font=("Consolas", 10, "bold"), text_color=accent).pack(side='left', padx=4)
+
+        if alert.get('is_owned'):
+            ctk.CTkLabel(header, text=" OWNED ", font=("Consolas", 9, "bold"),
+                         text_color="#000", fg_color=COLOR_ACCENT, corner_radius=0).pack(side='left', padx=6)
+
+        stamp = alert.get('time')
+        stamp_text = stamp.strftime('%H:%M:%S') if hasattr(stamp, 'strftime') else str(stamp or '')
+        ctk.CTkLabel(header, text=stamp_text, font=("Consolas", 10),
+                     text_color="#555").pack(side='right')
+
+        headline = alert.get('headline') or ''
+        if headline:
+            ctk.CTkLabel(body, text=headline, font=("Segoe UI", 11), text_color=COLOR_TEXT_DIM,
+                         anchor="w", justify="left", wraplength=740).pack(fill='x', pady=(6, 0))
+
+        explanation = (alert.get('explanation') or '').strip()
+        if explanation:
+            ctk.CTkLabel(body, text=explanation, font=("Segoe UI", 11), text_color=COLOR_TEXT,
+                         anchor="w", justify="left", wraplength=740).pack(fill='x', pady=(6, 0))
+
+        footer = ctk.CTkFrame(body, fg_color="transparent")
+        footer.pack(fill='x', pady=(8, 0))
+
+        prediction = alert.get('prediction')
+        if prediction:
+            ctk.CTkLabel(footer, text=f"PREDICTION: {prediction}", font=("Consolas", 10, "bold"),
+                         text_color=accent).pack(side='left')
+
+        url = alert.get('url')
+        if url:
+            ctk.CTkButton(footer, text="OPEN ARTICLE ↗", width=130, height=26,
+                          command=lambda u=url: webbrowser.open(u),
+                          fg_color="transparent", border_width=1, border_color=COLOR_ACCENT,
+                          text_color=COLOR_ACCENT, hover_color="#00232B", corner_radius=0,
+                          font=("Consolas", 10, "bold")).pack(side='right')
+
+    # --- Log rendering ----------------------------------------------------
+
+    def _init_log_tags(self):
+        """Colour-code log output. Everything used to render identical green,
+        so a CRITICAL alert looked exactly like 'already processed'."""
+        try:
+            box = self.log_area._textbox
+        except AttributeError:
+            return
+        box.tag_config('alert', foreground=COLOR_SUCCESS)
+        box.tag_config('error', foreground=COLOR_DANGER)
+        box.tag_config('warn', foreground=COLOR_WARN)
+        box.tag_config('head', foreground="#FFFFFF")
+        box.tag_config('ai', foreground="#4A4A6A")
+        box.tag_config('muted', foreground="#4F4F4F")
+        box.tag_config('info', foreground=COLOR_TEXT_DIM)
+        box.tag_config('accent', foreground=COLOR_ACCENT)
+
+    @staticmethod
+    def _classify_log(msg):
+        """Pick a tag for a log line, and whether it is AI traffic."""
+        text = str(msg)
+        stripped = text.lstrip()
+        is_ai = ('SENT TO AI' in text or 'AI RESPONSE' in text)
+        if is_ai:
+            return 'ai', True
+        if stripped.startswith('[ERROR]') or '!! ERROR' in text or 'Error' in text or 'error' in text:
+            return 'error', False
+        if 'ALERT' in text or stripped.startswith('🚀'):
+            return 'alert', False
+        if 'WARNING' in text or stripped.startswith('⚠') or 'Warning' in text:
+            return 'warn', False
+        if stripped.startswith('📰') or 'Processing article' in text:
+            return 'head', False
+        if stripped.startswith('⊘') or 'Already processed' in text or 'No notification' in text:
+            return 'muted', False
+        if 'Scanning for news' in text or 'Market Status' in text:
+            return 'accent', False
+        return 'info', False
+
+    def clear_log(self):
+        self.log_area.configure(state='normal')
+        self.log_area.delete("1.0", tk.END)
+        self.log_area.configure(state='disabled')
 
     def _create_sidebar_btn(self, text, cmd, glow_color, row, state="normal"):
         btn = ctk.CTkButton(self.sidebar_frame, text=text, command=cmd, state=state,
@@ -208,19 +464,18 @@ class StockAppGUI(ctk.CTk):
                      font=("Consolas", 12, "bold"), width=300).pack(pady=40)
 
     def switch_tab(self, value):
-        self.frame_logs.grid_forget()
-        self.frame_portfolio.grid_forget()
-        self.frame_sources.grid_forget()
-        self.frame_keywords.grid_forget()
-
-        if value == "LOGS":
-            self.frame_logs.grid(row=1, column=0, sticky="nsew")
-        elif value == "PORTFOLIO":
-            self.frame_portfolio.grid(row=1, column=0, sticky="nsew")
-        elif value == "SOURCES":
-            self.frame_sources.grid(row=1, column=0, sticky="nsew")
-        elif value == "KEYWORDS":
-            self.frame_keywords.grid(row=1, column=0, sticky="nsew")
+        frames = {
+            "ALERTS": self.frame_alerts,
+            "LOGS": self.frame_logs,
+            "PORTFOLIO": self.frame_portfolio,
+            "SOURCES": self.frame_sources,
+            "KEYWORDS": self.frame_keywords,
+        }
+        for frame in frames.values():
+            frame.grid_forget()
+        target = frames.get(value)
+        if target:
+            target.grid(row=1, column=0, sticky="nsew")
 
     def log_callback(self, msg):
         self.log_queue.put(msg)
@@ -233,8 +488,18 @@ class StockAppGUI(ctk.CTk):
         drained = False
         while not self.log_queue.empty():
             msg = self.log_queue.get()
+            tag, is_ai = self._classify_log(msg)
+            # The LLM prompt/response dumps are enormous and drown everything
+            # else, so they are hidden unless explicitly requested.
+            if is_ai and not self.show_ai_traffic.get():
+                continue
             self.log_area.configure(state='normal')
+            start = self.log_area.index("end-1c")
             self.log_area.insert(tk.END, f"> {msg}\n")
+            try:
+                self.log_area._textbox.tag_add(tag, start, self.log_area.index("end-1c"))
+            except AttributeError:
+                pass
             drained = True
 
         if drained:
@@ -242,19 +507,44 @@ class StockAppGUI(ctk.CTk):
             if line_count > self.MAX_LOG_LINES:
                 trim_to = line_count - self.MAX_LOG_LINES
                 self.log_area.delete("1.0", f"{trim_to}.0")
-            self.log_area.see(tk.END)
+            if self.autoscroll.get():
+                self.log_area.see(tk.END)
             self.log_area.configure(state='disabled')
+
+        # Drain alerts raised by the backend thread
+        new_alerts = False
+        while not self.alert_queue.empty():
+            self.alerts.append(self.alert_queue.get())
+            new_alerts = True
+        if new_alerts:
+            self.refresh_alerts_list()
+
+        # Latest status wins; discard any backlog
+        latest = None
+        while not self.status_queue.empty():
+            latest = self.status_queue.get()
+        if latest:
+            activity, stats = latest
+            self.activity_label.configure(text=activity)
+            for key, label in self.stat_labels.items():
+                label.configure(text=str(stats.get(key, 0)))
 
         self.after(100, self.process_log_queue)
 
     def start_backend(self):
-        if self.backend and self.backend.running: return 
+        if self.backend and self.backend.running: return
         self.log_queue.put("Initializing System Core...")
-        self.backend = StockAppBackend(log_callback=self.log_callback)
+        self.backend = StockAppBackend(
+            log_callback=self.log_callback,
+            alert_callback=self.add_alert,
+            status_callback=lambda text, stats: self.status_queue.put((text, stats)),
+        )
         self.backend.start()
         self.btn_2.configure(state='disabled', border_color="#333", text_color="#333")
         self.btn_3.configure(state='normal', border_color=COLOR_DANGER, text_color=COLOR_DANGER)
-        self.status_label.configure(text="STATUS: ONLINE", text_color=COLOR_SUCCESS)
+        self.status_label.configure(text="● ONLINE", text_color=COLOR_SUCCESS)
+        self.engine_label.configure(text=self._engine_text())
+        self.activity_label.configure(text="Starting up...")
 
     def stop_backend(self):
         if self.backend:
@@ -263,7 +553,8 @@ class StockAppGUI(ctk.CTk):
             self.backend = None
         self.btn_2.configure(state='normal', border_color=COLOR_SUCCESS, text_color=COLOR_SUCCESS)
         self.btn_3.configure(state='disabled', border_color="#333", text_color="#333")
-        self.status_label.configure(text="STATUS: OFFLINE", text_color=COLOR_DANGER)
+        self.status_label.configure(text="● OFFLINE", text_color=COLOR_DANGER)
+        self.activity_label.configure(text="Idle")
 
     def send_test_alert(self):
         try:
@@ -456,7 +747,13 @@ class StockAppGUI(ctk.CTk):
                     data_map[ticker] = None
         except Exception as e:
             print(f"Price fetch failed: {e}")
-        self.after(0, lambda: self._update_ui_prices(data_map))
+        # The window may have been closed while this thread was waiting on the
+        # network; scheduling onto a destroyed widget raises RuntimeError.
+        try:
+            if self.winfo_exists():
+                self.after(0, lambda: self._update_ui_prices(data_map))
+        except Exception:
+            pass
 
     def _update_ui_prices(self, price_map):
         portfolio_data_for_charts = {}
@@ -500,7 +797,10 @@ class StockAppGUI(ctk.CTk):
         ax_pie.pie(current_vals, labels=tickers, autopct='%1.1f%%', startangle=90, 
                   colors=['#00E5FF', '#05FFA1', '#FF2A6D', '#FFFF00', '#FFFFFF', '#888888'],
                   textprops={'color':"w"})
-        ax_pie.set_title("ALLOCATION (Estimated)", color="white", fontsize=10)
+        # Honest label: the portfolio stores a buy price but no share count,
+        # so this is the relative share price of each holding - NOT how much
+        # money is in each. Calling it "allocation" implied otherwise.
+        ax_pie.set_title("SHARE PRICE WEIGHT (not position size)", color="white", fontsize=9)
         
         if self.canvas_pie: self.canvas_pie.draw()
         else:
@@ -649,6 +949,29 @@ class StockAppGUI(ctk.CTk):
         bar.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 10))
         
         ctk.CTkLabel(bar, text="KEYWORD MANAGEMENT", font=("Segoe UI", 14, "bold"), text_color=COLOR_ACCENT).pack(side='left', padx=20, pady=10)
+
+        # These keywords only drive scoring when the LLM is switched off.
+        # Without this notice, editing them while the LLM is active looks
+        # like it should change the alerts, and silently does nothing.
+        try:
+            import config
+            llm_active = config.USE_LOCAL_LLM
+        except Exception:
+            llm_active = False
+        if llm_active:
+            notice = ctk.CTkFrame(self.frame_keywords, fg_color="#2A1D05", corner_radius=0,
+                                  border_width=1, border_color=COLOR_WARN)
+            notice.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+            ctk.CTkLabel(notice,
+                         text="⚠  INACTIVE - the local LLM is doing the analysis. "
+                              "These keywords are only used when USE_LOCAL_LLM = False.",
+                         font=("Consolas", 11), text_color=COLOR_WARN,
+                         justify="left").pack(padx=16, pady=8)
+            self.frame_keywords.grid_rowconfigure(1, weight=0)
+            self.frame_keywords.grid_rowconfigure(2, weight=1)
+            self._keyword_list_row = 2
+        else:
+            self._keyword_list_row = 1
         
         ctk.CTkButton(bar, text="RESET TO DEFAULTS", command=self.reset_keywords, width=140,
                      fg_color="transparent", border_width=1, border_color=COLOR_DANGER, text_color=COLOR_DANGER,
@@ -656,7 +979,7 @@ class StockAppGUI(ctk.CTk):
         
         # Positive Keywords Section
         pos_frame = ctk.CTkFrame(self.frame_keywords, fg_color="transparent")
-        pos_frame.grid(row=1, column=0, sticky="nsew", padx=(10, 5), pady=5)
+        pos_frame.grid(row=self._keyword_list_row, column=0, sticky="nsew", padx=(10, 5), pady=5)
         
         # Positive Header
         pos_header = ctk.CTkFrame(pos_frame, fg_color="#0A2010", corner_radius=0, border_width=1, border_color=COLOR_SUCCESS)
@@ -684,7 +1007,7 @@ class StockAppGUI(ctk.CTk):
         
         # Negative Keywords Section
         neg_frame = ctk.CTkFrame(self.frame_keywords, fg_color="transparent")
-        neg_frame.grid(row=1, column=1, sticky="nsew", padx=(5, 10), pady=5)
+        neg_frame.grid(row=self._keyword_list_row, column=1, sticky="nsew", padx=(5, 10), pady=5)
         
         # Negative Header
         neg_header = ctk.CTkFrame(neg_frame, fg_color="#201010", corner_radius=0, border_width=1, border_color=COLOR_DANGER)

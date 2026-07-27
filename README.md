@@ -89,9 +89,31 @@ The sidebar controls the watcher; the four tabs configure it.
 | `SYSTEM OPTIONS` | Sets your ntfy topic |
 | `SYSTEM_DIAGNOSTIC` | Sends a test notification |
 
+The panel under the logo shows whether the watcher is running, which engine and
+model are active, and what it is doing right now. The counters at the bottom
+track articles scanned, alerts raised, and articles skipped this session —
+worth watching, since a single LLM analysis can take a minute with no other
+sign of progress.
+
+### ALERTS
+The default view, and the app's actual output: every alert it has raised this
+session, newest first. Each card shows the company and ticker, an impact badge,
+sentiment, the headline, the analyst explanation, the price prediction, and an
+**OPEN ARTICLE** button. Holdings from your portfolio are tagged `OWNED`.
+
+Alerts are kept for the current session only — **CLEAR** empties the list.
+
 ### LOGS
-Live activity: what was fetched, how each article scored, and why an alert was
-or was not sent. This is the place to look if the app seems quiet.
+Live activity, colour-coded: alerts in green, errors in red, routine chatter
+dimmed. This is the place to look if the app seems quiet.
+
+Two toggles in the toolbar:
+
+- **AI TRAFFIC** — off by default. Turn it on to see the full prompt sent to
+  the model and its raw reply. Useful for debugging, but it is verbose enough
+  to bury everything else.
+- **AUTOSCROLL** — turn it off to read back through history without being
+  yanked to the bottom by new lines.
 
 ### PORTFOLIO
 Enter a `TICKER` and optionally your `BUY PRICE`, then click **+ ADD**. The app
@@ -113,9 +135,14 @@ are detected automatically:
 Use `✓`/`○` to enable or disable a source and `×` to remove it.
 
 ### KEYWORDS
-The scoring vocabulary, split into positive and negative lists, each with a
-weight from 1–10. Add your own terms, remove ones causing noise, or use
-**RESET TO DEFAULTS** to restore the built-in set (~200 keywords).
+The scoring vocabulary used by the offline analyzer, split into positive and
+negative lists, each with a weight from 1–10. Add your own terms, remove ones
+causing noise, or use **RESET TO DEFAULTS** to restore the built-in set
+(~200 keywords).
+
+**These only take effect when `USE_LOCAL_LLM = False`.** While the LLM is doing
+the analysis the tab shows an INACTIVE banner, because editing keywords then
+would change nothing.
 
 After editing, click **RELOAD SETTINGS** to apply the changes to a running
 watcher.

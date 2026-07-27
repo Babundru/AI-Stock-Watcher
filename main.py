@@ -13,8 +13,16 @@ import json
 import os
 
 class StockAppBackend:
-    def __init__(self, log_callback=print):
+    def __init__(self, log_callback=print, alert_callback=None, status_callback=None):
         self.log_callback = log_callback
+        # Called with a dict for every alert raised, so the UI can keep a
+        # history instead of letting alerts scroll away in the log.
+        self.alert_callback = alert_callback
+        # Called with a short "what am I doing right now" string. Matters
+        # because a single LLM analysis can take a minute with no other sign
+        # of life.
+        self.status_callback = status_callback
+        self.stats = {'scanned': 0, 'alerts': 0, 'skipped': 0}
         self.running = False
         self.collector = NewsCollector()
         # LLM analysis when Ollama is configured, otherwise the offline
@@ -87,6 +95,14 @@ class StockAppBackend:
         if self.log_callback:
             self.log_callback(message)
 
+    def status(self, message):
+        """Report current activity to the UI (best effort)."""
+        if self.status_callback:
+            try:
+                self.status_callback(message, dict(self.stats))
+            except Exception:
+                pass
+
     def start(self):
         self.running = True
         # Bring the model server up before the first article arrives.
@@ -132,6 +148,7 @@ class StockAppBackend:
                 # --- CUSTOM SOURCES (Priority) ---
                 # First, check custom user-defined sources
                 self.log("🔗 Checking custom sources...")
+                self.status("Fetching custom sources")
                 custom_articles = self.collector.fetch_from_custom_sources()
                 self.log(f"   Found {len(custom_articles)} articles from custom sources")
                 
@@ -148,6 +165,7 @@ class StockAppBackend:
                 if GLOBAL_SCAN:
                     self.log("Running Global Market Scan...")
                     # 1. Fetch General News
+                    self.status("Fetching market news")
                     articles = self.collector.fetch_general_market_news()
                     for article in articles:
                         if not self.running: break
@@ -172,6 +190,7 @@ class StockAppBackend:
                 # Sleep for the configured check interval
                 next_run_time = datetime.datetime.now() + datetime.timedelta(seconds=CHECK_INTERVAL)
                 self.log(f"Sleeping until {next_run_time.strftime('%H:%M:%S')} ({CHECK_INTERVAL}s)...")
+                self.status(f"Waiting until {next_run_time.strftime('%H:%M:%S')}")
                 
                 # Sleep loop for responsiveness
                 for _ in range(CHECK_INTERVAL):
@@ -222,9 +241,13 @@ class StockAppBackend:
         # Analyze
         engine = "local LLM" if USE_LOCAL_LLM else "keyword matcher"
         self.log(f"   🔍 Analyzing with {engine}...")
+        self.stats['scanned'] += 1
+        self.status(f"Analyzing: {title[:48]}")
         analysis = self.analyzer.analyze_article(company_hint, article, market_is_open, portfolio_tickers)
         if not analysis:
             self.log(f"   ⊘ No analysis results (article may not match criteria)")
+            self.stats['skipped'] += 1
+            self.status("Idle")
             return
         
         # Extract info
@@ -278,8 +301,29 @@ class StockAppBackend:
             # Pass ownership info to notifier
             is_owned = self.portfolio_mgr.has_stock(stock_id)
             self.notifier.notify(target, article, analysis, is_owned=is_owned)
+
+            self.stats['alerts'] += 1
+            if self.alert_callback:
+                try:
+                    self.alert_callback({
+                        'time': datetime.datetime.now(),
+                        'company': target,
+                        'ticker': ticker,
+                        'sentiment': sentiment,
+                        'impact': impact,
+                        'prediction': prediction,
+                        'explanation': analysis.get('explanation') or '',
+                        'headline': title,
+                        'url': url,
+                        'is_owned': is_owned,
+                    })
+                except Exception as e:
+                    self.log(f"  (alert view update failed: {e})")
         else:
             reason_str = ", ".join(skip_reasons) if skip_reasons else "unknown reason"
             self.log(f"  ⊘ No notification sent: {reason_str}")
+            self.stats['skipped'] += 1
+
+        self.status("Idle")
 
 
