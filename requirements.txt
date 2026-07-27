@@ -1,0 +1,8 @@
+requests
+pytz
+beautifulsoup4
+yfinance
+customtkinter
+matplotlib
+feedparser
+lxml

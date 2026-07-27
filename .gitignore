@@ -1,0 +1,23 @@
+# Secrets - never commit these
+.env
+.env.*
+*.key
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Runtime state and personal data.
+# These are recreated with defaults on first run (see data/README.md),
+# so excluding them loses nothing and keeps personal holdings and the
+# ntfy topic out of version control.
+data/processed_urls.json
+data/portfolio.json
+data/settings.json
+
+# Environments / tooling
+.venv/
+venv/
+.idea/
+.vscode/

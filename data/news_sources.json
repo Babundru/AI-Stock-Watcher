@@ -1,0 +1,39 @@
+{
+  "sources": [
+    {
+      "id": "dd4e7310-e8de-4d13-a751-40532b02a512",
+      "name": "CNBC News",
+      "url": "https://www.cnbc.com/world/?region=world",
+      "enabled": true,
+      "type": "webpage"
+    },
+    {
+      "id": "0e325c4c-e06b-442e-a102-40ddf237ed31",
+      "name": "MarketWatch",
+      "url": "https://feeds.marketwatch.com/marketwatch/marketpulse/",
+      "enabled": true,
+      "type": "webpage"
+    },
+    {
+      "id": "8179c085-a574-41b3-8763-f6daa6ada981",
+      "name": "Seeking Alpha",
+      "url": "https://seekingalpha.com/feed.xml",
+      "enabled": true,
+      "type": "webpage"
+    },
+    {
+      "id": "e4a87aad-b516-45b2-9442-c8f32c7c47ff",
+      "name": "Yahoo Finance",
+      "url": "https://finance.yahoo.com/news/rssindex",
+      "enabled": true,
+      "type": "webpage"
+    },
+    {
+      "id": "8f77782d-a819-44c2-a561-93b4da7885bd",
+      "name": "Investing.com",
+      "url": "https://www.investing.com/rss/news.rss",
+      "enabled": true,
+      "type": "webpage"
+    }
+  ]
+}
