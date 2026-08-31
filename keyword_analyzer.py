@@ -95,12 +95,16 @@ class KeywordAnalyzer:
         self._weights = {}
         self._weights.update(self.positive_keywords)
         self._weights.update(self.negative_keywords)
-        # Compile once here rather than per article: there are ~230 keywords
-        # and analyze_article used to rebuild every pattern on every call.
-        self._patterns = [
-            (kw, weight, re.compile(r'\b' + re.escape(kw.lower()) + r'\b'))
-            for kw, weight in self._weights.items()
-        ]
+        # One combined pattern instead of ~230 separate ones: scanning a field
+        # used to mean 230 independent regex passes over the same text
+        # (finditer per keyword). A single alternation does one pass instead,
+        # and finditer's non-overlapping matches give us "longest phrase wins"
+        # for free as long as longer keywords are listed first - no separate
+        # overlap-resolution pass needed afterwards.
+        by_length = sorted(self._weights, key=len, reverse=True)
+        self._combined_pattern = re.compile(
+            r'\b(?:' + '|'.join(re.escape(kw.lower()) for kw in by_length) + r')\b'
+        )
 
     def analyze_article(self, company, article, market_is_open, portfolio_tickers=None):
         """
@@ -200,35 +204,18 @@ class KeywordAnalyzer:
         lowered = text.lower()
         field_weight = FIELD_WEIGHTS[field_name]
 
-        # Collect every match with its span so overlaps can be resolved.
-        raw = []
-        for keyword, weight, pattern in self._patterns:
-            for m in pattern.finditer(lowered):
-                raw.append((m.start(), m.end(), keyword, weight))
-
-        if not raw:
-            return []
-
-        # Longest phrase wins: "fda approval" (+9) should not also score
-        # "approval" (+7) for the same words. Sort by span length descending
-        # and drop any match contained within an already-claimed span.
-        raw.sort(key=lambda r: (r[0] - r[1], r[0]))
-        claimed = []
         accepted = {}
-        for start, end, keyword, weight in raw:
-            if any(start >= cs and end <= ce for cs, ce in claimed):
-                continue
-            claimed.append((start, end))
-            negated = self._is_negated(lowered, start)
-            accepted.setdefault(keyword, {'weight': weight, 'count': 0, 'negated': 0})
-            accepted[keyword]['count'] += 1
-            if negated:
-                accepted[keyword]['negated'] += 1
+        for m in self._combined_pattern.finditer(lowered):
+            keyword = m.group(0)
+            data = accepted.setdefault(keyword, {'count': 0, 'negated': 0})
+            data['count'] += 1
+            if self._is_negated(lowered, m.start()):
+                data['negated'] += 1
 
         signals = []
         for keyword, data in accepted.items():
             count = data['count']
-            weight = data['weight']
+            weight = self._weights[keyword]
             # Diminishing returns on repetition.
             multiplier = 1.0 + REPEAT_BONUS * min(count - 1, MAX_REPEATS)
             contribution = weight * field_weight * multiplier
@@ -259,8 +246,13 @@ class KeywordAnalyzer:
 
         # An explicitly quoted ticker - "(INTC)", "NASDAQ:AAPL" - is itself
         # proof the article is about a traded company, even when the headline
-        # uses no finance vocabulary.
-        if ticker:
+        # uses no finance vocabulary. A strong keyword ("fda approval",
+        # "bankruptcy", "acquisition"...) is the same kind of proof - these
+        # were previously still dropped by the context gate below whenever
+        # the article named no ticker and no corp suffix, which mainly hit
+        # biotech/pharma headlines ("XYZ Pharma wins FDA approval") that say
+        # nothing like "shares" or "Inc.".
+        if ticker or has_strong:
             return True
 
         # Otherwise it has to read like it concerns a traded company.

@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Stocks AI</title>
+<style>
+  :root {
+    --bg: #0B0D11;
+    --sidebar: #0F1218;
+    --panel: #141821;
+    --panel-hi: #1A1F2A;
+    --line: #222835;
+    --line-hi: #2C3444;
+    --text: #E7EAF0;
+    --text-dim: #97A0B2;
+    --text-mute: #5B6474;
+    --accent: #5B8CFF;
+    --accent-hover: #4A7AEE;
+    --accent-soft: #182338;
+    --success: #3DDC84;
+    --danger: #FF5C6C;
+    --danger-soft: #3A1E22;
+    --warn: #F5B94D;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 14px;
+  }
+  header {
+    position: sticky; top: 0; z-index: 10;
+    background: var(--sidebar);
+    border-bottom: 1px solid var(--line);
+    padding: 12px 16px;
+  }
+  .top-row {
+    display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 10px;
+  }
+  h1 { font-size: 16px; margin: 0; color: var(--accent); font-weight: 700; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 600;
+    background: var(--panel); border: 1px solid var(--line);
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--danger); }
+  .dot.on { background: var(--success); }
+  button {
+    font-family: inherit; font-weight: 700; font-size: 12px;
+    border: none; border-radius: 8px; padding: 8px 14px; cursor: pointer;
+    background: var(--panel-hi); color: var(--text-dim);
+  }
+  button:hover { background: var(--line-hi); }
+  button.primary { background: var(--accent); color: #fff; }
+  button.primary:hover { background: var(--accent-hover); }
+  button.danger-btn { background: var(--danger-soft); color: var(--danger); }
+  .stats-row { display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+  .stat {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 8px 14px; min-width: 90px;
+  }
+  .stat .n { font-size: 18px; font-weight: 700; }
+  .stat .l { font-size: 10px; color: var(--text-mute); text-transform: uppercase; letter-spacing: .05em; }
+  .activity { font-size: 12px; color: var(--text-dim); margin-top: 8px; }
+  .engine { font-size: 11px; color: var(--text-mute); }
+
+  nav.tabs {
+    display: flex; gap: 4px; padding: 10px 16px 0; overflow-x: auto;
+    background: var(--sidebar);
+  }
+  nav.tabs button {
+    background: transparent; color: var(--text-dim); border-radius: 8px 8px 0 0;
+    padding: 8px 14px; white-space: nowrap;
+  }
+  nav.tabs button.active { background: var(--panel); color: var(--accent); }
+
+  main { padding: 14px 16px 40px; max-width: 900px; margin: 0 auto; }
+  .view { display: none; }
+  .view.active { display: block; }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 14px; margin-bottom: 10px;
+  }
+  .card h3 { margin: 0 0 4px; font-size: 14px; }
+  .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .badge {
+    font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 999px;
+    text-transform: uppercase; letter-spacing: .03em;
+  }
+  .badge.pos { background: #123321; color: var(--success); }
+  .badge.neg { background: var(--danger-soft); color: var(--danger); }
+  .badge.neu { background: var(--panel-hi); color: var(--text-dim); }
+  .badge.owned { background: var(--accent-soft); color: var(--accent); }
+  .meta { font-size: 11px; color: var(--text-mute); margin-top: 6px; }
+  .explanation { font-size: 12px; color: var(--text-dim); margin-top: 8px; line-height: 1.4; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  #logbox {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 10px 12px; height: 60vh; overflow-y: auto;
+    font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 11.5px;
+    white-space: pre-wrap; word-break: break-word; color: var(--text-dim);
+  }
+  .logline { border-bottom: 1px solid var(--line); padding: 3px 0; }
+  .logline .t { color: var(--text-mute); margin-right: 6px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); }
+  th { color: var(--text-mute); font-size: 10px; text-transform: uppercase; }
+
+  .add-form { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+  .add-form input, .add-form select {
+    background: var(--panel); border: 1px solid var(--line); color: var(--text);
+    border-radius: 8px; padding: 8px 10px; font-size: 12.5px; font-family: inherit;
+  }
+  .add-form input { flex: 1; min-width: 120px; }
+  .empty { color: var(--text-mute); font-size: 12.5px; padding: 20px 0; text-align: center; }
+  .kw-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 560px) { .kw-cols { grid-template-columns: 1fr; } }
+  .kw-item { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="top-row">
+    <h1>📈 Stocks AI</h1>
+    <div style="display:flex; align-items:center; gap:8px;">
+      <span class="pill"><span class="dot" id="dot"></span><span id="running-text">Offline</span></span>
+      <button class="primary" id="btn-start">Start</button>
+      <button class="danger-btn" id="btn-stop">Stop</button>
+    </div>
+  </div>
+  <div class="stats-row">
+    <div class="stat"><div class="n" id="stat-scanned">0</div><div class="l">Scanned</div></div>
+    <div class="stat"><div class="n" id="stat-alerts">0</div><div class="l">Alerts</div></div>
+    <div class="stat"><div class="n" id="stat-skipped">0</div><div class="l">Skipped</div></div>
+  </div>
+  <div class="activity" id="activity">Idle</div>
+  <div class="engine" id="engine"></div>
+</header>
+
+<nav class="tabs">
+  <button data-view="alerts" class="active">Alerts</button>
+  <button data-view="logs">Logs</button>
+  <button data-view="portfolio">Portfolio</button>
+  <button data-view="sources">Sources</button>
+  <button data-view="keywords">Keywords</button>
+</nav>
+
+<main>
+  <section id="view-alerts" class="view active">
+    <div id="alerts-list"><div class="empty">No alerts yet.</div></div>
+  </section>
+
+  <section id="view-logs" class="view">
+    <div id="logbox"></div>
+  </section>
+
+  <section id="view-portfolio" class="view">
+    <div class="add-form">
+      <input id="pf-ticker" placeholder="Ticker (e.g. AAPL)">
+      <input id="pf-price" placeholder="Buy price" type="number" step="0.01">
+      <button class="primary" id="pf-add">Add</button>
+    </div>
+    <div class="card"><table><thead><tr><th>Ticker</th><th>Buy Price</th><th></th></tr></thead>
+      <tbody id="pf-body"></tbody></table></div>
+  </section>
+
+  <section id="view-sources" class="view">
+    <div class="add-form">
+      <input id="src-name" placeholder="Name">
+      <input id="src-url" placeholder="URL (RSS, page, or Twitter/X link)">
+      <select id="src-type">
+        <option value="webpage">Webpage</option>
+        <option value="rss">RSS</option>
+        <option value="twitter">Twitter</option>
+      </select>
+      <button class="primary" id="src-add">Add</button>
+    </div>
+    <div id="src-list"></div>
+  </section>
+
+  <section id="view-keywords" class="view">
+    <div class="add-form">
+      <input id="kw-word" placeholder="Keyword or phrase">
+      <input id="kw-weight" placeholder="Weight (1-10)" type="number">
+      <select id="kw-type"><option value="positive">Positive</option><option value="negative">Negative</option></select>
+      <button class="primary" id="kw-add">Add</button>
+    </div>
+    <div class="kw-cols">
+      <div><h3 style="color:var(--success)">Positive</h3><div id="kw-pos"></div></div>
+      <div><h3 style="color:var(--danger)">Negative</h3><div id="kw-neg"></div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = (sel) => document.querySelector(sel);
+let sinceSeq = 0;
+let autoscroll = true;
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// --- Tabs -------------------------------------------------------------
+document.querySelectorAll('nav.tabs button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('nav.tabs button').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+    btn.classList.add('active');
+    $('#view-' + btn.dataset.view).classList.add('active');
+    if (btn.dataset.view === 'portfolio') loadPortfolio();
+    if (btn.dataset.view === 'sources') loadSources();
+    if (btn.dataset.view === 'keywords') loadKeywords();
+  });
+});
+
+// --- Status / logs / alerts polling ------------------------------------
+async function pollState() {
+  try {
+    const res = await fetch('/api/state?since=' + sinceSeq);
+    const data = await res.json();
+
+    $('#dot').classList.toggle('on', data.running);
+    $('#running-text').textContent = data.running ? 'Watching' : 'Offline';
+    $('#activity').textContent = data.activity || 'Idle';
+    $('#stat-scanned').textContent = data.stats.scanned ?? 0;
+    $('#stat-alerts').textContent = data.stats.alerts ?? 0;
+    $('#stat-skipped').textContent = data.stats.skipped ?? 0;
+
+    if (data.logs.length) {
+      const box = $('#logbox');
+      for (const line of data.logs) {
+        sinceSeq = Math.max(sinceSeq, line.seq);
+        const div = document.createElement('div');
+        div.className = 'logline';
+        div.innerHTML = `<span class="t">${esc(line.time)}</span>${esc(line.text)}`;
+        box.appendChild(div);
+      }
+      while (box.children.length > 2000) box.removeChild(box.firstChild);
+      if (autoscroll) box.scrollTop = box.scrollHeight;
+    }
+
+    renderAlerts(data.alerts);
+  } catch (e) { /* server unreachable - try again next tick */ }
+}
+
+function renderAlerts(alerts) {
+  const list = $('#alerts-list');
+  if (!alerts.length) { list.innerHTML = '<div class="empty">No alerts yet.</div>'; return; }
+  list.innerHTML = alerts.map(a => {
+    const sentimentClass = a.sentiment === 'POSITIVE' ? 'pos' : a.sentiment === 'NEGATIVE' ? 'neg' : 'neu';
+    return `<div class="card">
+      <div class="row">
+        <h3>${esc(a.company)}${a.ticker ? ' · ' + esc(a.ticker) : ''}</h3>
+        <span class="badge ${sentimentClass}">${esc(a.sentiment)}</span>
+      </div>
+      <div class="meta">
+        ${esc(a.impact)} impact &middot; ${esc(a.prediction)}
+        ${a.is_owned ? '<span class="badge owned">OWNED</span>' : ''}
+        &middot; ${esc((a.time || '').replace('T', ' ').slice(0, 19))}
+      </div>
+      <div class="explanation">${esc(a.explanation)}</div>
+      ${a.url ? `<div class="meta"><a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.headline || 'Source article')}</a></div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+setInterval(pollState, 2000);
+pollState();
+
+fetch('/api/engine').then(r => r.json()).then(d => { $('#engine').textContent = d.engine; });
+
+// --- Controls -----------------------------------------------------------
+$('#btn-start').addEventListener('click', () => fetch('/api/control', {
+  method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'start'})
+}).then(pollState));
+$('#btn-stop').addEventListener('click', () => fetch('/api/control', {
+  method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'stop'})
+}).then(pollState));
+
+$('#logbox').addEventListener('scroll', () => {
+  const box = $('#logbox');
+  autoscroll = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+});
+
+// --- Portfolio ------------------------------------------------------------
+async function loadPortfolio() {
+  const data = await (await fetch('/api/portfolio')).json();
+  const body = $('#pf-body');
+  const tickers = Object.keys(data);
+  body.innerHTML = tickers.length ? tickers.map(t => `
+    <tr><td>${esc(t)}</td><td>$${Number(data[t].buy_price || 0).toFixed(2)}</td>
+    <td><button class="danger-btn" data-del="${esc(t)}">Remove</button></td></tr>
+  `).join('') : '<tr><td colspan="3" class="empty">No holdings yet.</td></tr>';
+  body.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', async () => {
+    await fetch('/api/portfolio/' + encodeURIComponent(b.dataset.del), {method: 'DELETE'});
+    loadPortfolio();
+  }));
+}
+$('#pf-add').addEventListener('click', async () => {
+  const ticker = $('#pf-ticker').value.trim();
+  const price = parseFloat($('#pf-price').value) || 0;
+  if (!ticker) return;
+  await fetch('/api/portfolio', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ticker, buy_price: price})});
+  $('#pf-ticker').value = ''; $('#pf-price').value = '';
+  loadPortfolio();
+});
+
+// --- Sources --------------------------------------------------------------
+async function loadSources() {
+  const sources = await (await fetch('/api/sources')).json();
+  const list = $('#src-list');
+  list.innerHTML = sources.length ? sources.map(s => `
+    <div class="card row">
+      <div>
+        <h3>${esc(s.name)} <span class="badge ${s.enabled ? 'pos' : 'neu'}">${s.enabled ? 'ON' : 'OFF'}</span></h3>
+        <div class="meta">${esc(s.type)} &middot; ${esc(s.url)}</div>
+      </div>
+      <div style="display:flex; gap:6px;">
+        <button data-toggle="${esc(s.id)}">${s.enabled ? 'Disable' : 'Enable'}</button>
+        <button class="danger-btn" data-del="${esc(s.id)}">Remove</button>
+      </div>
+    </div>
+  `).join('') : '<div class="empty">No custom sources yet.</div>';
+  list.querySelectorAll('[data-toggle]').forEach(b => b.addEventListener('click', async () => {
+    await fetch('/api/sources/' + b.dataset.toggle + '/toggle', {method: 'POST'});
+    loadSources();
+  }));
+  list.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', async () => {
+    await fetch('/api/sources/' + b.dataset.del, {method: 'DELETE'});
+    loadSources();
+  }));
+}
+$('#src-add').addEventListener('click', async () => {
+  const name = $('#src-name').value.trim();
+  const url = $('#src-url').value.trim();
+  const type = $('#src-type').value;
+  if (!name || !url) return;
+  const res = await fetch('/api/sources', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name, url, type})});
+  if (res.ok) { $('#src-name').value = ''; $('#src-url').value = ''; }
+  loadSources();
+});
+
+// --- Keywords ---------------------------------------------------------------
+async function loadKeywords() {
+  const data = await (await fetch('/api/keywords')).json();
+  const render = (obj, type) => Object.entries(obj).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).map(([k, w]) => `
+    <div class="kw-item"><span>${esc(k)} <span class="meta">${w}</span></span>
+    <button class="danger-btn" data-del="${esc(k)}" data-type="${type}">×</button></div>
+  `).join('') || '<div class="empty">None yet.</div>';
+  $('#kw-pos').innerHTML = render(data.positive_keywords || {}, 'positive');
+  $('#kw-neg').innerHTML = render(data.negative_keywords || {}, 'negative');
+  document.querySelectorAll('[data-del][data-type]').forEach(b => b.addEventListener('click', async () => {
+    await fetch(`/api/keywords/${encodeURIComponent(b.dataset.del)}?type=${b.dataset.type}`, {method: 'DELETE'});
+    loadKeywords();
+  }));
+}
+$('#kw-add').addEventListener('click', async () => {
+  const keyword = $('#kw-word').value.trim();
+  const weight = parseInt($('#kw-weight').value, 10);
+  const type = $('#kw-type').value;
+  if (!keyword || !weight) return;
+  await fetch('/api/keywords', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({keyword, weight, type})});
+  $('#kw-word').value = ''; $('#kw-weight').value = '';
+  loadKeywords();
+});
+</script>
+</body>
+</html>

@@ -26,6 +26,7 @@ GLOBAL_SCAN = True
 # True  -> articles are analysed by a local Ollama model (the LLM variant)
 # False -> falls back to the offline weighted-keyword analyzer, which needs
 #          no model and no Ollama install.
+# Ignored when USE_CLOUD_AI is True (cloud AI takes priority).
 USE_LOCAL_LLM = True
 
 # Ollama's generate endpoint. Change the host if Ollama runs elsewhere.
@@ -41,6 +42,34 @@ LOCAL_MODEL_NAME = "gemma3:12b"
 # Threads the model may use. Higher is faster but competes with the rest of
 # the machine; 1 keeps the app unobtrusive at the cost of slow analysis.
 OLLAMA_NUM_THREADS = 1
+
+# --- CLOUD AI (API KEY) SETTINGS ---
+# True -> articles are analysed via a hosted AI API instead of a local
+# model. Takes priority over USE_LOCAL_LLM when both are enabled - there is
+# no local model to keep running once a cloud key is configured.
+USE_CLOUD_AI = False
+
+# Which backend to call - a key into the PROVIDERS registry in
+# cloud_providers.py. Ships with "anthropic", "openai" (also covers any
+# OpenAI-compatible third-party API via CLOUD_AI_BASE_URL below), and two
+# one-key-many-models routers, "openrouter" and "routera"; add more by
+# registering a provider class there.
+CLOUD_AI_PROVIDER = "anthropic"
+
+# Model to call. Configurable because this analyzer runs on every discovered
+# article (potentially dozens per CHECK_INTERVAL) - a cheaper/faster model
+# can be swapped in here for that volume without changing any code.
+CLOUD_AI_MODEL = "claude-opus-5"
+
+# API key for the selected provider. Never put a real key here - this file
+# is committed. Set it in data/settings.json (gitignored) via Settings.
+CLOUD_AI_API_KEY = ""
+
+# Optional: override the provider's default API endpoint. Leave empty for
+# Anthropic or OpenAI itself; set it to route CLOUD_AI_PROVIDER = "openai"
+# at an OpenAI-compatible third-party host instead (Groq, Together,
+# DeepSeek, OpenRouter, a local vLLM/llama.cpp server, ...).
+CLOUD_AI_BASE_URL = ""
 
 # --- NOTIFICATION SETTINGS ---
 # Ntfy.sh topic name.
@@ -66,6 +95,19 @@ NTFY_TOPIC = ""
 # stocks you actually hold. The app still shows an "Owned" badge on the
 # Alerts tab, which stays on this machine.
 NOTIFY_OWNERSHIP = False
+
+# --- DASHBOARD LOGIN (server.py only) ---
+# HTTP Basic Auth for the web dashboard. gui.py ignores these - they only
+# gate server.py, which is meant to run 24/7 on a remote machine reachable
+# over Tailscale (see DEPLOY.md). Tailscale already keeps the port off the
+# public internet; this is a second layer so a compromised Tailscale peer -
+# or anyone else on the tailnet - still needs a password.
+#
+# Empty on purpose: set both in data/settings.json (via Settings, or by
+# hand) before running server.py anywhere reachable by more than just you.
+# Leaving DASHBOARD_PASSWORD empty disables the login prompt entirely.
+DASHBOARD_USERNAME = ""
+DASHBOARD_PASSWORD = ""
 
 # --- DYNAMIC SETTINGS LOADING ---
 import json
@@ -93,7 +135,30 @@ if os.path.exists(SETTINGS_FILE):
         if "NOTIFY_OWNERSHIP" in user_settings:
             NOTIFY_OWNERSHIP = bool(user_settings["NOTIFY_OWNERSHIP"])
 
-        print(f"Loaded custom settings: Topic={NTFY_TOPIC}, Model={LOCAL_MODEL_NAME}")
+        if "USE_CLOUD_AI" in user_settings:
+            USE_CLOUD_AI = bool(user_settings["USE_CLOUD_AI"])
+
+        if "CLOUD_AI_PROVIDER" in user_settings and user_settings["CLOUD_AI_PROVIDER"]:
+            CLOUD_AI_PROVIDER = user_settings["CLOUD_AI_PROVIDER"]
+
+        if "CLOUD_AI_MODEL" in user_settings and user_settings["CLOUD_AI_MODEL"]:
+            CLOUD_AI_MODEL = user_settings["CLOUD_AI_MODEL"]
+
+        if "CLOUD_AI_API_KEY" in user_settings:
+            CLOUD_AI_API_KEY = user_settings["CLOUD_AI_API_KEY"]
+
+        if "CLOUD_AI_BASE_URL" in user_settings:
+            CLOUD_AI_BASE_URL = user_settings["CLOUD_AI_BASE_URL"]
+
+        if "DASHBOARD_USERNAME" in user_settings:
+            DASHBOARD_USERNAME = user_settings["DASHBOARD_USERNAME"]
+
+        if "DASHBOARD_PASSWORD" in user_settings:
+            DASHBOARD_PASSWORD = user_settings["DASHBOARD_PASSWORD"]
+
+        # Never log the API key itself.
+        print(f"Loaded custom settings: Topic={NTFY_TOPIC}, Model={LOCAL_MODEL_NAME}, "
+              f"CloudAI={'on (' + CLOUD_AI_PROVIDER + '/' + CLOUD_AI_MODEL + ')' if USE_CLOUD_AI else 'off'}")
         
     except Exception as e:
         print(f"Error loading data/settings.json: {e}")

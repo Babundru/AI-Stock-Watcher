@@ -6,3 +6,7 @@ customtkinter
 matplotlib
 feedparser
 lxml
+anthropic
+openai
+flask
+waitress

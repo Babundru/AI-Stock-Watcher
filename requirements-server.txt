@@ -1,0 +1,14 @@
+# Dependencies for the headless server.py entry point only.
+#
+# Excludes yfinance/customtkinter/matplotlib - those are pulled in solely by
+# the desktop GUI (gui.py) and are unnecessary weight on a small always-on
+# VM (e.g. a free-tier e2-micro with 1GB RAM).
+requests
+pytz
+beautifulsoup4
+feedparser
+lxml
+anthropic
+openai
+flask
+waitress

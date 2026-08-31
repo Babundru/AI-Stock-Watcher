@@ -6,6 +6,7 @@ import pytz
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from source_manager import SourceManager
 from config import LOOKBACK_MINUTES
 import feedparser
@@ -33,6 +34,11 @@ BROWSER_HEADERS = {
 # Stop reading a response after this much HTML. Without a cap, a single very
 # large (or deliberately endless) URL would be pulled entirely into memory.
 MAX_DOWNLOAD_BYTES = 3 * 1024 * 1024
+
+# Scraping (network fetch + parse of a full article page) is by far the
+# slowest part of a scan cycle. Doing it concurrently instead of one URL at a
+# time turns "N articles * ~1-3s each" into roughly the slowest single fetch.
+MAX_SCRAPE_WORKERS = 6
 
 
 def is_public_url(url):
@@ -126,74 +132,114 @@ class NewsCollector:
             print(f"✗ Failed to scrape ({type(e).__name__}): {url[:80]}...")
             return None
 
+    def _scrape_many(self, articles):
+        """Scrape full content for a batch of articles concurrently, in place."""
+        targets = [a for a in articles if a.get('url') and not a.get('content')]
+        if not targets:
+            return
+        with ThreadPoolExecutor(max_workers=MAX_SCRAPE_WORKERS) as pool:
+            for article, content in zip(targets, pool.map(lambda a: self.scrape_article(a['url']), targets)):
+                article['content'] = content
+
     def fetch_general_market_news(self):
         """
         Fetches top business headlines from major news RSS feeds (no APIs needed).
+
+        Feeds are polled in parallel, and only the freshest 20 articles across
+        all of them are scraped. Scraping every candidate and only afterwards
+        slicing to the top 20 (the previous behaviour) meant paying for up to
+        80 full-page fetches that were immediately discarded.
         """
         all_articles = []
+        with ThreadPoolExecutor(max_workers=len(self.MARKET_RSS_FEEDS)) as pool:
+            futures = {
+                pool.submit(self._fetch_from_rss, feed_url, source_name, 25, None, False): source_name
+                for feed_url, source_name in self.MARKET_RSS_FEEDS
+            }
+            for future in futures:
+                source_name = futures[future]
+                try:
+                    print(f"Fetching from {source_name}...")
+                    all_articles.extend(future.result())
+                except Exception as e:
+                    print(f"Error fetching {source_name}: {e}")
 
-        for feed_url, source_name in self.MARKET_RSS_FEEDS:
-            try:
-                print(f"Fetching from {source_name}...")
-                # Freshness filtering (not this cap) is what limits the result set
-                articles = self._fetch_from_rss(feed_url, source_name, limit=25)
-                all_articles.extend(articles)
-            except Exception as e:
-                print(f"Error fetching {source_name}: {e}")
-
-        return all_articles[:20]  # Return top 20 most recent
+        all_articles.sort(key=lambda a: a['_pub_dt'], reverse=True)
+        top_articles = all_articles[:20]
+        self._scrape_many(top_articles)
+        for article in top_articles:
+            article.pop('_pub_dt', None)
+        return top_articles
 
     def fetch_news(self, company):
         """
         Fetches recent news mentioning a specific company.
         Used when GLOBAL_SCAN is off and TARGET_COMPANIES is populated.
+
+        Same fetch-then-cap-then-scrape ordering as fetch_general_market_news,
+        for the same reason: scraping is the expensive step, so it should only
+        ever run on articles that will actually be kept.
         """
         all_articles = []
+        with ThreadPoolExecutor(max_workers=len(self.MARKET_RSS_FEEDS)) as pool:
+            futures = {
+                pool.submit(self._fetch_from_rss, feed_url, source_name, 25, company, False): source_name
+                for feed_url, source_name in self.MARKET_RSS_FEEDS
+            }
+            for future in futures:
+                source_name = futures[future]
+                try:
+                    print(f"Searching {source_name} for '{company}'...")
+                    all_articles.extend(future.result())
+                except Exception as e:
+                    print(f"Error fetching {source_name}: {e}")
 
-        for feed_url, source_name in self.MARKET_RSS_FEEDS:
-            try:
-                print(f"Searching {source_name} for '{company}'...")
-                articles = self._fetch_from_rss(feed_url, source_name, limit=25, match=company)
-                all_articles.extend(articles)
-            except Exception as e:
-                print(f"Error fetching {source_name}: {e}")
-
-        return all_articles[:10]
+        all_articles.sort(key=lambda a: a['_pub_dt'], reverse=True)
+        top_articles = all_articles[:10]
+        self._scrape_many(top_articles)
+        for article in top_articles:
+            article.pop('_pub_dt', None)
+        return top_articles
 
     def fetch_from_custom_sources(self):
         """
         Fetch news from user-defined custom sources.
         Returns a list of articles from all enabled sources.
+
+        Sources are fetched concurrently - each is an independent network
+        round-trip (and usually a scrape on top of that), so running them one
+        at a time made the whole cycle as slow as the sum of every source
+        instead of the slowest one.
         """
-        all_articles = []
         sources = self.source_mgr.get_sources(enabled_only=True)
-        
+
         if not sources:
             print("No custom sources configured.")
             return []
-        
+
         print(f"Fetching from {len(sources)} custom sources...")
-        
-        for source in sources:
+
+        def fetch_one(source):
+            source_name = source.get('name', 'Unknown')
+            source_url = source.get('url')
+            source_type = source.get('type', 'webpage')
             try:
-                source_name = source.get('name', 'Unknown')
-                source_url = source.get('url')
-                source_type = source.get('type', 'webpage')
-                
                 print(f"Scraping {source_name}...")
-                
                 if source_type == 'twitter' or self._is_nitter_url(source_url):
-                    articles = self._fetch_from_nitter(source_url, source_name)
+                    return self._fetch_from_nitter(source_url, source_name)
                 elif source_type == 'rss' or self._is_rss_feed(source_url):
-                    articles = self._fetch_from_rss(source_url, source_name)
+                    return self._fetch_from_rss(source_url, source_name)
                 else:
-                    articles = self._fetch_from_webpage(source_url, source_name)
-                
-                all_articles.extend(articles)
-                
+                    return self._fetch_from_webpage(source_url, source_name)
             except Exception as e:
-                print(f"Error fetching from {source.get('name')}: {e}")
-        
+                print(f"Error fetching from {source_name}: {e}")
+                return []
+
+        all_articles = []
+        with ThreadPoolExecutor(max_workers=min(len(sources), MAX_SCRAPE_WORKERS)) as pool:
+            for articles in pool.map(fetch_one, sources):
+                all_articles.extend(articles)
+
         print(f"Collected {len(all_articles)} articles from custom sources.")
         return all_articles
     
@@ -308,13 +354,19 @@ class NewsCollector:
         rss_indicators = ['/rss', '/feed', '.xml', '.rss', '/atom']
         return any(indicator in url.lower() for indicator in rss_indicators)
     
-    def _fetch_from_rss(self, feed_url, source_name, limit=10, match=None):
+    def _fetch_from_rss(self, feed_url, source_name, limit=10, match=None, scrape=True):
         """
         Fetch articles from RSS/Atom feed.
 
         If `match` is given, only entries mentioning it in the title or summary
         are kept. Filtering happens before scraping so we don't download pages
         we are going to discard.
+
+        If `scrape` is False, articles are returned with content=None and an
+        extra '_pub_dt' key (the parsed publish time, for sorting) instead of
+        being scraped here. Callers that fetch from several feeds and only
+        keep the newest N articles overall pass scrape=False, sort by
+        '_pub_dt', trim to N, and scrape only the survivors.
         """
         try:
             feed = feedparser.parse(feed_url)
@@ -323,6 +375,7 @@ class NewsCollector:
             for entry in feed.entries[:limit]:
                 # Check if recent (within lookback period)
                 pub_date = entry.get('published_parsed') or entry.get('updated_parsed')
+                pub_datetime = None
                 if pub_date:
                     pub_datetime = datetime.datetime(*pub_date[:6], tzinfo=pytz.UTC)
                     now = datetime.datetime.now(datetime.timezone.utc)
@@ -343,18 +396,18 @@ class NewsCollector:
                     'url': entry.get('link', ''),
                     'publishedAt': entry.get('published', ''),
                     'source': f"Custom/{source_name}",
-                    'content': None
+                    'content': None,
+                    '_pub_dt': pub_datetime or datetime.datetime.min.replace(tzinfo=pytz.UTC),
                 }
-                
-                # Try to scrape full content
-                if article['url']:
-                    print(f"Scraping content for (Custom/{source_name}): {article['title']}...")
-                    article['content'] = self.scrape_article(article['url'])
-                
                 articles.append(article)
-            
+
+            if scrape:
+                self._scrape_many(articles)
+                for article in articles:
+                    article.pop('_pub_dt', None)
+
             return articles
-            
+
         except Exception as e:
             print(f"Error parsing RSS feed {feed_url}: {e}")
             return []

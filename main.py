@@ -1,6 +1,7 @@
-from config import CHECK_INTERVAL, TARGET_COMPANIES, USE_LOCAL_LLM
+from config import CHECK_INTERVAL, TARGET_COMPANIES, USE_LOCAL_LLM, USE_CLOUD_AI
 from news_collector import NewsCollector
 from analyzer import MarketAnalyzer
+from cloud_analyzer import CloudAnalyzer
 from keyword_analyzer import KeywordAnalyzer
 from notifier import Notifier
 from ollama_manager import OllamaManager
@@ -25,9 +26,13 @@ class StockAppBackend:
         self.stats = {'scanned': 0, 'alerts': 0, 'skipped': 0}
         self.running = False
         self.collector = NewsCollector()
-        # LLM analysis when Ollama is configured, otherwise the offline
-        # keyword scorer so the app still works without a model installed.
-        if USE_LOCAL_LLM:
+        # Three interchangeable engines, in priority order: the Anthropic API
+        # (when a key is configured), a local Ollama model, or - needing
+        # neither a key nor a model install - the offline keyword scorer.
+        if USE_CLOUD_AI:
+            self.ollama = None
+            self.analyzer = CloudAnalyzer(ai_log_callback=self.log)
+        elif USE_LOCAL_LLM:
             self.ollama = OllamaManager(log_callback=self.log)
             self.analyzer = MarketAnalyzer(ai_log_callback=self.log)
         else:
@@ -239,7 +244,7 @@ class StockAppBackend:
         portfolio_tickers = list(self.portfolio_mgr.get_portfolio().keys())
         
         # Analyze
-        engine = "local LLM" if USE_LOCAL_LLM else "keyword matcher"
+        engine = "cloud AI" if USE_CLOUD_AI else ("local LLM" if USE_LOCAL_LLM else "keyword matcher")
         self.log(f"   🔍 Analyzing with {engine}...")
         self.stats['scanned'] += 1
         self.status(f"Analyzing: {title[:48]}")

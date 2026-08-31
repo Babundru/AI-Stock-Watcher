@@ -262,6 +262,8 @@ class StockAppGUI(ctk.CTk):
         """Describe which analysis engine is active."""
         try:
             import config
+            if config.USE_CLOUD_AI:
+                return f"Cloud AI  ·  {config.CLOUD_AI_MODEL}"
             if config.USE_LOCAL_LLM:
                 return f"Local AI  ·  {config.LOCAL_MODEL_NAME}"
             return "Keyword scoring  ·  offline"
@@ -457,32 +459,46 @@ class StockAppGUI(ctk.CTk):
     def open_settings(self):
         win = ctk.CTkToplevel(self)
         win.title("Settings")
-        win.geometry("500x520")
+        win.geometry("500x720")
         win.configure(fg_color=COLOR_BG)
         win.transient(self)
-        
+
         scroll = ctk.CTkScrollableFrame(win, fg_color="transparent")
         scroll.pack(expand=True, fill='both', padx=10, pady=10)
-        
+
         ctk.CTkLabel(scroll, text="Notifications", font=UI(16, "bold"), text_color=COLOR_ACCENT).pack(pady=(10, 20))
-        
-        def add_input(label, default_val):
+
+        def add_input(label, default_val, show=None):
             ctk.CTkLabel(scroll, text=label, text_color=COLOR_TEXT_DIM, font=UI(11)).pack(anchor="w", padx=20, pady=(10,0))
-            entry = ctk.CTkEntry(scroll, width=350, fg_color=COLOR_PANEL, border_color=COLOR_LINE, text_color=COLOR_TEXT, font=UI(12))
+            entry = ctk.CTkEntry(scroll, width=350, fg_color=COLOR_PANEL, border_color=COLOR_LINE,
+                                  text_color=COLOR_TEXT, font=UI(12), show=show)
             entry.pack(pady=(5,0))
             if default_val:
                 entry.insert(0, str(default_val))
             return entry
-            
+
         try:
             import config
             current_topic = config.NTFY_TOPIC
             current_model = config.LOCAL_MODEL_NAME
             current_threads = config.OLLAMA_NUM_THREADS
+            current_cloud_on = config.USE_CLOUD_AI
+            current_cloud_provider = config.CLOUD_AI_PROVIDER
+            current_cloud_model = config.CLOUD_AI_MODEL
+            current_cloud_key = config.CLOUD_AI_API_KEY
+            current_cloud_base_url = config.CLOUD_AI_BASE_URL
         except:
             current_topic = "stocks_ai_secret"
             current_model = "phi3:mini"
             current_threads = 1
+            current_cloud_on = False
+            current_cloud_provider = "anthropic"
+            current_cloud_model = "claude-opus-5"
+            current_cloud_key = ""
+            current_cloud_base_url = ""
+
+        from cloud_providers import PROVIDERS
+        provider_names = list(PROVIDERS.keys())
 
         e_topic = add_input("Notification topic", current_topic)
 
@@ -497,6 +513,39 @@ class StockAppGUI(ctk.CTk):
 
         ctk.CTkLabel(scroll, text="ℹ️ Model must be pulled first: ollama pull <name>",
                     text_color=COLOR_TEXT_MUTE, font=UI(9)).pack(pady=(5, 20))
+
+        ctk.CTkLabel(scroll, text="Cloud AI (API key)", font=UI(16, "bold"),
+                    text_color=COLOR_ACCENT).pack(pady=(10, 10))
+
+        cloud_enabled = ctk.BooleanVar(value=current_cloud_on)
+        ctk.CTkCheckBox(scroll, text="Use Cloud AI instead of the local model",
+                        variable=cloud_enabled, onvalue=True, offvalue=False,
+                        checkbox_width=18, checkbox_height=18,
+                        fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER,
+                        text_color=COLOR_TEXT, font=UI(11),
+                        border_color=COLOR_TEXT_MUTE).pack(anchor="w", padx=20, pady=(0, 10))
+
+        ctk.CTkLabel(scroll, text="Provider", text_color=COLOR_TEXT_DIM, font=UI(11)).pack(anchor="w", padx=20, pady=(10, 0))
+        provider_var = ctk.StringVar(value=current_cloud_provider if current_cloud_provider in provider_names else provider_names[0])
+        ctk.CTkOptionMenu(scroll, values=provider_names, variable=provider_var, width=350,
+                          fg_color=COLOR_PANEL, button_color=COLOR_PANEL_HI, button_hover_color=COLOR_LINE_HI,
+                          text_color=COLOR_TEXT, font=UI(12), dropdown_font=UI(12),
+                          corner_radius=RADIUS_SM).pack(pady=(5, 0))
+
+        e_cloud_key = add_input("API key", current_cloud_key, show="*")
+        e_cloud_model = add_input("Model", current_cloud_model)
+        e_cloud_base_url = add_input("Base URL (optional - for OpenAI-compatible hosts)", current_cloud_base_url)
+
+        ctk.CTkLabel(scroll,
+                    text="ℹ️ Runs on every scanned article - pick a cheaper/faster\n"
+                         "model if you scan frequently. Overrides the local model\n"
+                         "above when enabled. 'openai' + a base URL also reaches\n"
+                         "OpenAI-compatible third-party hosts (Groq, Together, a\n"
+                         "local server, ...); 'openrouter' and 'routera' each route\n"
+                         "one key to many hosted models (model names look like\n"
+                         "\"anthropic/claude-opus-5\"). Add more providers in\n"
+                         "cloud_providers.py. Requires: pip install anthropic / openai",
+                    text_color=COLOR_TEXT_MUTE, font=UI(9), justify="left").pack(anchor="w", padx=20, pady=(5, 20))
 
         def save():
             import json
@@ -517,6 +566,11 @@ class StockAppGUI(ctk.CTk):
                     "NTFY_TOPIC": e_topic.get().strip(),
                     "LOCAL_MODEL_NAME": e_model.get().strip(),
                     "OLLAMA_NUM_THREADS": e_threads.get().strip(),
+                    "USE_CLOUD_AI": cloud_enabled.get(),
+                    "CLOUD_AI_PROVIDER": provider_var.get().strip(),
+                    "CLOUD_AI_MODEL": e_cloud_model.get().strip(),
+                    "CLOUD_AI_API_KEY": e_cloud_key.get().strip(),
+                    "CLOUD_AI_BASE_URL": e_cloud_base_url.get().strip(),
                 })
                 with open("data/settings.json", "w", encoding="utf-8") as f:
                     json.dump(existing, f, indent=4)
@@ -525,7 +579,7 @@ class StockAppGUI(ctk.CTk):
             except Exception as e:
                 messagebox.showerror("Error", f"Save failed: {e}")
 
-        ctk.CTkButton(scroll, text="Save", command=save, 
+        ctk.CTkButton(scroll, text="Save", command=save,
                      fg_color=COLOR_ACCENT, text_color=COLOR_BG, hover_color=COLOR_ACCENT_HOVER,
                      font=UI(12, "bold"), width=300).pack(pady=40)
 
@@ -1021,16 +1075,17 @@ class StockAppGUI(ctk.CTk):
         # like it should change the alerts, and silently does nothing.
         try:
             import config
-            llm_active = config.USE_LOCAL_LLM
+            ai_active = config.USE_CLOUD_AI or config.USE_LOCAL_LLM
         except Exception:
-            llm_active = False
-        if llm_active:
+            ai_active = False
+        if ai_active:
             notice = ctk.CTkFrame(self.frame_keywords, fg_color="#2A1D05", corner_radius=RADIUS,
                                   border_width=1, border_color=COLOR_WARN)
             notice.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 10))
             ctk.CTkLabel(notice,
-                         text="⚠  INACTIVE - the local LLM is doing the analysis. "
-                              "These keywords are only used when USE_LOCAL_LLM = False.",
+                         text="⚠  INACTIVE - an AI engine is doing the analysis. "
+                              "These keywords are only used when both USE_LOCAL_LLM "
+                              "and USE_CLOUD_AI are False.",
                          font=UI(11), text_color=COLOR_WARN,
                          justify="left").pack(padx=16, pady=8)
             self.frame_keywords.grid_rowconfigure(1, weight=0)
