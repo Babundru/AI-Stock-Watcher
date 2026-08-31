@@ -57,10 +57,11 @@ source venv/bin/activate
 pip install -r requirements-server.txt
 ```
 
-`requirements-server.txt` skips `customtkinter`/`matplotlib`/`yfinance` -
-those exist only for the desktop GUI (`gui.py`) and are unnecessary weight
-here. If `pip install` gets OOM-killed on `e2-micro`, add a small swapfile
-first:
+`requirements-server.txt` skips `customtkinter`/`matplotlib` - those exist
+only for the desktop GUI (`gui.py`) and are unnecessary weight here. It does
+include `yfinance`/`pandas`, which the server side now needs too (sell-signal
+watches and the portfolio value/profit graph). If `pip install` gets
+OOM-killed on `e2-micro`, add a small swapfile first:
 
 ```bash
 sudo fallocate -l 1G /swapfile && sudo chmod 600 /swapfile

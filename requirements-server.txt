@@ -1,8 +1,12 @@
 # Dependencies for the headless server.py entry point only.
 #
-# Excludes yfinance/customtkinter/matplotlib - those are pulled in solely by
-# the desktop GUI (gui.py) and are unnecessary weight on a small always-on
-# VM (e.g. a free-tier e2-micro with 1GB RAM).
+# Excludes customtkinter/matplotlib - those are pulled in solely by the
+# desktop GUI (gui.py) and are unnecessary weight on a small always-on VM
+# (e.g. a free-tier e2-micro with 1GB RAM).
+#
+# yfinance/pandas ARE needed here even though they started out GUI-only:
+# main.py's sell-signal watches and server.py's portfolio value/profit graph
+# both fetch live and historical prices server-side now.
 requests
 pytz
 beautifulsoup4
@@ -12,3 +16,5 @@ anthropic
 openai
 flask
 waitress
+yfinance
+pandas
