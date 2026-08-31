@@ -96,6 +96,7 @@
   .badge.neg { background: var(--danger-soft); color: var(--danger); }
   .badge.neu { background: var(--panel-hi); color: var(--text-dim); }
   .badge.owned { background: var(--accent-soft); color: var(--accent); }
+  .badge.sell { background: #3A2E12; color: var(--warn); }
   .meta { font-size: 11px; color: var(--text-mute); margin-top: 6px; }
   .explanation { font-size: 12px; color: var(--text-dim); margin-top: 8px; line-height: 1.4; }
   a { color: var(--accent); text-decoration: none; }
@@ -158,6 +159,11 @@
 
 <main>
   <section id="view-alerts" class="view active">
+    <div class="card" id="watches-card" style="display:none;">
+      <h3 style="margin:0 0 8px;">Watching <span class="meta" style="margin:0;">(pending sell signals)</span></h3>
+      <table><thead><tr><th>Ticker</th><th>Entry</th><th>Target</th><th>Expires</th></tr></thead>
+        <tbody id="watches-body"></tbody></table>
+    </div>
     <div id="alerts-list"><div class="empty">No alerts yet.</div></div>
   </section>
 
@@ -166,12 +172,22 @@
   </section>
 
   <section id="view-portfolio" class="view">
+    <div class="stats-row" style="margin-bottom:14px;">
+      <div class="stat"><div class="n" id="pf-stat-value">$0.00</div><div class="l">Portfolio Value</div></div>
+      <div class="stat"><div class="n" id="pf-stat-profit">$0.00</div><div class="l">Total Profit</div></div>
+      <div class="stat"><div class="n" id="pf-stat-pct">0.00%</div><div class="l">Return</div></div>
+    </div>
+    <div class="card" id="pf-chart-card" style="display:none;">
+      <canvas id="pf-chart" style="width:100%; height:160px; display:block;"></canvas>
+    </div>
     <div class="add-form">
       <input id="pf-ticker" placeholder="Ticker (e.g. AAPL)">
       <input id="pf-price" placeholder="Buy price" type="number" step="0.01">
+      <input id="pf-shares" placeholder="Shares" type="number" step="0.0001">
+      <input id="pf-date" type="date">
       <button class="primary" id="pf-add">Add</button>
     </div>
-    <div class="card"><table><thead><tr><th>Ticker</th><th>Buy Price</th><th></th></tr></thead>
+    <div class="card"><table><thead><tr><th>Ticker</th><th>Shares</th><th>Buy Price</th><th></th></tr></thead>
       <tbody id="pf-body"></tbody></table></div>
   </section>
 
@@ -259,6 +275,21 @@ function renderAlerts(alerts) {
   const list = $('#alerts-list');
   if (!alerts.length) { list.innerHTML = '<div class="empty">No alerts yet.</div>'; return; }
   list.innerHTML = alerts.map(a => {
+    if (a.kind === 'sell_signal') {
+      const pct = a.entry_price ? ((a.current_price - a.entry_price) / a.entry_price * 100) : 0;
+      const reasonText = a.reason === 'target_hit' ? 'Target price reached' : 'Time window expired without the move';
+      return `<div class="card">
+        <div class="row">
+          <h3>${esc(a.company)}${a.ticker ? ' · ' + esc(a.ticker) : ''}</h3>
+          <span class="badge sell">SELL SIGNAL</span>
+        </div>
+        <div class="meta">
+          ${esc(reasonText)} &middot; Entry $${Number(a.entry_price).toFixed(2)} &rarr; Now $${Number(a.current_price).toFixed(2)} (${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%)
+          &middot; ${esc((a.time || '').replace('T', ' ').slice(0, 19))}
+        </div>
+        ${a.url ? `<div class="meta"><a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.headline || 'Original alert article')}</a></div>` : ''}
+      </div>`;
+    }
     const sentimentClass = a.sentiment === 'POSITIVE' ? 'pos' : a.sentiment === 'NEGATIVE' ? 'neg' : 'neu';
     return `<div class="card">
       <div class="row">
@@ -275,6 +306,26 @@ function renderAlerts(alerts) {
     </div>`;
   }).join('');
 }
+
+// --- Watches (open sell-signal targets) ----------------------------------
+async function loadWatches() {
+  try {
+    const watches = await (await fetch('/api/watches')).json();
+    const open = watches.filter(w => w.status === 'OPEN');
+    const card = $('#watches-card');
+    if (!open.length) { card.style.display = 'none'; return; }
+    card.style.display = 'block';
+    $('#watches-body').innerHTML = open.map(w => `
+      <tr>
+        <td>${esc(w.ticker)}</td>
+        <td>$${Number(w.entry_price).toFixed(2)}</td>
+        <td>$${Number(w.target_price).toFixed(2)}</td>
+        <td>${esc((w.expires_at || '').replace('T', ' ').slice(0, 16))}</td>
+      </tr>`).join('');
+  } catch (e) { /* dashboard poll - try again next tick */ }
+}
+setInterval(loadWatches, 15000);
+loadWatches();
 
 setInterval(pollState, 2000);
 pollState();
@@ -311,26 +362,117 @@ $('#logbox').addEventListener('scroll', () => {
 });
 
 // --- Portfolio ------------------------------------------------------------
+$('#pf-date').value = new Date().toISOString().slice(0, 10);
+
 async function loadPortfolio() {
   const data = await (await fetch('/api/portfolio')).json();
   const body = $('#pf-body');
   const tickers = Object.keys(data);
   body.innerHTML = tickers.length ? tickers.map(t => `
-    <tr><td>${esc(t)}</td><td>$${Number(data[t].buy_price || 0).toFixed(2)}</td>
+    <tr><td>${esc(t)}</td><td>${Number(data[t].shares || 0)}</td><td>$${Number(data[t].buy_price || 0).toFixed(2)}</td>
     <td><button class="danger-btn" data-del="${esc(t)}">Remove</button></td></tr>
-  `).join('') : '<tr><td colspan="3" class="empty">No holdings yet.</td></tr>';
+  `).join('') : '<tr><td colspan="4" class="empty">No holdings yet.</td></tr>';
   body.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', async () => {
     await fetch('/api/portfolio/' + encodeURIComponent(b.dataset.del), {method: 'DELETE'});
     loadPortfolio();
+    loadPortfolioSummary();
+    loadPortfolioHistory();
   }));
+  loadPortfolioSummary();
+  loadPortfolioHistory();
 }
+
+async function loadPortfolioSummary() {
+  try {
+    const s = await (await fetch('/api/portfolio/summary')).json();
+    $('#pf-stat-value').textContent = '$' + Number(s.total_value || 0).toFixed(2);
+    const profit = Number(s.total_profit || 0);
+    const profitEl = $('#pf-stat-profit');
+    profitEl.textContent = (profit >= 0 ? '+$' : '-$') + Math.abs(profit).toFixed(2);
+    profitEl.style.color = profit >= 0 ? 'var(--success)' : 'var(--danger)';
+    const pct = Number(s.profit_pct || 0);
+    const pctEl = $('#pf-stat-pct');
+    pctEl.textContent = (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
+    pctEl.style.color = pct >= 0 ? 'var(--success)' : 'var(--danger)';
+  } catch (e) { /* dashboard poll - try again next tick */ }
+}
+
+async function loadPortfolioHistory() {
+  try {
+    const h = await (await fetch('/api/portfolio/history')).json();
+    const card = $('#pf-chart-card');
+    if (!h.dates || !h.dates.length) { card.style.display = 'none'; return; }
+    card.style.display = 'block';
+    drawPortfolioChart(h);
+  } catch (e) { /* dashboard poll - try again next tick */ }
+}
+
+function drawPortfolioChart(h) {
+  const canvas = $('#pf-chart');
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, hgt = canvas.clientHeight || 160;
+  canvas.width = w * dpr; canvas.height = hgt * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, hgt);
+
+  const values = h.value, costs = h.cost_basis, n = values.length;
+  const allVals = values.concat(costs);
+  const min = Math.min(...allVals), max = Math.max(...allVals);
+  const pad = (max - min) * 0.08 || 1;
+  const yMin = min - pad, yMax = max + pad;
+  const marginL = 4, marginR = 4, marginT = 10, marginB = 18;
+  const plotW = w - marginL - marginR, plotH = hgt - marginT - marginB;
+
+  const x = i => marginL + (n === 1 ? 0 : (i / (n - 1)) * plotW);
+  const y = v => marginT + plotH - ((v - yMin) / (yMax - yMin)) * plotH;
+
+  const profitable = values[n - 1] >= costs[n - 1];
+  const lineColor = profitable ? '#3DDC84' : '#FF5C6C';
+  const fillColor = profitable ? 'rgba(61,220,132,0.12)' : 'rgba(255,92,108,0.12)';
+
+  // Shaded area between the value line and the cost-basis line.
+  ctx.beginPath();
+  ctx.moveTo(x(0), y(values[0]));
+  for (let i = 1; i < n; i++) ctx.lineTo(x(i), y(values[i]));
+  for (let i = n - 1; i >= 0; i--) ctx.lineTo(x(i), y(costs[i]));
+  ctx.closePath();
+  ctx.fillStyle = fillColor;
+  ctx.fill();
+
+  // Cost-basis reference line (dashed).
+  ctx.beginPath();
+  ctx.setLineDash([4, 4]);
+  ctx.strokeStyle = '#5B6474';
+  ctx.lineWidth = 1;
+  costs.forEach((v, i) => i === 0 ? ctx.moveTo(x(i), y(v)) : ctx.lineTo(x(i), y(v)));
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Portfolio value line (solid).
+  ctx.beginPath();
+  ctx.strokeStyle = lineColor;
+  ctx.lineWidth = 2;
+  values.forEach((v, i) => i === 0 ? ctx.moveTo(x(i), y(v)) : ctx.lineTo(x(i), y(v)));
+  ctx.stroke();
+
+  ctx.fillStyle = '#5B6474';
+  ctx.font = '10px -apple-system, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText(h.dates[0], marginL, hgt - 4);
+  ctx.textAlign = 'right';
+  ctx.fillText(h.dates[n - 1], w - marginR, hgt - 4);
+}
+
 $('#pf-add').addEventListener('click', async () => {
   const ticker = $('#pf-ticker').value.trim();
   const price = parseFloat($('#pf-price').value) || 0;
+  const shares = parseFloat($('#pf-shares').value) || 0;
+  const buyDate = $('#pf-date').value || undefined;
   if (!ticker) return;
   await fetch('/api/portfolio', {method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ticker, buy_price: price})});
-  $('#pf-ticker').value = ''; $('#pf-price').value = '';
+    body: JSON.stringify({ticker, buy_price: price, shares, buy_date: buyDate})});
+  $('#pf-ticker').value = ''; $('#pf-price').value = ''; $('#pf-shares').value = '';
   loadPortfolio();
 });
 

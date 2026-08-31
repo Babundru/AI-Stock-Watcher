@@ -13,6 +13,12 @@ LOOKBACK_MINUTES = 30
 # Note: App tracks last 120 processed URLs to avoid duplicates
 CHECK_INTERVAL = 60  # 1 minute
 
+# How often to check open watches (stocks with a pending sell signal) against
+# their current price, in seconds. Coarser than CHECK_INTERVAL on purpose:
+# a price target/horizon doesn't need per-minute polling, and each check is
+# one more batched yfinance call per open watch.
+WATCH_CHECK_INTERVAL = 300  # 5 minutes
+
 # --- WATCHLIST SETTINGS ---
 # List of companies to track specifically (Ignored if GLOBAL_SCAN = True)
 TARGET_COMPANIES = [] 

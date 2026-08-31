@@ -30,6 +30,8 @@ import config
 from local_time import now_local
 from main import StockAppBackend
 from portfolio_manager import PortfolioManager
+from portfolio_history import compute_history
+from price_lookup import fetch_prices
 from source_manager import SourceManager
 from keyword_manager import KeywordManager
 
@@ -179,7 +181,10 @@ def api_control():
 def api_portfolio():
     if request.method == "POST":
         body = request.get_json(silent=True) or {}
-        if not portfolio_mgr.add_stock(body.get("ticker", ""), body.get("buy_price", 0.0)):
+        if not portfolio_mgr.add_stock(
+            body.get("ticker", ""), body.get("buy_price", 0.0),
+            body.get("shares", 0.0), body.get("buy_date"),
+        ):
             return jsonify({"error": "invalid ticker"}), 400
     return jsonify(portfolio_mgr.get_portfolio())
 
@@ -188,6 +193,54 @@ def api_portfolio():
 def api_portfolio_delete(ticker):
     portfolio_mgr.remove_stock(ticker)
     return jsonify(portfolio_mgr.get_portfolio())
+
+
+@app.route("/api/portfolio/summary")
+def api_portfolio_summary():
+    """Live current value/profit - a cheap batched quote call, safe to poll
+    often (unlike /api/portfolio/history, which fetches per-ticker daily
+    history and is much heavier)."""
+    portfolio = portfolio_mgr.get_portfolio()
+    tickers = [t for t, d in portfolio.items() if d.get("shares", 0) > 0]
+    prices = fetch_prices(tickers) if tickers else {}
+
+    holdings = []
+    total_value = 0.0
+    total_cost = 0.0
+    for ticker, data in portfolio.items():
+        shares = data.get("shares", 0.0)
+        if shares <= 0:
+            continue
+        price = prices.get(ticker)
+        cost = data.get("buy_price", 0.0) * shares
+        value = (price * shares) if price else None
+        holdings.append({
+            "ticker": ticker, "shares": shares, "price": price,
+            "cost_basis": cost, "value": value,
+        })
+        total_cost += cost
+        if value is not None:
+            total_value += value
+
+    total_profit = total_value - total_cost
+    profit_pct = (total_profit / total_cost * 100) if total_cost > 0 else 0.0
+    return jsonify({
+        "holdings": holdings,
+        "total_value": round(total_value, 2),
+        "total_cost_basis": round(total_cost, 2),
+        "total_profit": round(total_profit, 2),
+        "profit_pct": round(profit_pct, 2),
+    })
+
+
+@app.route("/api/portfolio/history")
+def api_portfolio_history():
+    return jsonify(compute_history(portfolio_mgr.get_portfolio()))
+
+
+@app.route("/api/watches")
+def api_watches():
+    return jsonify(backend.watch_mgr.get_all())
 
 
 @app.route("/api/sources", methods=["GET", "POST"])

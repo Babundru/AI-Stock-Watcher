@@ -65,7 +65,8 @@ def build_market_prompt(company, article, market_is_open, portfolio_tickers=None
             "sentiment": "POSITIVE",
             "impact": "CRITICAL",
             "explanation": "Concise summary of why this matters.",
-            "prediction": "GAP UP"
+            "prediction": "GAP UP",
+            "horizon": "DAYS"
         }}
 
         Definitions:
@@ -76,6 +77,15 @@ def build_market_prompt(company, article, market_is_open, portfolio_tickers=None
             - MEDIUM (2-5% move, standard news)
             - LOW (Noise)
         - Prediction: GAP UP / GAP DOWN (if closed) or RALLY / DROP (if open)
+        - Horizon: how long this specific news item should keep moving the price
+          before the market has fully priced it in - i.e. how long until it's
+          "played out" and a holder should reassess.
+            - INTRADAY (reaction fades or resolves within the current/next session,
+              e.g. a single earnings beat/miss, a same-day rumor)
+            - DAYS (effect plays out over the next few trading days, e.g. an
+              analyst upgrade, a contract win, a product announcement)
+            - WEEKS (structural news that takes longer to be fully priced in,
+              e.g. M&A, major regulatory action, a large multi-year contract)
         """
 
 

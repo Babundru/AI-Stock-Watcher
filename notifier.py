@@ -95,6 +95,46 @@ class Notifier:
         # Send Mobile Notification
         self._send_ntfy(title, message, priority='high' if impact == 'CRITICAL' else 'default', url=article.get('url'))
 
+    def notify_sell(self, ticker, company, reason, entry_price, current_price, target_price, article_url=None):
+        """
+        Sends a sell-signal notification for a watch closed by _check_watches
+        (main.py): either the alerted-on move played out, or the expected
+        window passed without it.
+
+        Args:
+            ticker: Stock ticker
+            company: Company name
+            reason: "target_hit" or "horizon_expired"
+            entry_price: Price when the original alert fired
+            current_price: Price now
+            target_price: Price that would have counted as the move "playing out"
+            article_url: Link back to the article that opened the watch
+        """
+        pct_change = ((current_price - entry_price) / entry_price * 100) if entry_price else 0.0
+
+        if reason == "target_hit":
+            emoji = "💰"
+            reason_text = f"Target of {target_price:.2f} reached - the alerted-on move played out."
+        else:
+            emoji = "⏰"
+            reason_text = "Expected time window passed without the alerted-on move happening - reassess the position."
+
+        title = f"{company} ({ticker}) - SELL SIGNAL"
+        message = (
+            f"{emoji} {reason_text}\n\n"
+            f"Entry: {entry_price:.2f} -> Now: {current_price:.2f} ({pct_change:+.1f}%)"
+        )
+
+        print("\n" + "="*50)
+        print(f"TITLE: {title} {emoji}")
+        print("="*50)
+        print(f"📝 Message: {message}")
+        print("="*50 + "\n")
+
+        # A sell signal is rarer and always actionable, unlike a news alert,
+        # so it always goes out at high priority - no impact-based gating.
+        self._send_ntfy(title, message, priority='high', url=article_url)
+
     @staticmethod
     def _header_safe(value, max_length=180):
         """Make a string safe to send as an HTTP header value.

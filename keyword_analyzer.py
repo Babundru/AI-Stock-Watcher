@@ -155,6 +155,7 @@ class KeywordAnalyzer:
         sentiment = self._classify_sentiment(total_score)
         impact = self._classify_impact(total_score)
         prediction = self._generate_prediction(sentiment, market_is_open)
+        horizon = self._generate_horizon(impact)
 
         found_positive = sorted(
             {s.keyword for s in kept if s.contribution > 0},
@@ -175,6 +176,7 @@ class KeywordAnalyzer:
             "impact": impact,
             "explanation": self._generate_explanation(kept, sentiment, impact, total_score),
             "prediction": prediction,
+            "horizon": horizon,
             "keywords_found": {
                 "positive": found_positive,
                 "negative": found_negative,
@@ -299,6 +301,14 @@ class KeywordAnalyzer:
         elif sentiment == "NEGATIVE":
             return "DROP" if market_is_open else "GAP DOWN"
         return "FLAT"
+
+    def _generate_horizon(self, impact: str) -> str:
+        """How long this news should keep moving the price, from impact alone
+        (no LLM reasoning available here). A bigger move takes longer to be
+        fully priced in than a routine one."""
+        if impact in ("CRITICAL", "HIGH"):
+            return "DAYS"
+        return "WEEKS"
 
     def _generate_explanation(self, signals, sentiment, impact, score) -> str:
         """Explain the verdict in terms of the signals that actually drove it."""

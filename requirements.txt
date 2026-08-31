@@ -1,5 +1,6 @@
 requests
 pytz
+pandas
 beautifulsoup4
 yfinance
 customtkinter

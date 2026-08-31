@@ -1,4 +1,4 @@
-from config import CHECK_INTERVAL, TARGET_COMPANIES, USE_LOCAL_LLM, USE_CLOUD_AI
+from config import CHECK_INTERVAL, WATCH_CHECK_INTERVAL, TARGET_COMPANIES, USE_LOCAL_LLM, USE_CLOUD_AI
 from local_time import now_local
 from news_collector import NewsCollector
 from analyzer import MarketAnalyzer
@@ -7,6 +7,8 @@ from keyword_analyzer import KeywordAnalyzer
 from notifier import Notifier
 from ollama_manager import OllamaManager
 from portfolio_manager import PortfolioManager
+from watch_manager import WatchManager
+import price_lookup
 import time
 import datetime
 import threading
@@ -41,6 +43,8 @@ class StockAppBackend:
             self.analyzer = KeywordAnalyzer()
         self.notifier = Notifier()
         self.portfolio_mgr = PortfolioManager()
+        self.watch_mgr = WatchManager()
+        self._last_watch_check = 0
         self.processed_urls_file = 'data/processed_urls.json'
         self.max_stored_urls = 120  # Keep only last 120 processed URLs
         self.processed_urls = self._load_processed_urls()
@@ -190,6 +194,14 @@ class StockAppBackend:
                             if not self.running: break
                             self._process_article(company, article, market_open)
 
+                # --- WATCH CHECK (sell signals) ---
+                # Coarser cadence than the news scan - price doesn't need to
+                # be polled every minute, and it's a batched API call per
+                # open watch.
+                if time.time() - self._last_watch_check >= WATCH_CHECK_INTERVAL:
+                    self._check_watches()
+                    self._last_watch_check = time.time()
+
                 # --- SMART SCHEDULER ---
                 # Calculate sleep time until next 15-minute mark (xx:00, xx:15, xx:30, xx:45)
                 # To sync with device time.
@@ -308,6 +320,19 @@ class StockAppBackend:
             is_owned = self.portfolio_mgr.has_stock(stock_id)
             self.notifier.notify(target, article, analysis, is_owned=is_owned)
 
+            # Open a watch so we can later tell the user when to sell: only
+            # for POSITIVE (buy-signal) alerts, and only if we can price it.
+            if sentiment == 'POSITIVE' and ticker:
+                entry_price = price_lookup.fetch_prices([ticker]).get(ticker)
+                if entry_price:
+                    self.watch_mgr.add_watch(
+                        ticker, target, entry_price, impact,
+                        analysis.get('horizon'), prediction,
+                        article_url=url, article_headline=title,
+                    )
+                else:
+                    self.log(f"  (couldn't price {ticker} - no sell watch opened)")
+
             self.stats['alerts'] += 1
             if self.alert_callback:
                 try:
@@ -331,5 +356,60 @@ class StockAppBackend:
             self.stats['skipped'] += 1
 
         self.status("Idle")
+
+    def _check_watches(self):
+        """Check every open watch's current price against its target/expiry
+        and close+notify any that have resolved (see watch_manager.py)."""
+        open_watches = self.watch_mgr.get_open_watches()
+        if not open_watches:
+            return
+
+        self.log(f"👀 Checking {len(open_watches)} open watch(es) for sell signals...")
+        tickers = list({w['ticker'] for w in open_watches})
+        prices = price_lookup.fetch_prices(tickers)
+        now = now_local()
+
+        for watch in open_watches:
+            price = prices.get(watch['ticker'])
+            if not price:
+                continue
+
+            expires_at = datetime.datetime.fromisoformat(watch['expires_at'])
+            reason = None
+            if price >= watch['target_price']:
+                reason = 'target_hit'
+            elif now >= expires_at:
+                reason = 'horizon_expired'
+
+            if not reason:
+                continue
+
+            closed = self.watch_mgr.close_watch(watch['id'], reason, price)
+            if not closed:
+                continue
+
+            self.log(f"💰 SELL SIGNAL: {watch['company']} ({watch['ticker']}) - {reason}")
+            self.notifier.notify_sell(
+                watch['ticker'], watch['company'], reason,
+                watch['entry_price'], price, watch['target_price'],
+                article_url=watch.get('article_url'),
+            )
+
+            if self.alert_callback:
+                try:
+                    self.alert_callback({
+                        'time': now,
+                        'kind': 'sell_signal',
+                        'company': watch['company'],
+                        'ticker': watch['ticker'],
+                        'reason': reason,
+                        'entry_price': watch['entry_price'],
+                        'current_price': price,
+                        'target_price': watch['target_price'],
+                        'headline': watch.get('article_headline'),
+                        'url': watch.get('article_url'),
+                    })
+                except Exception as e:
+                    self.log(f"  (alert view update failed: {e})")
 
 
