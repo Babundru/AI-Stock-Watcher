@@ -27,6 +27,7 @@ import threading
 from flask import Flask, jsonify, request, send_from_directory
 
 import config
+from local_time import now_local
 from main import StockAppBackend
 from portfolio_manager import PortfolioManager
 from source_manager import SourceManager
@@ -62,7 +63,7 @@ class DashboardState:
             self.logs.append({
                 'seq': self.log_seq,
                 'text': message,
-                'time': datetime.datetime.now().strftime('%H:%M:%S'),
+                'time': now_local().strftime('%H:%M:%S'),
             })
 
     def add_alert(self, alert):

@@ -1,4 +1,5 @@
 from config import CHECK_INTERVAL, TARGET_COMPANIES, USE_LOCAL_LLM, USE_CLOUD_AI
+from local_time import now_local
 from news_collector import NewsCollector
 from analyzer import MarketAnalyzer
 from cloud_analyzer import CloudAnalyzer
@@ -144,7 +145,7 @@ class StockAppBackend:
         
         while self.running:
             try:
-                self.log(f"\nScanning for news at {datetime.datetime.now().strftime('%H:%M:%S')}...")
+                self.log(f"\nScanning for news at {now_local().strftime('%H:%M:%S')}...")
                 
                 market_open = self.notifier.is_market_open()
                 status_msg = "OPEN" if market_open else "CLOSED"
@@ -193,7 +194,7 @@ class StockAppBackend:
                 # Calculate sleep time until next 15-minute mark (xx:00, xx:15, xx:30, xx:45)
                 # To sync with device time.
                 # Sleep for the configured check interval
-                next_run_time = datetime.datetime.now() + datetime.timedelta(seconds=CHECK_INTERVAL)
+                next_run_time = now_local() + datetime.timedelta(seconds=CHECK_INTERVAL)
                 self.log(f"Sleeping until {next_run_time.strftime('%H:%M:%S')} ({CHECK_INTERVAL}s)...")
                 self.status(f"Waiting until {next_run_time.strftime('%H:%M:%S')}")
                 
@@ -311,7 +312,7 @@ class StockAppBackend:
             if self.alert_callback:
                 try:
                     self.alert_callback({
-                        'time': datetime.datetime.now(),
+                        'time': now_local(),
                         'company': target,
                         'ticker': ticker,
                         'sentiment': sentiment,
