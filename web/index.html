@@ -135,6 +135,8 @@
       <span class="pill"><span class="dot" id="dot"></span><span id="running-text">Offline</span></span>
       <button class="primary" id="btn-start">Start</button>
       <button class="danger-btn" id="btn-stop">Stop</button>
+      <button id="btn-test-notify">Send Test Notification</button>
+      <span class="meta" id="test-notify-result"></span>
     </div>
   </div>
   <div class="stats-row">
@@ -286,6 +288,22 @@ $('#btn-start').addEventListener('click', () => fetch('/api/control', {
 $('#btn-stop').addEventListener('click', () => fetch('/api/control', {
   method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'stop'})
 }).then(pollState));
+
+$('#btn-test-notify').addEventListener('click', async () => {
+  const btn = $('#btn-test-notify');
+  const result = $('#test-notify-result');
+  btn.disabled = true;
+  result.textContent = 'Sending...';
+  try {
+    const res = await fetch('/api/test-notification', {method: 'POST'});
+    const data = await res.json();
+    result.textContent = data.sent ? 'Sent - check your phone.' : (data.error || 'Failed to send.');
+  } catch (e) {
+    result.textContent = 'Failed to send.';
+  }
+  btn.disabled = false;
+  setTimeout(() => { result.textContent = ''; }, 6000);
+});
 
 $('#logbox').addEventListener('scroll', () => {
   const box = $('#logbox');

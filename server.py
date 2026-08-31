@@ -152,6 +152,17 @@ def api_state():
     return jsonify(data)
 
 
+@app.route("/api/test-notification", methods=["POST"])
+def api_test_notification():
+    sent = backend.notifier.notify_system(
+        "Test Notification",
+        f"This is a test alert from your Stocks AI dashboard, sent at {now_local().strftime('%H:%M:%S')}.",
+    )
+    if not sent:
+        return jsonify({"sent": False, "error": "No NTFY_TOPIC configured, or ntfy.sh rejected the request."}), 400
+    return jsonify({"sent": True})
+
+
 @app.route("/api/control", methods=["POST"])
 def api_control():
     action = (request.get_json(silent=True) or {}).get("action")

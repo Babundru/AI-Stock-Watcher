@@ -36,14 +36,16 @@ class Notifier:
 
     def notify_system(self, title, message):
         """
-        Sends a system-level notification (e.g. App Start/Stop).
+        Sends a system-level notification (e.g. App Start/Stop). Returns
+        whether ntfy actually accepted it, so a caller like the dashboard's
+        test-notification button can tell the user it worked.
         """
         print("\n" + "="*50)
         print(f"🤖 SYSTEM: {title}")
         print(f"📝 Message: {message}")
         print("="*50 + "\n")
-        
-        self._send_ntfy(title, message, priority='default')
+
+        return self._send_ntfy(title, message, priority='default')
 
     def notify(self, company, article, analysis, is_owned=False):
         """
@@ -112,6 +114,8 @@ class Notifier:
         return cleaned[:max_length]
 
     def _send_ntfy(self, title, message, priority='default', url=None):
+        """Returns True if ntfy accepted the notification, False otherwise
+        (no topic configured, a non-2xx response, or a request error)."""
         if not self.ntfy_topic:
             # Warn once rather than silently dropping every alert - otherwise
             # a new user sees the app working but never gets a phone alert.
@@ -119,7 +123,7 @@ class Notifier:
                 print("No notification topic set - phone alerts are disabled. "
                       "Set one in Settings to enable them.")
                 self._warned_no_topic = True
-            return
+            return False
 
         try:
             import requests
@@ -136,11 +140,13 @@ class Notifier:
                     headers["Click"] = safe_url
 
             # Without a timeout this call can hang the backend thread forever.
-            requests.post(
+            resp = requests.post(
                 f"https://ntfy.sh/{self.ntfy_topic}",
                 data=message.encode('utf-8'),
                 headers=headers,
                 timeout=10
             )
+            return resp.ok
         except Exception as e:
             print(f"Error sending mobile notification: {e}")
+            return False
