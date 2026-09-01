@@ -78,9 +78,21 @@ class Notifier:
         if sentiment == "NEGATIVE" and is_owned and self.notify_ownership:
             ownership_tag = " [OWNED]"
 
+        # Spell out the trade the alert implies, so the entry notification
+        # is as actionable as the exit one that follows it. Only sentiments
+        # that open a watch get an action line.
+        action = ""
+        if sentiment == "POSITIVE":
+            action = "\nAction: BUY (open a long CFD) - a SELL alert follows when to close."
+        elif sentiment == "NEGATIVE":
+            action = "\nAction: SHORT (open a short CFD) - a BUY BACK alert follows when to close."
+
         title = f"{company} ({analysis.get('ticker', '???')}){ownership_tag}"
         # Add emoji to message body instead to avoid Header encoding issues
-        message = f"{emoji} {analysis.get('explanation')}\n\nPrice Prediction: {analysis.get('prediction')}"
+        message = (
+            f"{emoji} {analysis.get('explanation')}\n\n"
+            f"Price Prediction: {analysis.get('prediction')}{action}"
+        )
         
         # Console Output
         print("\n" + "="*50)
@@ -95,11 +107,12 @@ class Notifier:
         # Send Mobile Notification
         self._send_ntfy(title, message, priority='high' if impact == 'CRITICAL' else 'default', url=article.get('url'))
 
-    def notify_sell(self, ticker, company, reason, entry_price, current_price, target_price, article_url=None):
+    def notify_sell(self, ticker, company, reason, entry_price, current_price,
+                    target_price, article_url=None, direction="LONG"):
         """
-        Sends a sell-signal notification for a watch closed by _check_watches
-        (main.py): either the alerted-on move played out, or the expected
-        window passed without it.
+        Sends an exit-signal notification for a watch closed by
+        _check_watches (main.py): either the alerted-on move played out, or
+        the expected window passed without it.
 
         Args:
             ticker: Stock ticker
@@ -109,8 +122,13 @@ class Notifier:
             current_price: Price now
             target_price: Price that would have counted as the move "playing out"
             article_url: Link back to the article that opened the watch
+            direction: "LONG" (close by selling) or "SHORT" (close by buying back)
         """
-        pct_change = ((current_price - entry_price) / entry_price * 100) if entry_price else 0.0
+        is_short = (direction or "LONG").upper() == "SHORT"
+        price_change = ((current_price - entry_price) / entry_price * 100) if entry_price else 0.0
+        # A short earns when the price falls, so report the move from the
+        # position's point of view, not the stock's.
+        position_pct = -price_change if is_short else price_change
 
         if reason == "target_hit":
             emoji = "💰"
@@ -119,10 +137,15 @@ class Notifier:
             emoji = "⏰"
             reason_text = "Expected time window passed without the alerted-on move happening - reassess the position."
 
-        title = f"{company} ({ticker}) - SELL SIGNAL"
+        # "Sell" means nothing for a short - that position is closed by
+        # buying the CFD back.
+        action = "BUY BACK (close the short CFD)" if is_short else "SELL (close the long CFD)"
+        title = f"{company} ({ticker}) - {'COVER SHORT' if is_short else 'SELL'} SIGNAL"
         message = (
             f"{emoji} {reason_text}\n\n"
-            f"Entry: {entry_price:.2f} -> Now: {current_price:.2f} ({pct_change:+.1f}%)"
+            f"Action: {action}\n"
+            f"Entry: {entry_price:.2f} -> Now: {current_price:.2f} "
+            f"({price_change:+.1f}% price, {position_pct:+.1f}% on the position)"
         )
 
         print("\n" + "="*50)
@@ -131,7 +154,7 @@ class Notifier:
         print(f"📝 Message: {message}")
         print("="*50 + "\n")
 
-        # A sell signal is rarer and always actionable, unlike a news alert,
+        # An exit signal is rarer and always actionable, unlike a news alert,
         # so it always goes out at high priority - no impact-based gating.
         self._send_ntfy(title, message, priority='high', url=article_url)
 

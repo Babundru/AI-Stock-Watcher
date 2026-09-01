@@ -127,6 +127,7 @@
   .card.alert-neg { border-left: 3px solid var(--danger); }
   .card.alert-neu { border-left: 3px solid var(--line-hi); }
   .card.alert-sell { border-left: 3px solid var(--warn); }
+  .card.alert-cover { border-left: 3px solid var(--accent); }
   @keyframes cardIn { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
   .card.alert-new { animation: cardIn .4s var(--ease); }
   .card h3 { margin: 0 0 4px; font-size: 14px; }
@@ -140,6 +141,9 @@
   .badge.neu { background: var(--panel-hi); color: var(--text-dim); }
   .badge.owned { background: var(--accent-soft); color: var(--accent); }
   .badge.sell { background: #3A2E12; color: var(--warn); }
+  .badge.cover { background: var(--accent-soft); color: var(--accent); }
+  .badge.side-long { background: #123321; color: var(--success); }
+  .badge.side-short { background: var(--danger-soft); color: var(--danger); }
   .meta { font-size: 11px; color: var(--text-mute); margin-top: 6px; }
   .explanation { font-size: 12px; color: var(--text-dim); margin-top: 8px; line-height: 1.4; }
   a { color: var(--accent); text-decoration: none; }
@@ -226,8 +230,8 @@
 <main>
   <section id="view-alerts" class="view active">
     <div class="card" id="watches-card" style="display:none;">
-      <h3 style="margin:0 0 8px;">Watching <span class="meta" style="margin:0;">(pending sell signals)</span></h3>
-      <table><thead><tr><th>Ticker</th><th>Entry</th><th>Target</th><th>Expires</th><th></th></tr></thead>
+      <h3 style="margin:0 0 8px;">Watching <span class="meta" style="margin:0;">(open positions, pending exit signals)</span></h3>
+      <table><thead><tr><th>Ticker</th><th>Side</th><th>Entry</th><th>Target</th><th>Expires</th><th></th></tr></thead>
         <tbody id="watches-body"></tbody></table>
     </div>
     <div id="alerts-list"><div class="empty">No alerts yet.</div></div>
@@ -376,7 +380,7 @@ async function pollState() {
 let seenAlertKeys = new Set();
 function alertKey(a) {
   return a.kind === 'sell_signal'
-    ? `sell|${a.ticker}|${a.time}|${a.reason}`
+    ? `exit|${a.direction || 'LONG'}|${a.ticker}|${a.time}|${a.reason}`
     : `news|${a.company}|${a.time}|${a.headline}`;
 }
 
@@ -388,14 +392,21 @@ function renderAlerts(alerts) {
     const newCls = isNew ? ' alert-new' : '';
     if (a.kind === 'sell_signal') {
       const pct = a.entry_price ? ((a.current_price - a.entry_price) / a.entry_price * 100) : 0;
+      const isShort = a.direction === 'SHORT';
+      // A short earns when the price falls, so show the position's P/L, not the stock's.
+      const posPct = isShort ? -pct : pct;
       const reasonText = a.reason === 'target_hit' ? 'Target price reached' : 'Time window expired without the move';
-      return `<div class="card alert-sell${newCls}">
+      const action = isShort ? 'Buy back to close the short CFD' : 'Sell to close the long CFD';
+      return `<div class="card ${isShort ? 'alert-cover' : 'alert-sell'}${newCls}">
         <div class="row">
           <h3>${esc(a.company)}${a.ticker ? ' · ' + esc(a.ticker) : ''}</h3>
-          <span class="badge sell">SELL SIGNAL</span>
+          <span class="badge ${isShort ? 'cover' : 'sell'}">${isShort ? 'COVER SHORT' : 'SELL SIGNAL'}</span>
         </div>
         <div class="meta">
-          ${esc(reasonText)} &middot; Entry $${fmtPrice(a.entry_price)} &rarr; Now $${fmtPrice(a.current_price)} (${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%)
+          ${esc(action)} &middot; ${esc(reasonText)}
+        </div>
+        <div class="meta">
+          Entry $${fmtPrice(a.entry_price)} &rarr; Now $${fmtPrice(a.current_price)} (${pct >= 0 ? '+' : ''}${pct.toFixed(1)}% price, ${posPct >= 0 ? '+' : ''}${posPct.toFixed(1)}% on the position)
           &middot; ${esc((a.time || '').replace('T', ' ').slice(0, 19))}
         </div>
         ${a.url ? `<div class="meta"><a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.headline || 'Original alert article')}</a></div>` : ''}
@@ -419,7 +430,7 @@ function renderAlerts(alerts) {
   seenAlertKeys = new Set(alerts.map(alertKey));
 }
 
-// --- Watches (open sell-signal targets) ----------------------------------
+// --- Watches (open positions awaiting an exit signal) --------------------
 async function loadWatches() {
   try {
     const watches = await (await fetch('/api/watches')).json();
@@ -430,6 +441,7 @@ async function loadWatches() {
     $('#watches-body').innerHTML = open.map(w => `
       <tr>
         <td>${esc(w.ticker)}</td>
+        <td><span class="badge ${w.direction === 'SHORT' ? 'side-short' : 'side-long'}">${w.direction === 'SHORT' ? 'Short' : 'Long'}</span></td>
         <td>$${fmtPrice(w.entry_price)}</td>
         <td>$${fmtPrice(w.target_price)}</td>
         <td>${esc((w.expires_at || '').replace('T', ' ').slice(0, 16))}</td>

@@ -26,11 +26,24 @@ DEFAULT_HORIZON = "DAYS"
 
 MAX_STORED_WATCHES = 200
 
+# A watch is either a long (bought the stock / a long CFD, exit by selling)
+# or a short (sold a CFD short, exit by buying it back). The direction only
+# changes which way the target price sits from the entry, and therefore
+# which comparison counts as the alerted-on move having played out.
+LONG = "LONG"
+SHORT = "SHORT"
+DIRECTIONS = (LONG, SHORT)
+
 
 class WatchManager:
-    """Tracks stocks that had a POSITIVE alert fire, so the app can later
-    tell the user when to sell: either the predicted move happened (target
-    hit) or the expected window passed without it (horizon expired).
+    """Tracks stocks that had a HIGH/CRITICAL alert fire, so the app can
+    later tell the user when to close the position: either the predicted
+    move happened (target hit) or the expected window passed without it
+    (horizon expired).
+
+    POSITIVE alerts open a LONG watch (buy now, sell on the signal);
+    NEGATIVE alerts open a SHORT watch (sell a CFD short now, buy it back
+    on the signal).
 
     Mirrors PortfolioManager's plain-JSON-file pattern (data/watches.json).
     """
@@ -45,7 +58,14 @@ class WatchManager:
         try:
             with open(self.filename, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-            return data if isinstance(data, list) else []
+            if not isinstance(data, list):
+                return []
+            # Watches written before shorting existed have no direction;
+            # they were all longs.
+            for w in data:
+                if isinstance(w, dict):
+                    w.setdefault('direction', LONG)
+            return data
         except json.JSONDecodeError:
             return []
 
@@ -61,10 +81,12 @@ class WatchManager:
         return any(w['ticker'] == ticker and w['status'] == 'OPEN' for w in self.watches)
 
     def add_watch(self, ticker, company, entry_price, impact, horizon, prediction,
-                  article_url=None, article_headline=None):
+                  article_url=None, article_headline=None, direction=LONG):
         """Open a new watch for `ticker`. Returns the created record, or None
         if there's no usable entry price or an open watch already exists for
-        this ticker (avoids stacking duplicate sell notifications)."""
+        this ticker (avoids stacking duplicate exit notifications, and stops
+        a later opposite-sentiment article opening a contradictory position).
+        """
         if not ticker or not entry_price:
             return None
 
@@ -72,13 +94,19 @@ class WatchManager:
         if self.has_open_watch(ticker):
             return None
 
+        direction = (direction or LONG).upper()
+        if direction not in DIRECTIONS:
+            direction = LONG
+
         impact = (impact or '').upper()
         horizon = (horizon or '').upper()
         if horizon not in HORIZON_DAYS:
             horizon = DEFAULT_HORIZON
 
         target_pct = TARGET_PCT.get(impact, DEFAULT_TARGET_PCT)
-        target_price = round(entry_price * (1 + target_pct), 4)
+        # A short profits on the way down, so its target sits below entry.
+        sign = -1 if direction == SHORT else 1
+        target_price = round(entry_price * (1 + sign * target_pct), 4)
 
         opened_at = now_local()
         expires_at = opened_at + datetime.timedelta(days=HORIZON_DAYS[horizon])
@@ -87,6 +115,7 @@ class WatchManager:
             "id": uuid.uuid4().hex[:12],
             "ticker": ticker,
             "company": company or ticker,
+            "direction": direction,
             "entry_price": entry_price,
             "target_price": target_price,
             "target_pct": target_pct,
@@ -109,6 +138,14 @@ class WatchManager:
 
     def get_open_watches(self):
         return [w for w in self.watches if w['status'] == 'OPEN']
+
+    @staticmethod
+    def target_reached(watch, price):
+        """Has the alerted-on move played out at `price`? A long needs the
+        price at or above its target, a short at or below."""
+        if watch.get('direction') == SHORT:
+            return price <= watch['target_price']
+        return price >= watch['target_price']
 
     def remove_watch(self, watch_id):
         """Delete a watch outright, regardless of status. Used when the user
