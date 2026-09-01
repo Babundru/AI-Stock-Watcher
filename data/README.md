@@ -10,6 +10,7 @@ Stocks Watcher application.
 | `settings.json` | Your ntfy notification topic, local model choice, (if you enable Cloud AI) your chosen provider's API key, and (if you run `server.py`) the dashboard login | No — kept private |
 | `portfolio.json` | Your stock holdings and buy prices | No — kept private |
 | `processed_urls.json` | Cache of the last 120 analysed article URLs | No — runtime state |
+| `stats.json` | Running counters: articles scanned, alerts (notifications) sent, skipped | No — runtime state |
 | `keywords.json` | Scoring keywords with weights (~200 by default) | Yes |
 | `news_sources.json` | Your custom news sources | Yes |
 

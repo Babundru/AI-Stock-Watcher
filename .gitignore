@@ -3,6 +3,12 @@
 .env.*
 *.key
 
+# Personal operational notes about the live VM (hostname, Tailscale IP) -
+# not secrets, but not meant for the public repo either. The rest of
+# handoff/ (architecture, AI engines, etc.) has no VM-specific info and
+# is fine to commit.
+handoff/deployment_vm.md
+
 # Python bytecode
 __pycache__/
 *.py[cod]
@@ -16,6 +22,7 @@ data/processed_urls.json
 data/portfolio.json
 data/settings.json
 data/watches.json
+data/stats.json
 
 # Environments / tooling
 .venv/

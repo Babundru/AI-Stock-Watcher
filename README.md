@@ -98,9 +98,10 @@ The sidebar controls the watcher; the four tabs configure it.
 
 The panel under the logo shows whether the watcher is running, which engine and
 model are active, and what it is doing right now. The counters at the bottom
-track articles scanned, alerts raised, and articles skipped this session —
-worth watching, since a single LLM analysis can take a minute with no other
-sign of progress.
+track articles scanned, alerts raised, and articles skipped — worth watching,
+since a single LLM analysis can take a minute with no other sign of progress.
+These counters persist across restarts (`data/stats.json`), so they keep
+accumulating rather than resetting to zero each time you start the app.
 
 ### Alerts
 The default view, and the app's actual output: every alert it has raised this

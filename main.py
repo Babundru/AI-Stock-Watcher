@@ -26,7 +26,8 @@ class StockAppBackend:
         # because a single LLM analysis can take a minute with no other sign
         # of life.
         self.status_callback = status_callback
-        self.stats = {'scanned': 0, 'alerts': 0, 'skipped': 0}
+        self.stats_file = 'data/stats.json'
+        self.stats = self._load_stats()
         self.running = False
         self.collector = NewsCollector()
         # Three interchangeable engines, in priority order: the Anthropic API
@@ -87,6 +88,28 @@ class StockAppBackend:
         else:
             return collections.deque(maxlen=self.max_stored_urls)
     
+    def _load_stats(self):
+        """Load persisted scan/alert/skip counters from disk (survives a restart)."""
+        defaults = {'scanned': 0, 'alerts': 0, 'skipped': 0}
+        if os.path.exists(self.stats_file):
+            try:
+                with open(self.stats_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    defaults.update({k: data.get(k, v) for k, v in defaults.items()})
+                    self.log(f"Loaded stats: {defaults}")
+            except Exception as e:
+                self.log(f"Error loading stats: {e}")
+        return defaults
+
+    def _save_stats(self):
+        """Persist scan/alert/skip counters to disk."""
+        try:
+            with open(self.stats_file, 'w', encoding='utf-8') as f:
+                json.dump(self.stats, f, indent=2)
+        except Exception as e:
+            self.log(f"Error saving stats: {e}")
+
     def _save_processed_urls(self):
         """Save processed URLs to disk (last 120 only)."""
         try:
@@ -126,8 +149,9 @@ class StockAppBackend:
 
     def stop(self):
         self.running = False
-        # Save processed URLs before stopping
+        # Save processed URLs and counters before stopping
         self._save_processed_urls()
+        self._save_stats()
         # Only shuts down a server we spawned; an externally-started Ollama
         # is left alone.
         if self.ollama:
@@ -250,6 +274,7 @@ class StockAppBackend:
         self.articles_since_save += 1
         if self.articles_since_save >= 10:
             self._save_processed_urls()
+            self._save_stats()
             self.articles_since_save = 0
 
         
@@ -334,6 +359,7 @@ class StockAppBackend:
                     self.log(f"  (couldn't price {ticker} - no sell watch opened)")
 
             self.stats['alerts'] += 1
+            self._save_stats()
             if self.alert_callback:
                 try:
                     self.alert_callback({
