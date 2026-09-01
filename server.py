@@ -243,6 +243,12 @@ def api_watches():
     return jsonify(backend.watch_mgr.get_all())
 
 
+@app.route("/api/watches/<watch_id>", methods=["DELETE"])
+def api_watches_delete(watch_id):
+    backend.watch_mgr.remove_watch(watch_id)
+    return jsonify(backend.watch_mgr.get_all())
+
+
 @app.route("/api/sources", methods=["GET", "POST"])
 def api_sources():
     if request.method == "POST":

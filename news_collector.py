@@ -4,7 +4,7 @@ import ipaddress
 import socket
 import pytz
 from urllib.parse import urlparse
-from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
+from bs4 import BeautifulSoup, SoupStrainer, XMLParsedAsHTMLWarning
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 from source_manager import SourceManager
@@ -33,7 +33,22 @@ BROWSER_HEADERS = {
 
 # Stop reading a response after this much HTML. Without a cap, a single very
 # large (or deliberately endless) URL would be pulled entirely into memory.
+#
+# Kept at 3MB deliberately. Lowering it looks like an easy memory win, but it
+# is the only knob here that can cost article text rather than just bytes: a
+# page carrying a large inline script/JSON blob ahead of its body would get
+# truncated before the paragraphs we actually want, quietly giving the
+# analyzer less to work with. It also buys much less than it used to now that
+# ARTICLE_STRAINER (below) keeps the parse tree small regardless of page size
+# - the difference is a couple of MB per concurrent scrape, not the tens of MB
+# the tree used to cost. Not worth the trade.
 MAX_DOWNLOAD_BYTES = 3 * 1024 * 1024
+
+# scrape_article only ever reads <p> tags, so tell BeautifulSoup to build tree
+# nodes for those alone. On a news page the discarded nav/script/style/div
+# scaffolding is the overwhelming majority of the document, and skipping it is
+# where most of the parse-time memory saving comes from.
+ARTICLE_STRAINER = SoupStrainer('p')
 
 # Scraping (network fetch + parse of a full article page) is by far the
 # slowest part of a scan cycle. Doing it concurrently instead of one URL at a
@@ -109,13 +124,16 @@ class NewsCollector:
         """
         Attempts to scrape the full text of an article from its URL.
         """
+        soup = None
         try:
             body = self._get(url, timeout=15)
 
-            soup = BeautifulSoup(body, 'html.parser')
-            paragraphs = soup.find_all('p')
-            text = ' '.join([p.get_text() for p in paragraphs])
-            
+            soup = BeautifulSoup(body, 'html.parser', parse_only=ARTICLE_STRAINER)
+            # Drop the raw bytes as soon as the tree exists - with several of
+            # these running concurrently, holding both at once is the peak.
+            body = None
+            text = ' '.join(p.get_text() for p in soup.find_all('p'))
+
             if text.strip():
                 print(f"✓ Scraped successfully ({len(text)} chars): {url[:80]}...")
                 return text.strip()
@@ -131,6 +149,14 @@ class NewsCollector:
         except Exception as e:
             print(f"✗ Failed to scrape ({type(e).__name__}): {url[:80]}...")
             return None
+        finally:
+            # A BeautifulSoup tree is full of parent<->child reference cycles,
+            # so dropping the last name bound to it doesn't free it - it sits
+            # there until the cyclic collector happens to run. decompose()
+            # breaks the cycles now, which is what keeps a long-running
+            # process from ratcheting upward one scan cycle at a time.
+            if soup is not None:
+                soup.decompose()
 
     def _scrape_many(self, articles):
         """Scrape full content for a batch of articles concurrently, in place."""

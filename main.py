@@ -13,8 +13,28 @@ import time
 import datetime
 import threading
 import collections
+import gc
+import ctypes
 import json
 import os
+
+
+def _release_memory():
+    """Free a finished scan cycle's garbage and hand it back to the OS.
+
+    gc.collect() alone only returns memory to Python's own allocator; on
+    glibc the freed arenas can stay mapped to the process, so RSS keeps
+    showing the high-water mark of the busiest cycle even while the app sits
+    idle. malloc_trim(0) is what actually releases them - it matters on a
+    1GB VM and is a no-op everywhere else, hence the best-effort wrapper
+    (there is no libc.so.6 on Windows/macOS, where the desktop GUI runs).
+    """
+    gc.collect()
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:
+        pass
+
 
 class StockAppBackend:
     def __init__(self, log_callback=print, alert_callback=None, status_callback=None):
@@ -225,6 +245,18 @@ class StockAppBackend:
                 if time.time() - self._last_watch_check >= WATCH_CHECK_INTERVAL:
                     self._check_watches()
                     self._last_watch_check = time.time()
+
+                # --- RECLAIM MEMORY ---
+                # A cycle churns through a lot of short-lived HTML and parse
+                # trees. Collecting here, at the one moment per minute when
+                # none of it is still referenced, keeps the process from
+                # growing steadily on a small always-on VM. Once per
+                # CHECK_INTERVAL the cost is irrelevant next to the scan
+                # itself, and this is deliberately not left to the automatic
+                # collector, whose thresholds trigger on allocation counts
+                # rather than at a point where a whole cycle's garbage has
+                # just gone unreachable at once.
+                _release_memory()
 
                 # --- SMART SCHEDULER ---
                 # Calculate sleep time until next 15-minute mark (xx:00, xx:15, xx:30, xx:45)
