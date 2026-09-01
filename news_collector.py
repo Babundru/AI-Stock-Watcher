@@ -34,15 +34,15 @@ BROWSER_HEADERS = {
 # Stop reading a response after this much HTML. Without a cap, a single very
 # large (or deliberately endless) URL would be pulled entirely into memory.
 #
-# 1MB rather than the original 3MB because of what happens downstream, not
-# just here: the raw bytes are the small part, while the parse tree built
-# from them is several times their size, and up to MAX_SCRAPE_WORKERS of
-# those exist at once. Only the first 5000 characters of extracted text ever
-# reach the LLM (llm_prompts.py) and 2500 the keyword scorer, so a 1MB page -
-# already far more than any real article body - loses nothing that would have
-# been analysed anyway. Raise it if a source starts getting truncated before
-# its article text (watch for the "Response exceeded" line below).
-MAX_DOWNLOAD_BYTES = 1 * 1024 * 1024
+# Kept at 3MB deliberately. Lowering it looks like an easy memory win, but it
+# is the only knob here that can cost article text rather than just bytes: a
+# page carrying a large inline script/JSON blob ahead of its body would get
+# truncated before the paragraphs we actually want, quietly giving the
+# analyzer less to work with. It also buys much less than it used to now that
+# ARTICLE_STRAINER (below) keeps the parse tree small regardless of page size
+# - the difference is a couple of MB per concurrent scrape, not the tens of MB
+# the tree used to cost. Not worth the trade.
+MAX_DOWNLOAD_BYTES = 3 * 1024 * 1024
 
 # scrape_article only ever reads <p> tags, so tell BeautifulSoup to build tree
 # nodes for those alone. On a news page the discarded nav/script/style/div
