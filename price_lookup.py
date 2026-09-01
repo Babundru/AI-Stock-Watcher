@@ -3,8 +3,15 @@ whether a stock's alerted-on move has played out.
 
 Batches all tickers into a single yfinance call - cheap when checking many
 open watches at once instead of one request per ticker.
+
+yfinance is imported inside fetch_prices rather than at module scope on
+purpose: it drags in pandas + numpy, which cost well over 100MB of resident
+memory, and both main.py and server.py import this module at startup. Doing
+it lazily means that cost is only paid once something actually needs a
+price - and never at all on a run with no watches and no portfolio. Repeat
+imports are just a sys.modules dict lookup, so the per-call overhead after
+the first is nil.
 """
-import yfinance as yf
 
 
 def fetch_prices(tickers):
@@ -17,6 +24,8 @@ def fetch_prices(tickers):
     prices = {}
     if not tickers:
         return prices
+
+    import yfinance as yf
 
     try:
         data = yf.Tickers(" ".join(tickers))
