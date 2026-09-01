@@ -1,14 +1,20 @@
-import os
-from config import USE_LOCAL_LLM, OLLAMA_URL, LOCAL_MODEL_NAME, OLLAMA_NUM_THREADS
+import config
 from llm_prompts import build_market_prompt, parse_json_response
 import requests
 
 class MarketAnalyzer:
+    """Analyses articles with a local Ollama model.
+
+    Model name, thread count and endpoint are read from `config` at request
+    time rather than captured at import, so the dashboard's Settings tab can
+    change them on a running server without a restart.
+    """
+
     def __init__(self, ai_log_callback=None):
         self.ai_log_callback = ai_log_callback
-        self.use_local = USE_LOCAL_LLM
+        self.use_local = config.USE_LOCAL_LLM
         if self.use_local:
-            print(f"Analyzer initialized in LOCAL MODE using {LOCAL_MODEL_NAME}")
+            print(f"Analyzer initialized in LOCAL MODE using {config.LOCAL_MODEL_NAME}")
         else:
             print("Warning: Local LLM is disabled in config, but Gemini support has been removed.")
 
@@ -52,16 +58,16 @@ class MarketAnalyzer:
                 self.ai_log_callback(f"--> SENT TO AI:\n{prompt[:500]}..." if len(prompt) > 500 else f"--> SENT TO AI:\n{prompt}")
 
             payload = {
-                "model": LOCAL_MODEL_NAME,
+                "model": config.LOCAL_MODEL_NAME,
                 "prompt": prompt,
                 "stream": False,
                 "format": "json",
                 "options": {
-                    "num_thread": OLLAMA_NUM_THREADS
+                    "num_thread": config.OLLAMA_NUM_THREADS
                 }
             }
 
-            response = requests.post(OLLAMA_URL, json=payload, timeout=300)
+            response = requests.post(config.OLLAMA_URL, json=payload, timeout=300)
             response.raise_for_status()
 
             result = response.json()

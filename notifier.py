@@ -13,10 +13,37 @@ class Notifier:
     def __init__(self):
         self.timezone = pytz.timezone('US/Eastern')
         # Import config here to avoid circular imports at top level if any
-        from config import NTFY_TOPIC, NOTIFY_OWNERSHIP
+        from config import NTFY_TOPIC, NOTIFY_OWNERSHIP, NOTIFICATIONS_ENABLED
         self.ntfy_topic = NTFY_TOPIC
         self.notify_ownership = NOTIFY_OWNERSHIP
+        # Master mute. Distinct from having no topic: the topic stays
+        # configured, so unmuting needs no retyping. See set_enabled.
+        self.enabled = NOTIFICATIONS_ENABLED
         self._warned_no_topic = False
+
+    def apply_settings(self):
+        """Pick up the current config values (topic, ownership tag, mute)
+        after the dashboard saved new ones, without rebuilding anything."""
+        import config
+        if config.NTFY_TOPIC != self.ntfy_topic:
+            self._warned_no_topic = False
+        self.ntfy_topic = config.NTFY_TOPIC
+        self.notify_ownership = config.NOTIFY_OWNERSHIP
+        self.enabled = config.NOTIFICATIONS_ENABLED
+
+    def set_enabled(self, enabled, persist=True):
+        """Turn phone notifications on or off, effective immediately.
+
+        Writes the choice to data/settings.json by default so it survives a
+        restart. Everything else about the app carries on unchanged while
+        muted - scanning, analysis, watches and the paper-trade record are
+        all untouched; only the push to ntfy.sh is suppressed.
+        """
+        self.enabled = bool(enabled)
+        if persist:
+            import config
+            config.save_setting("NOTIFICATIONS_ENABLED", self.enabled)
+        return self.enabled
 
     def is_market_open(self):
         """
@@ -50,19 +77,28 @@ class Notifier:
     def notify(self, company, article, analysis, is_owned=False):
         """
         Sends a notification (Prints to console for MVP).
-        
+
         Args:
             company: Company name
             article: Article dict
             analysis: Analysis dict
             is_owned: Whether the stock is in user's portfolio
+
+        Returns whether ntfy accepted it, so a caller like the desktop test
+        button can tell "delivered" apart from "muted" or "no topic set"
+        instead of reporting success either way.
         """
-        impact = analysis.get('impact', 'UNKNOWN').upper()
-        sentiment = analysis.get('sentiment', 'UNKNOWN').upper()
-        
-        # We only notify for High or Critical
-        if impact not in ['CRITICAL', 'HIGH']:
-            return
+        # `or`, not a .get() default: the LLM can return the key with a null
+        # value, and None.upper() would drop the alert with a traceback.
+        impact = (analysis.get('impact') or 'UNKNOWN').upper()
+        sentiment = (analysis.get('sentiment') or 'UNKNOWN').upper()
+
+        # Same threshold main.py filters on, read live from config rather
+        # than cached here, so the sensitivity slider applies immediately and
+        # the two cannot drift apart.
+        import config
+        if not config.impact_passes(impact):
+            return False
 
         # Prepare formatting
         emoji = "🚨" if impact == "CRITICAL" else "📢"
@@ -87,7 +123,7 @@ class Notifier:
         elif sentiment == "NEGATIVE":
             action = "\nAction: SHORT (open a short CFD) - a BUY BACK alert follows when to close."
 
-        title = f"{company} ({analysis.get('ticker', '???')}){ownership_tag}"
+        title = f"{company} ({analysis.get('ticker') or '???'}){ownership_tag}"
         # Add emoji to message body instead to avoid Header encoding issues
         message = (
             f"{emoji} {analysis.get('explanation')}\n\n"
@@ -105,7 +141,7 @@ class Notifier:
         print("="*50 + "\n")
         
         # Send Mobile Notification
-        self._send_ntfy(title, message, priority='high' if impact == 'CRITICAL' else 'default', url=article.get('url'))
+        return self._send_ntfy(title, message, priority='high' if impact == 'CRITICAL' else 'default', url=article.get('url'))
 
     def notify_sell(self, ticker, company, reason, entry_price, current_price,
                     target_price, article_url=None, direction="LONG"):
@@ -117,7 +153,7 @@ class Notifier:
         Args:
             ticker: Stock ticker
             company: Company name
-            reason: "target_hit" or "horizon_expired"
+            reason: "target_hit", "stop_loss", or "horizon_expired"
             entry_price: Price when the original alert fired
             current_price: Price now
             target_price: Price that would have counted as the move "playing out"
@@ -133,6 +169,9 @@ class Notifier:
         if reason == "target_hit":
             emoji = "💰"
             reason_text = f"Target of {target_price:.2f} reached - the alerted-on move played out."
+        elif reason == "stop_loss":
+            emoji = "🛑"
+            reason_text = "Stop-loss reached - closing now to cap the loss."
         else:
             emoji = "⏰"
             reason_text = "Expected time window passed without the alerted-on move happening - reassess the position."
@@ -156,7 +195,7 @@ class Notifier:
 
         # An exit signal is rarer and always actionable, unlike a news alert,
         # so it always goes out at high priority - no impact-based gating.
-        self._send_ntfy(title, message, priority='high', url=article_url)
+        return self._send_ntfy(title, message, priority='high', url=article_url)
 
     @staticmethod
     def _header_safe(value, max_length=180):
@@ -178,7 +217,15 @@ class Notifier:
 
     def _send_ntfy(self, title, message, priority='default', url=None):
         """Returns True if ntfy accepted the notification, False otherwise
-        (no topic configured, a non-2xx response, or a request error)."""
+        (muted, no topic configured, a non-2xx response, or a request error).
+
+        The mute check comes first and prints nothing: being muted is a
+        deliberate state the user can see in the UI, so repeating it on every
+        alert would only bury the log.
+        """
+        if not self.enabled:
+            return False
+
         if not self.ntfy_topic:
             # Warn once rather than silently dropping every alert - otherwise
             # a new user sees the app working but never gets a phone alert.

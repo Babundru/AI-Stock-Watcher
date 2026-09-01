@@ -89,12 +89,26 @@ class KeywordAnalyzer:
         self.reload_keywords()
 
     def reload_keywords(self):
-        """Reload keywords from manager and recompile match patterns."""
+        """Re-read keywords from disk and recompile match patterns.
+
+        Reads the file, not just this instance's cached dict: the UIs edit
+        keywords through their own KeywordManager, so the analyzer's copy
+        only ever sees those edits by going back to the file.
+        """
+        self.keyword_mgr.reload()
         self.positive_keywords = self.keyword_mgr.get_positive_keywords()
         self.negative_keywords = self.keyword_mgr.get_negative_keywords()
+        # Keys lower-cased so a lookup by matched text can't miss an entry
+        # that was hand-edited into the file with capitals.
         self._weights = {}
-        self._weights.update(self.positive_keywords)
-        self._weights.update(self.negative_keywords)
+        for source in (self.positive_keywords, self.negative_keywords):
+            for kw, weight in source.items():
+                key = str(kw).lower().strip()
+                if key:
+                    try:
+                        self._weights[key] = float(weight)
+                    except (TypeError, ValueError):
+                        continue
         # One combined pattern instead of ~230 separate ones: scanning a field
         # used to mean 230 independent regex passes over the same text
         # (finditer per keyword). A single alternation does one pass instead,
@@ -102,9 +116,14 @@ class KeywordAnalyzer:
         # for free as long as longer keywords are listed first - no separate
         # overlap-resolution pass needed afterwards.
         by_length = sorted(self._weights, key=len, reverse=True)
-        self._combined_pattern = re.compile(
-            r'\b(?:' + '|'.join(re.escape(kw.lower()) for kw in by_length) + r')\b'
-        )
+        if by_length:
+            self._combined_pattern = re.compile(
+                r'\b(?:' + '|'.join(re.escape(kw) for kw in by_length) + r')\b'
+            )
+        else:
+            # An empty alternation would match the empty string at every
+            # position; with no vocabulary there is simply nothing to find.
+            self._combined_pattern = None
 
     def analyze_article(self, company, article, market_is_open, portfolio_tickers=None):
         """
@@ -200,7 +219,7 @@ class KeywordAnalyzer:
 
     def _score_field(self, text, field_name):
         """Score every non-overlapping keyword occurrence within one field."""
-        if not text or not text.strip():
+        if not text or not text.strip() or self._combined_pattern is None:
             return []
 
         lowered = text.lower()

@@ -11,10 +11,36 @@ poll-based against a small JSON API - there's no websocket/SSE.
 
 ### Layout
 
-Header (always visible): connection dot + Start/Stop + "Send Test
-Notification" button, stat tiles (Scanned/Alerts/Skipped), current
-activity line, engine label. Below that, tabs: **Alerts** (default),
-**Logs**, **Portfolio**, **Sources**, **Keywords**.
+Header (always visible): connection dot + Start/Stop + alerts mute toggle
++ "Send Test Notification" button, stat tiles (Scanned/Alerts/Skipped),
+current activity line, engine label. Below that, tabs: **Alerts**
+(default), **Logs**, **Portfolio**, **Sources**, **Keywords**,
+**Settings**.
+
+The web dashboard is the primary front end (the backend runs as a service
+on a Debian VM, reached over Tailscale from phones/laptops), so it has
+everything the desktop GUI has. Feature map, with the endpoint behind it:
+
+| Feature | Endpoint |
+|---|---|
+| Start / Stop | `POST /api/control` |
+| Mute phone alerts | `GET/POST /api/notifications` |
+| Alert sensitivity slider | `GET/POST /api/sensitivity` |
+| Stop-loss % | `GET/POST /api/stop-loss` |
+| Clear alerts | `DELETE /api/alerts` |
+| Logs: AI-traffic filter, auto-scroll, clear | client-side only |
+| Portfolio: add / remove / clear all / live P/L per holding | `POST /api/portfolio`, `DELETE /api/portfolio/<t>`, `DELETE /api/portfolio`, `GET /api/portfolio/summary` |
+| Sources: add / toggle / remove / reset | `/api/sources...`, `POST /api/sources/reset` |
+| Keywords: add / remove / reset, "inactive" banner | `/api/keywords...`, `POST /api/keywords/reset`, `GET /api/engine` (`ai_active`) |
+| Settings: ntfy topic, ownership tag, engine + provider/model/key/base URL, Ollama model/threads/URL, paper cost, dashboard login | `GET/POST /api/settings` |
+| Reload files edited by hand on the server | `POST /api/reload` |
+
+`POST /api/settings` persists through `config.save_settings` and then
+calls `backend.apply_settings()`, which rebuilds the analyzer, refreshes
+the notifier's topic, and updates the paper ledger's cost - so every
+change applies live, no service restart. Secrets (API key, dashboard
+password) are never returned by GET; a blank value on POST keeps the
+stored one, `clear_api_key: true` removes the key.
 
 ### Polling
 

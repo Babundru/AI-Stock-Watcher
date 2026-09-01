@@ -3,14 +3,21 @@ import os
 import uuid
 import datetime
 
+import config
 from local_time import now_local
 
 # How big a move counts as the alerted-on prediction having "played out".
-# Only CRITICAL/HIGH impact ever reaches the notify filter in main.py, so
-# those are the only buckets that need a target.
+#
+# One entry per impact rating, because config.MIN_IMPACT (the sensitivity
+# slider) lets MEDIUM and LOW reach the notify filter in main.py. They need
+# their own, smaller targets: the analyser rates MEDIUM as a 2-5% move, so
+# holding one out for the 5% a HIGH is given would time-stop nearly every
+# time and report the strategy as worse than it is.
 TARGET_PCT = {
     "CRITICAL": 0.10,
     "HIGH": 0.05,
+    "MEDIUM": 0.03,
+    "LOW": 0.02,
 }
 DEFAULT_TARGET_PCT = 0.05
 
@@ -25,6 +32,12 @@ HORIZON_DAYS = {
 DEFAULT_HORIZON = "DAYS"
 
 MAX_STORED_WATCHES = 200
+
+# How far out to push a watch's expiry when its horizon passes while it's
+# sitting at a loss and STOP_LOSS_PCT is set (see config.py). Short enough
+# that it's re-examined at the next natural check rather than forgotten
+# about, long enough not to spam postponements every WATCH_CHECK_INTERVAL.
+POSTPONE_DAYS = 1
 
 # A watch is either a long (bought the stock / a long CFD, exit by selling)
 # or a short (sold a CFD short, exit by buying it back). The direction only
@@ -65,8 +78,13 @@ class WatchManager:
             for w in data:
                 if isinstance(w, dict):
                     w.setdefault('direction', LONG)
+                    # Watches written before stop-loss existed have none -
+                    # None means "no stop-loss", same as STOP_LOSS_PCT = 0.
+                    w.setdefault('stop_loss_price', None)
+                    w.setdefault('postponed_count', 0)
             return data
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"Warning: could not read {self.filename} ({e}); starting with no watches")
             return []
 
     def save(self):
@@ -108,6 +126,15 @@ class WatchManager:
         sign = -1 if direction == SHORT else 1
         target_price = round(entry_price * (1 + sign * target_pct), 4)
 
+        # Stop-loss sits on the opposite side of entry from the target -
+        # below entry for a LONG, above entry for a SHORT. None (0%) means
+        # disabled: captured at open time so a later change to the setting
+        # doesn't retroactively alter a position already being watched.
+        stop_loss_pct = float(getattr(config, 'STOP_LOSS_PCT', 0.0) or 0.0)
+        stop_loss_price = None
+        if stop_loss_pct > 0:
+            stop_loss_price = round(entry_price * (1 - sign * stop_loss_pct), 4)
+
         opened_at = now_local()
         expires_at = opened_at + datetime.timedelta(days=HORIZON_DAYS[horizon])
 
@@ -119,6 +146,9 @@ class WatchManager:
             "entry_price": entry_price,
             "target_price": target_price,
             "target_pct": target_pct,
+            "stop_loss_price": stop_loss_price,
+            "stop_loss_pct": stop_loss_pct if stop_loss_price else None,
+            "postponed_count": 0,
             "impact": impact,
             "horizon": horizon,
             "prediction": prediction,
@@ -146,6 +176,40 @@ class WatchManager:
         if watch.get('direction') == SHORT:
             return price <= watch['target_price']
         return price >= watch['target_price']
+
+    @staticmethod
+    def is_profitable(watch, price):
+        """Would closing right now book a profit (or breakeven), from the
+        position's point of view - a long needs price at or above entry, a
+        short at or below."""
+        if watch.get('direction') == SHORT:
+            return price <= watch['entry_price']
+        return price >= watch['entry_price']
+
+    @staticmethod
+    def stop_loss_hit(watch, price):
+        """Has price crossed this watch's stop-loss level? Always False when
+        none was set (STOP_LOSS_PCT was 0 when the watch opened)."""
+        stop_price = watch.get('stop_loss_price')
+        if not stop_price:
+            return False
+        if watch.get('direction') == SHORT:
+            return price >= stop_price
+        return price <= stop_price
+
+    def postpone_watch(self, watch_id, days=POSTPONE_DAYS):
+        """Push a watch's expiry out instead of closing it - used when its
+        horizon passed while it was at a loss and a stop-loss is set (see
+        config.STOP_LOSS_PCT). Leaves it OPEN and otherwise untouched, so the
+        normal watch check keeps re-examining it for a profit, its target, or
+        the stop-loss."""
+        for w in self.watches:
+            if w['id'] == watch_id and w['status'] == 'OPEN':
+                w['expires_at'] = (now_local() + datetime.timedelta(days=days)).isoformat()
+                w['postponed_count'] = w.get('postponed_count', 0) + 1
+                self.save()
+                return w
+        return None
 
     def remove_watch(self, watch_id):
         """Delete a watch outright, regardless of status. Used when the user

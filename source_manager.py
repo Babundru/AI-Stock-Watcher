@@ -15,7 +15,10 @@ class SourceManager:
         if os.path.exists(self.sources_file):
             try:
                 with open(self.sources_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+                    data = json.load(f)
+                if not isinstance(data, dict) or not isinstance(data.get("sources"), list):
+                    raise ValueError("sources file has no 'sources' list")
+                return data
             except Exception as e:
                 print(f"Error loading sources: {e}")
                 return self._get_default_sources()
@@ -24,6 +27,11 @@ class SourceManager:
             defaults = self._get_default_sources()
             self._save_sources(defaults)
             return defaults
+
+    def reload(self):
+        """Re-read the file - for a manager whose file another instance
+        has since written."""
+        self.sources = self._load_sources()
     
     def _get_default_sources(self) -> Dict:
         """Get default news sources."""

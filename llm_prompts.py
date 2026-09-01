@@ -90,14 +90,34 @@ def build_market_prompt(company, article, market_is_open, portfolio_tickers=None
 
 
 def parse_json_response(text_response):
-    """Parse JSON from an LLM response, tolerating a ```json code fence."""
-    try:
-        text_response = text_response.strip()
-        if text_response.startswith("```json"):
-            text_response = text_response[7:-3].strip()
-        elif text_response.startswith("```"):
-            text_response = text_response[3:-3].strip()
-        return json.loads(text_response)
-    except json.JSONDecodeError:
-        print(f"Failed to parse JSON response: {text_response[:100]}...")
+    """Parse JSON from an LLM response, tolerating a ```json code fence or
+    stray prose around the object.
+
+    Ollama's JSON mode guarantees a bare object, but hosted chat models
+    sometimes wrap it ("Here is the analysis: {...}") despite the system
+    prompt. Rather than discard the whole analysis, fall back to the
+    outermost {...} in the text.
+    """
+    if not text_response:
         return None
+    text = text_response.strip()
+    if text.startswith("```"):
+        # Strip the opening fence line (``` or ```json) and a closing fence.
+        text = text.split("\n", 1)[1] if "\n" in text else ""
+        if text.rstrip().endswith("```"):
+            text = text.rstrip()[:-3]
+        text = text.strip()
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        start, end = text.find("{"), text.rfind("}")
+        if start == -1 or end <= start:
+            print(f"Failed to parse JSON response: {text[:100]}...")
+            return None
+        try:
+            data = json.loads(text[start:end + 1])
+        except json.JSONDecodeError:
+            print(f"Failed to parse JSON response: {text[:100]}...")
+            return None
+    # A bare list/string is not an analysis.
+    return data if isinstance(data, dict) else None

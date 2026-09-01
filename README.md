@@ -53,10 +53,24 @@ Alerts are delivered through [ntfy.sh](https://ntfy.sh), a free push service.
 2. Start the desktop app (see below), click **Settings** in the sidebar,
    and set **Notification topic** to something long and unique —
    for example `stockwatch-7f3a91c2b8e4`.
-3. Click **Save**, then restart the app.
+3. Click **Save**. It applies immediately, including to a running watcher.
 4. In the phone app, tap **+** and subscribe to that exact topic name.
 5. Back on the desktop, click **Send test alert**. It
    should arrive on your phone within a few seconds.
+
+### Muting alerts
+
+The **Phone alerts** switch in the sidebar (or the **Alerts** toggle in the web
+dashboard header) mutes notifications without touching your topic — so you can
+silence the app overnight and turn it back on without retyping anything.
+
+Muting stops only the push to ntfy.sh. The app keeps scanning, analysing,
+opening and closing watches, and recording paper trades; alerts still appear in
+the Alerts tab and the log. Nothing about the track record changes, so muting
+does not create a gap in it.
+
+The switch takes effect immediately — no restart — and is saved to
+`data/settings.json`, so it survives one.
 
 > **There is no default topic — phone alerts are off until you set one.**
 > That is deliberate: a shipped default would be a shared public channel, with
@@ -86,14 +100,27 @@ sidebar shows whether it is watching or offline.
 
 ## Using the app
 
+There are two front ends over the same engine, and they have the same
+features:
+
+- **The desktop window** (`run_app.bat` / `gui.py`), described below.
+- **The web dashboard** (`server.py`, see `DEPLOY.md`), for a backend that
+  runs unattended on a server and is opened from a phone or laptop over
+  Tailscale. Its tabs mirror the desktop ones, and its **Settings** tab
+  covers everything the desktop Settings dialog does - notification topic,
+  AI engine and API key, paper cost, dashboard login - and applies changes
+  to the running service immediately, with no restart.
+
 The sidebar controls the watcher; the four tabs configure it.
 
 | Sidebar button | What it does |
 |---|---|
 | `Start watching` | Starts the background scanner |
 | `Stop` | Stops it and saves state |
-| `Reload config` | Applies keyword/source changes without restarting |
+| `Reload config` | Re-reads the JSON files in `data/` if you edited them by hand |
 | `Settings` | Notification topic and AI model |
+| `Phone alerts` | Master switch — mutes or unmutes phone notifications |
+| `Alert on` | Slider — the weakest impact rating that raises an alert |
 | `Send test alert` | Sends a test notification |
 
 The panel under the logo shows whether the watcher is running, which engine and
@@ -124,9 +151,16 @@ Two toggles in the toolbar:
   yanked to the bottom by new lines.
 
 ### Portfolio
-Enter a ticker and optionally your buy price, then click **Add**. The app
-fetches live prices and shows profit/loss plus performance
+Two views, switched with the toggle at the top.
+
+**Holdings** — enter a ticker and optionally your buy price, then click
+**Add**. The app fetches live prices and shows profit/loss plus performance
 charts. **Refresh** re-fetches prices; **Clear all** wipes the list.
+
+**Paper trades** — the app's own track record: what each alert would have
+earned or lost. Open positions are marked to live prices; closed ones are the
+actual record. Nothing here is a stock you own, and nothing you own appears
+here. See *Is it actually making money?* below.
 
 Holding a stock does not change whether you get alerted — it adds an `Owned`
 tag to negative alerts so you can tell risk to your holdings apart from general
@@ -152,8 +186,9 @@ causing noise, or use **Reset** to restore the built-in set
 the analysis the tab shows an inactive banner, because editing keywords then
 would change nothing.
 
-After editing, click **Reload config** to apply the changes to a running
-watcher.
+Edits made in the tab reach a running watcher immediately, as do holdings
+and sources. **Reload config** is for changes made to the JSON files by hand
+while the app is open.
 
 ---
 
@@ -170,7 +205,31 @@ Stocks in your Portfolio are named in the prompt and explicitly treated as
 higher relevance.
 
 **You will only be notified when sentiment is clearly positive or negative
-*and* impact is HIGH or CRITICAL.** Everything else is logged but not sent.
+*and* impact clears the sensitivity threshold.** Everything else is logged but
+not sent.
+
+### Alert sensitivity
+
+The **Alert on** slider in the sidebar — or the one at the top of the web
+dashboard's Alerts view — sets the weakest impact rating that raises an alert.
+It applies immediately, with no restart, and is saved to `data/settings.json`.
+
+| Setting | What gets through | Expected move |
+|---|---|---|
+| `CRITICAL` | Game-changing news only, a handful a month | 15%+ |
+| `HIGH` | **Default.** Significant events | 5–15% |
+| `MEDIUM` | Routine news as well — many more alerts | 2–5% |
+| `LOW` | Everything the analyser did not reject outright | noise |
+
+The threshold also sets the exit target, since a smaller expected move needs a
+nearer one: 10% for CRITICAL, 5% for HIGH, 3% for MEDIUM, 2% for LOW. Holding a
+MEDIUM alert out for the 5% a HIGH gets would time-stop almost every time.
+
+> **Lowering it does not make the app smarter — it makes it louder.** The
+> analyser is least reliable exactly where it rates news weakest, so MEDIUM and
+> below carry a much higher share of misreads. The honest way to decide is the
+> paper record: get enough closed trades at HIGH to compare against, then try a
+> lower setting and see whether expectancy survives.
 
 ### Entry and exit alerts
 
@@ -197,9 +256,85 @@ price falls. Open positions awaiting their exit alert are listed in the
 Only one position per stock is watched at a time: if a stock you already have
 an open watch on gets alerted again, no second watch is opened.
 
+Removing a watch by hand from the web dashboard's **Watching** card also
+drops its open paper position, since no exit signal will ever fire for it.
+Closed paper trades are never touched.
+
 > Shorting via CFDs carries losses that are not capped by the amount you put
 > in — a stock can rise without limit. These alerts are a news-timing aid, not
 > a risk-managed strategy, and they say nothing about position size.
+
+### Is it actually making money?
+
+The app keeps its own track record. Every alert already makes a complete
+round trip — it opens a position at a live price and closes it at a live
+price — so each one is recorded as a paper trade in `data/paper_trades.json`,
+along with what the market (SPY) did over the identical window.
+
+Nothing about the app's behaviour changes when this is on. It is a record of
+the trades it already makes, not a separate "test mode": a mode that entered
+or exited on different rules would measure something other than the app you
+would actually run.
+
+**Where to see it.** The **Portfolio** tab has two views, switched with the
+toggle at the top:
+
+- **Holdings** — stocks you actually own, entered by hand. Unchanged.
+- **Paper trades** — the app's record: open positions marked to live prices,
+  every closed trade, and the totals across the top.
+
+The web dashboard shows the same thing under the holdings table in its
+Portfolio view, with an equity curve.
+
+The two are deliberately kept apart, and the paper positions are **never**
+written into your real portfolio. Your holdings list is fed to the analyser
+as higher-relevance context and drives the `Owned` tag, so mixing simulated
+positions in would change which articles the app alerts on — corrupting the
+very record you are trying to measure. It would also mean `Clear all` wiped
+your track record.
+
+There is also a terminal report, which shows more:
+
+```
+py -3.13 paper_report.py            summary
+py -3.13 paper_report.py --trades   every closed trade
+py -3.13 paper_report.py --stops    what a stop loss would have done
+```
+
+The number that decides it is **expectancy** — average profit or loss per
+trade, after costs. Win rate alone is misleading: 60% winners is a losing
+system if the losers are twice the size of the winners.
+
+Two things the report shows that are easy to miss:
+
+- **Alpha, not just profit.** A profitable month during a rising market may
+  just be drift. Alpha compares each trade against what simply being in the
+  market that week would have paid, so a short that gained 3% while the
+  market rose 2% is credited with beating its baseline by 5%.
+- **A stop-loss study.** The app has no stop loss — a position runs to its
+  target or to its horizon. But the worst price each position passed through
+  is recorded live, so `--stops` can show retroactively what a 3% or 5% stop
+  would have done. That is the one measurement that cannot be reconstructed
+  later, which is why it is logged from the start.
+
+Set `PAPER_COST_PCT` in `config.py` to your broker's real round-trip cost
+(spread + commission + overnight financing). At the default 0.2% a 5% target
+keeps most of its gain, but on a wide spread the same strategy can be a loser
+while every price move still goes your way.
+
+**Give it time.** Below roughly 30 closed trades the figures are noise, and
+the alert filter is deliberately selective (HIGH/CRITICAL, clear sentiment,
+one position per stock), so reaching that can take months. The report says so
+at the top until you get there.
+
+> Only closed positions count. A trade is recorded when its sell/cover signal
+> fires, so open positions do not appear in the results.
+>
+> One caveat worth knowing: watches are only checked while the app is
+> running. If it is off when a target is touched, the exit is recorded later
+> at whatever the price has become — which usually understates the winners.
+> Running `server.py` continuously (see `DEPLOY.md`) avoids this; running the
+> desktop app a few hours a day does not.
 
 **Analysis is slow, and that is normal.** A local model takes roughly one
 minute per article on CPU, so a scan of a dozen articles can take well over ten
@@ -235,6 +370,12 @@ Edit `config.py`:
 | `LOCAL_MODEL_NAME` | `gemma3:12b` | Ollama model to run. Must be pulled first |
 | `OLLAMA_NUM_THREADS` | `1` | Threads the model may use. Higher is faster, but busier |
 | `OLLAMA_URL` | localhost:11434 | Change if Ollama runs on another host |
+| `NOTIFICATIONS_ENABLED` | `True` | Master mute for phone alerts (use the in-app toggle) |
+| `MIN_IMPACT` | `HIGH` | Weakest impact that alerts (use the in-app slider) |
+| `PAPER_TRADING` | `True` | Record every alert's profit/loss to `data/paper_trades.json` |
+| `PAPER_COST_PCT` | `0.002` | Round-trip trading cost, subtracted from every trade |
+| `PAPER_BENCHMARK` | `SPY` | Priced alongside each trade to measure alpha |
+| `STOP_LOSS_PCT` | `0.0` | `0` = watches close on schedule as before. Above 0, a scheduled (horizon-expiry) exit at a loss is postponed instead of sold, until it's profitable, hits its target, or falls this far past entry (use the in-app control) |
 
 > Do not set `LOOKBACK_MINUTES` much below 15. The news feeds only publish
 > every 10–30 minutes, so a narrower window filters out everything and the app
@@ -245,7 +386,10 @@ To change how the model judges articles, edit the prompt in
 CRITICAL vs HIGH) are written out in plain English there.
 
 If you switched to the keyword scorer, its tunables are at the top of
-`keyword_analyzer.py`. Lower `IMPACT_HIGH` for more alerts, raise it for fewer.
+`keyword_analyzer.py`. `IMPACT_HIGH` and `IMPACT_CRITICAL` are the score
+thresholds it uses to *assign* a rating; the **Alert on** slider decides which
+of those ratings you actually hear about. Adjust the slider first — it needs no
+restart and no code change.
 
 ---
 
@@ -315,7 +459,8 @@ summary — just with less to go on. This is expected and not a failure.
 
 **Test notification never arrives**
 Confirm the topic in Settings matches exactly what you subscribed to on
-your phone — it is case-sensitive. Restart the app after changing it.
+your phone — it is case-sensitive — and that the **Phone alerts** switch is
+on.
 
 **Prices show `ERR` in the portfolio**
 The ticker symbol was not recognised by Yahoo Finance. Check the symbol, and

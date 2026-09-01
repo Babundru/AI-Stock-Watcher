@@ -23,6 +23,7 @@ data/portfolio.json
 data/settings.json
 data/watches.json
 data/stats.json
+data/paper_trades.json
 
 # Environments / tooling
 .venv/

@@ -2,6 +2,7 @@ import requests
 import datetime
 import ipaddress
 import socket
+import sys
 import pytz
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup, SoupStrainer, XMLParsedAsHTMLWarning
@@ -13,6 +14,50 @@ import feedparser
 
 # Suppress warnings when parsing XML/RSS with html.parser (intended behavior for robustness)
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
+
+# The progress lines below use ✓/✗ glyphs. On a Windows console that is not
+# UTF-8 those raise UnicodeEncodeError - and one raised from inside
+# scrape_article's own except-block escaped the thread pool and aborted the
+# whole scan cycle. Make stdout tolerant here rather than relying on another
+# module having done so; errors='replace' guarantees a print never raises.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding='utf-8', errors='replace')
+    except (AttributeError, ValueError):
+        pass
+
+# feedparser fetches URLs itself through urllib, with no timeout at all, so
+# one unresponsive feed host could park the scan thread indefinitely. Feeds
+# are normally fetched through our own session (which has a timeout) and only
+# handed to feedparser as bytes; this default covers the fallback where
+# feedparser is asked to fetch the URL itself. requests sets explicit
+# timeouts and is unaffected.
+if socket.getdefaulttimeout() is None:
+    socket.setdefaulttimeout(30)
+
+FEED_ACCEPT = 'application/rss+xml, application/atom+xml, application/xml;q=0.9, text/xml;q=0.9, */*;q=0.8'
+
+
+def _strip_html(text):
+    """Feed summaries frequently arrive as HTML ("<p>...</p><img ...>").
+    Sent raw, the tags cost prompt tokens and give the keyword scorer
+    attributes to chew on; keep the visible text only."""
+    if not text or '<' not in text:
+        return text or ''
+    try:
+        return ' '.join(BeautifulSoup(text, 'html.parser').get_text(' ').split())
+    except Exception:
+        return text
+
+
+def _looks_like_feed(body):
+    """Whether fetched bytes are an RSS/Atom document rather than HTML."""
+    head = body[:2048].lstrip().lower()
+    return head.startswith(b'<?xml') or b'<rss' in head or b'<feed' in head or b'<rdf:rdf' in head
+
+
+def _norm_url(url):
+    return (url or '').strip().lower().rstrip('/')
 
 # Browser-like headers to get past basic anti-bot checks.
 BROWSER_HEADERS = {
@@ -87,8 +132,10 @@ class NewsCollector:
         ('https://www.investing.com/rss/news.rss', 'Investing.com')
     ]
 
-    def __init__(self):
-        self.source_mgr = SourceManager()
+    def __init__(self, source_mgr=None):
+        # Shared with the UI when one is passed in, so a source added there
+        # is fetched on the very next cycle instead of after a restart.
+        self.source_mgr = source_mgr or SourceManager()
         # Optional callback set by the backend: url -> bool.
         # Lets us skip downloading articles that were already analysed,
         # instead of scraping them every cycle and discarding them later.
@@ -101,10 +148,11 @@ class NewsCollector:
     def _seen(self, url):
         return bool(url and self.is_seen and self.is_seen(url))
 
-    def _get(self, url, timeout=15, allow_redirects=True):
+    def _get(self, url, timeout=15, allow_redirects=True, headers=None):
         """GET a URL, reading at most MAX_DOWNLOAD_BYTES of the body."""
         response = self.session.get(
-            url, timeout=timeout, allow_redirects=allow_redirects, stream=True
+            url, timeout=timeout, allow_redirects=allow_redirects, stream=True,
+            headers=headers,
         )
         try:
             response.raise_for_status()
@@ -176,11 +224,19 @@ class NewsCollector:
         slicing to the top 20 (the previous behaviour) meant paying for up to
         80 full-page fetches that were immediately discarded.
         """
+        # A built-in feed the user has also added as a custom source was
+        # being downloaded twice per cycle; the custom copy runs first, so
+        # the built-in one is the redundant one.
+        custom_urls = {_norm_url(s.get('url')) for s in self.source_mgr.get_sources(enabled_only=True)}
+        feeds = [(url, name) for url, name in self.MARKET_RSS_FEEDS if _norm_url(url) not in custom_urls]
+        if not feeds:
+            return []
+
         all_articles = []
-        with ThreadPoolExecutor(max_workers=len(self.MARKET_RSS_FEEDS)) as pool:
+        with ThreadPoolExecutor(max_workers=len(feeds)) as pool:
             futures = {
                 pool.submit(self._fetch_from_rss, feed_url, source_name, 25, None, False): source_name
-                for feed_url, source_name in self.MARKET_RSS_FEEDS
+                for feed_url, source_name in feeds
             }
             for future in futures:
                 source_name = futures[future]
@@ -395,53 +451,86 @@ class NewsCollector:
         '_pub_dt', trim to N, and scrape only the survivors.
         """
         try:
-            feed = feedparser.parse(feed_url)
-            articles = []
-
-            for entry in feed.entries[:limit]:
-                # Check if recent (within lookback period)
-                pub_date = entry.get('published_parsed') or entry.get('updated_parsed')
-                pub_datetime = None
-                if pub_date:
-                    pub_datetime = datetime.datetime(*pub_date[:6], tzinfo=pytz.UTC)
-                    now = datetime.datetime.now(datetime.timezone.utc)
-                    if (now - pub_datetime).total_seconds() > LOOKBACK_MINUTES * 60:
-                        continue
-
-                if match:
-                    haystack = f"{entry.get('title', '')} {entry.get('summary', '')}".lower()
-                    if match.lower() not in haystack:
-                        continue
-
-                if self._seen(entry.get('link', '')):
-                    continue
-
-                article = {
-                    'title': entry.get('title', ''),
-                    'description': entry.get('summary', ''),
-                    'url': entry.get('link', ''),
-                    'publishedAt': entry.get('published', ''),
-                    'source': f"Custom/{source_name}",
-                    'content': None,
-                    '_pub_dt': pub_datetime or datetime.datetime.min.replace(tzinfo=pytz.UTC),
-                }
-                articles.append(article)
-
-            if scrape:
-                self._scrape_many(articles)
-                for article in articles:
-                    article.pop('_pub_dt', None)
-
-            return articles
-
+            feed = self._load_feed(feed_url)
+            return self._feed_to_articles(feed, source_name, limit, match, scrape)
         except Exception as e:
             print(f"Error parsing RSS feed {feed_url}: {e}")
             return []
+
+    def _load_feed(self, feed_url):
+        """Download a feed through the shared session (timeout, browser
+        headers, keep-alive) and hand the bytes to feedparser. Falls back to
+        feedparser's own fetch for a host that rejects those headers."""
+        try:
+            body = self._get(feed_url, timeout=15, headers={'Accept': FEED_ACCEPT})
+            feed = feedparser.parse(body, response_headers={'content-location': feed_url})
+            if feed.entries or not feed.get('bozo'):
+                return feed
+            print(f"Feed at {feed_url[:60]} did not parse ({feed.get('bozo_exception')}), retrying via feedparser...")
+        except Exception as e:
+            print(f"Feed fetch failed ({type(e).__name__}) for {feed_url[:60]}, retrying via feedparser...")
+        return feedparser.parse(feed_url)
+
+    def _feed_to_articles(self, feed, source_name, limit=10, match=None, scrape=True):
+        """Turn parsed feed entries into article dicts (see _fetch_from_rss)."""
+        articles = []
+        now = datetime.datetime.now(datetime.timezone.utc)
+
+        for entry in feed.entries[:limit]:
+            # Check if recent (within lookback period)
+            pub_date = entry.get('published_parsed') or entry.get('updated_parsed')
+            pub_datetime = None
+            if pub_date:
+                try:
+                    pub_datetime = datetime.datetime(*pub_date[:6], tzinfo=pytz.UTC)
+                except (TypeError, ValueError):
+                    pub_datetime = None
+            if pub_datetime and (now - pub_datetime).total_seconds() > LOOKBACK_MINUTES * 60:
+                continue
+
+            link = (entry.get('link') or '').strip()
+            if not link or self._seen(link):
+                continue
+
+            summary = _strip_html(entry.get('summary', ''))
+            title = ' '.join((entry.get('title') or '').split())
+
+            if match:
+                haystack = f"{title} {summary}".lower()
+                if match.lower() not in haystack:
+                    continue
+
+            article = {
+                'title': title,
+                'description': summary,
+                'url': link,
+                'publishedAt': entry.get('published', ''),
+                'source': f"Custom/{source_name}",
+                'content': None,
+                '_pub_dt': pub_datetime or datetime.datetime.min.replace(tzinfo=pytz.UTC),
+            }
+            articles.append(article)
+
+        if scrape:
+            self._scrape_many(articles)
+            for article in articles:
+                article.pop('_pub_dt', None)
+
+        return articles
     
     def _fetch_from_webpage(self, url, source_name):
         """Fetch articles from a regular webpage."""
         try:
-            soup = BeautifulSoup(self._get(url, timeout=15), 'html.parser')
+            body = self._get(url, timeout=15)
+            # A source typed in as "webpage" is often really a feed URL that
+            # the name-based check couldn't tell apart. Parsed as HTML, a
+            # feed has no <h2 a>-style links and yields nothing every cycle.
+            if _looks_like_feed(body):
+                print(f"{source_name} serves a feed - parsing it as RSS/Atom.")
+                return self._feed_to_articles(feedparser.parse(body), source_name)
+
+            soup = BeautifulSoup(body, 'html.parser')
+            body = None
             articles = []
 
             # Try to find RSS feed link first
@@ -472,23 +561,19 @@ class NewsCollector:
                 if self._seen(link):
                     continue
 
-                article = {
+                articles.append({
                     'title': title,
                     'description': '',
                     'url': link,
                     'publishedAt': datetime.datetime.now(datetime.timezone.utc).isoformat(),
                     'source': f"Custom/{source_name}",
                     'content': None
-                }
-                
-                # Scrape full content
-                print(f"Scraping content for (Custom/{source_name}): {title}...")
-                article['content'] = self.scrape_article(link)
-                
-                if article['content']:
-                    articles.append(article)
-            
-            return articles
+                })
+
+            # Scrape the survivors concurrently rather than one page at a
+            # time; a page with no extractable text is dropped, as before.
+            self._scrape_many(articles)
+            return [a for a in articles if a['content']]
             
         except Exception as e:
             print(f"Error fetching webpage {url}: {e}")

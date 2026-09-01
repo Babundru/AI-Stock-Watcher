@@ -1,4 +1,4 @@
-from config import CLOUD_AI_PROVIDER, CLOUD_AI_MODEL, CLOUD_AI_API_KEY, CLOUD_AI_BASE_URL
+import config
 from cloud_providers import PROVIDERS
 from llm_prompts import build_market_prompt, parse_json_response
 
@@ -24,25 +24,27 @@ class CloudAnalyzer:
         self.ai_log_callback = ai_log_callback
         self.provider = None
 
-        if not CLOUD_AI_API_KEY:
+        # Read at construction (not import) so a settings change followed
+        # by StockAppBackend.apply_settings() builds a fresh, current client.
+        if not config.CLOUD_AI_API_KEY:
             print("Warning: Cloud AI is selected but no API key is configured. "
                   "Set one in Settings.")
             return
 
-        provider_cls = PROVIDERS.get(CLOUD_AI_PROVIDER)
+        provider_cls = PROVIDERS.get(config.CLOUD_AI_PROVIDER)
         if not provider_cls:
-            print(f"Warning: unknown Cloud AI provider '{CLOUD_AI_PROVIDER}'. "
+            print(f"Warning: unknown Cloud AI provider '{config.CLOUD_AI_PROVIDER}'. "
                   f"Available: {', '.join(PROVIDERS)}")
             return
 
         try:
             self.provider = provider_cls(
-                api_key=CLOUD_AI_API_KEY,
-                model=CLOUD_AI_MODEL,
-                base_url=CLOUD_AI_BASE_URL,
+                api_key=config.CLOUD_AI_API_KEY,
+                model=config.CLOUD_AI_MODEL,
+                base_url=config.CLOUD_AI_BASE_URL,
                 log_callback=ai_log_callback,
             )
-            print(f"Analyzer initialized in CLOUD MODE using {CLOUD_AI_PROVIDER}/{CLOUD_AI_MODEL}")
+            print(f"Analyzer initialized in CLOUD MODE using {config.CLOUD_AI_PROVIDER}/{config.CLOUD_AI_MODEL}")
         except ImportError as e:
             print(f"Warning: {e}")
 
