@@ -5,7 +5,7 @@ import threading
 import queue
 import webbrowser
 import datetime
-import yfinance as yf
+import price_lookup
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from main import StockAppBackend
@@ -848,23 +848,10 @@ class StockAppGUI(ctk.CTk):
         data_map = {}
         try:
             if not tickers: return
-            tickers_str = " ".join(tickers)
-            data = yf.Tickers(tickers_str)
-            for ticker in tickers:
-                try:
-                    # fast_info is a lightweight quote lookup; .info pulls the
-                    # full company profile and is far slower per ticker.
-                    price = None
-                    try:
-                        price = data.tickers[ticker].fast_info.get('lastPrice')
-                    except Exception:
-                        price = None
-                    if not price:
-                        info = data.tickers[ticker].info
-                        price = info.get('currentPrice') or info.get('regularMarketPrice')
-                    data_map[ticker] = float(price) if price else None
-                except Exception:
-                    data_map[ticker] = None
+            # Shared with the server/watch checker so both show the same
+            # number - and, importantly, one that includes extended-hours
+            # trading instead of the last regular-session close.
+            data_map = price_lookup.fetch_prices(tickers)
         except Exception as e:
             print(f"Price fetch failed: {e}")
         # The window may have been closed while this thread was waiting on the
