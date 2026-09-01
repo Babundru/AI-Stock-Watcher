@@ -4,11 +4,15 @@ buy date, for the dashboard's value graph (server.py: GET /api/portfolio/history
 Uses yfinance's historical daily closes rather than our own stored snapshots,
 so the chart is populated immediately instead of only filling in from the day
 this feature shipped.
+
+pandas/yfinance are imported inside compute_history rather than at module
+scope: together they are the single largest block of resident memory in the
+server process (>100MB), server.py imports this module at startup, and this
+endpoint is only hit when the dashboard's Portfolio tab is opened. Deferring
+the import means an empty portfolio never pays for them at all. See
+price_lookup.py for the same reasoning on the quote path.
 """
 import datetime
-
-import pandas as pd
-import yfinance as yf
 
 
 def compute_history(portfolio):
@@ -26,6 +30,9 @@ def compute_history(portfolio):
     }
     if not holdings:
         return empty
+
+    import pandas as pd
+    import yfinance as yf
 
     earliest_buy = min(data["buy_date"] for data in holdings.values())
 

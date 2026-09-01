@@ -110,6 +110,16 @@ class WatchManager:
     def get_open_watches(self):
         return [w for w in self.watches if w['status'] == 'OPEN']
 
+    def remove_watch(self, watch_id):
+        """Delete a watch outright, regardless of status. Used when the user
+        dismisses a pending sell signal from the dashboard."""
+        before = len(self.watches)
+        self.watches = [w for w in self.watches if w['id'] != watch_id]
+        removed = len(self.watches) != before
+        if removed:
+            self.save()
+        return removed
+
     def close_watch(self, watch_id, reason, exit_price):
         for w in self.watches:
             if w['id'] == watch_id and w['status'] == 'OPEN':
