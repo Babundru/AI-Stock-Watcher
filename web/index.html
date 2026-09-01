@@ -228,6 +228,16 @@ function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+// Sub-$1 tickers (e.g. penny OTC stocks) can move by fractions of a cent -
+// too small for 2 decimals to show, which makes distinct prices look
+// identical. Use more precision the smaller the price gets.
+function fmtPrice(n) {
+  n = Number(n);
+  if (!isFinite(n)) return '0.00';
+  const decimals = Math.abs(n) < 0.01 ? 6 : Math.abs(n) < 1 ? 4 : 2;
+  return n.toFixed(decimals);
+}
+
 // --- Tabs -------------------------------------------------------------
 document.querySelectorAll('nav.tabs button').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -284,7 +294,7 @@ function renderAlerts(alerts) {
           <span class="badge sell">SELL SIGNAL</span>
         </div>
         <div class="meta">
-          ${esc(reasonText)} &middot; Entry $${Number(a.entry_price).toFixed(2)} &rarr; Now $${Number(a.current_price).toFixed(2)} (${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%)
+          ${esc(reasonText)} &middot; Entry $${fmtPrice(a.entry_price)} &rarr; Now $${fmtPrice(a.current_price)} (${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%)
           &middot; ${esc((a.time || '').replace('T', ' ').slice(0, 19))}
         </div>
         ${a.url ? `<div class="meta"><a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.headline || 'Original alert article')}</a></div>` : ''}
@@ -318,8 +328,8 @@ async function loadWatches() {
     $('#watches-body').innerHTML = open.map(w => `
       <tr>
         <td>${esc(w.ticker)}</td>
-        <td>$${Number(w.entry_price).toFixed(2)}</td>
-        <td>$${Number(w.target_price).toFixed(2)}</td>
+        <td>$${fmtPrice(w.entry_price)}</td>
+        <td>$${fmtPrice(w.target_price)}</td>
         <td>${esc((w.expires_at || '').replace('T', ' ').slice(0, 16))}</td>
       </tr>`).join('');
   } catch (e) { /* dashboard poll - try again next tick */ }
