@@ -227,7 +227,7 @@
   <section id="view-alerts" class="view active">
     <div class="card" id="watches-card" style="display:none;">
       <h3 style="margin:0 0 8px;">Watching <span class="meta" style="margin:0;">(pending sell signals)</span></h3>
-      <table><thead><tr><th>Ticker</th><th>Entry</th><th>Target</th><th>Expires</th></tr></thead>
+      <table><thead><tr><th>Ticker</th><th>Entry</th><th>Target</th><th>Expires</th><th></th></tr></thead>
         <tbody id="watches-body"></tbody></table>
     </div>
     <div id="alerts-list"><div class="empty">No alerts yet.</div></div>
@@ -433,7 +433,12 @@ async function loadWatches() {
         <td>$${fmtPrice(w.entry_price)}</td>
         <td>$${fmtPrice(w.target_price)}</td>
         <td>${esc((w.expires_at || '').replace('T', ' ').slice(0, 16))}</td>
+        <td><button class="danger-btn" data-del="${esc(w.id)}">Remove</button></td>
       </tr>`).join('');
+    $('#watches-body').querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', async () => {
+      await fetch('/api/watches/' + encodeURIComponent(b.dataset.del), {method: 'DELETE'});
+      loadWatches();
+    }));
   } catch (e) { /* dashboard poll - try again next tick */ }
 }
 setInterval(loadWatches, 15000);
