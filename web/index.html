@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%93%88%3C/text%3E%3C/svg%3E">
 <title>Stocks AI</title>
 <style>
   :root {
@@ -18,22 +19,32 @@
     --accent: #5B8CFF;
     --accent-hover: #4A7AEE;
     --accent-soft: #182338;
+    --accent-glow: rgba(91, 140, 255, .35);
     --success: #3DDC84;
     --danger: #FF5C6C;
     --danger-soft: #3A1E22;
     --warn: #F5B94D;
+    --radius: 12px;
+    --shadow: 0 10px 28px rgba(0,0,0,.32);
+    --ease: cubic-bezier(.2,.7,.3,1);
   }
   * { box-sizing: border-box; }
   body {
     margin: 0;
-    background: var(--bg);
+    background:
+      radial-gradient(circle at 12% -10%, #182033 0%, transparent 45%),
+      var(--bg);
+    background-attachment: fixed;
     color: var(--text);
     font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     font-size: 14px;
+    -webkit-font-smoothing: antialiased;
   }
+  ::selection { background: var(--accent-soft); color: var(--text); }
   header {
     position: sticky; top: 0; z-index: 10;
-    background: var(--sidebar);
+    background: rgba(15, 18, 24, .85);
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
     border-bottom: 1px solid var(--line);
     padding: 12px 16px;
   }
@@ -41,29 +52,45 @@
     display: flex; align-items: center; justify-content: space-between;
     flex-wrap: wrap; gap: 10px;
   }
-  h1 { font-size: 16px; margin: 0; color: var(--accent); font-weight: 700; }
+  h1 {
+    font-size: 17px; margin: 0; font-weight: 800; letter-spacing: -.01em;
+    background: linear-gradient(135deg, var(--accent), #8AB4FF);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
   .pill {
     display: inline-flex; align-items: center; gap: 6px;
     padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 600;
     background: var(--panel); border: 1px solid var(--line);
+    transition: border-color .2s var(--ease);
   }
-  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--danger); }
-  .dot.on { background: var(--success); }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--danger); transition: background .25s var(--ease); }
+  .dot.on { background: var(--success); animation: pulse 2s infinite; }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(61,220,132,.45); }
+    70% { box-shadow: 0 0 0 6px rgba(61,220,132,0); }
+    100% { box-shadow: 0 0 0 0 rgba(61,220,132,0); }
+  }
   button {
     font-family: inherit; font-weight: 700; font-size: 12px;
     border: none; border-radius: 8px; padding: 8px 14px; cursor: pointer;
     background: var(--panel-hi); color: var(--text-dim);
+    transition: background .15s var(--ease), transform .1s var(--ease), box-shadow .2s var(--ease), color .15s var(--ease);
   }
   button:hover { background: var(--line-hi); }
-  button.primary { background: var(--accent); color: #fff; }
-  button.primary:hover { background: var(--accent-hover); }
+  button:active { transform: scale(.96); }
+  button:disabled { opacity: .55; cursor: default; transform: none; }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button.primary { background: var(--accent); color: #fff; box-shadow: 0 2px 12px var(--accent-glow); }
+  button.primary:hover { background: var(--accent-hover); box-shadow: 0 4px 16px var(--accent-glow); }
   button.danger-btn { background: var(--danger-soft); color: var(--danger); }
   .stats-row { display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
   .stat {
     background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
     padding: 8px 14px; min-width: 90px;
+    transition: transform .15s var(--ease), border-color .15s var(--ease);
   }
-  .stat .n { font-size: 18px; font-weight: 700; }
+  .stat:hover { transform: translateY(-2px); border-color: var(--line-hi); }
+  .stat .n { font-size: 19px; font-weight: 800; font-variant-numeric: tabular-nums; transition: color .2s var(--ease); }
   .stat .l { font-size: 10px; color: var(--text-mute); text-transform: uppercase; letter-spacing: .05em; }
   .activity { font-size: 12px; color: var(--text-dim); margin-top: 8px; }
   .engine { font-size: 11px; color: var(--text-mute); }
@@ -73,19 +100,35 @@
     background: var(--sidebar);
   }
   nav.tabs button {
+    position: relative;
     background: transparent; color: var(--text-dim); border-radius: 8px 8px 0 0;
     padding: 8px 14px; white-space: nowrap;
+    transition: background .18s var(--ease), color .18s var(--ease);
   }
+  nav.tabs button:hover { background: var(--panel-hi); color: var(--text); }
   nav.tabs button.active { background: var(--panel); color: var(--accent); }
+  nav.tabs button.active::after {
+    content: ''; position: absolute; left: 10px; right: 10px; bottom: -1px; height: 2px;
+    background: var(--accent); border-radius: 2px;
+  }
 
   main { padding: 14px 16px 40px; max-width: 900px; margin: 0 auto; }
   .view { display: none; }
-  .view.active { display: block; }
+  .view.active { display: block; animation: fadeIn .25s var(--ease); }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 
   .card {
-    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
     padding: 14px; margin-bottom: 10px;
+    transition: transform .15s var(--ease), border-color .15s var(--ease), box-shadow .2s var(--ease);
   }
+  .card:hover { border-color: var(--line-hi); box-shadow: var(--shadow); transform: translateY(-1px); }
+  .card.alert-pos { border-left: 3px solid var(--success); }
+  .card.alert-neg { border-left: 3px solid var(--danger); }
+  .card.alert-neu { border-left: 3px solid var(--line-hi); }
+  .card.alert-sell { border-left: 3px solid var(--warn); }
+  @keyframes cardIn { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
+  .card.alert-new { animation: cardIn .4s var(--ease); }
   .card h3 { margin: 0 0 4px; font-size: 14px; }
   .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
   .badge {
@@ -102,23 +145,46 @@
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
 
+  #view-logs { position: relative; }
   #logbox {
     background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
     padding: 10px 12px; height: 60vh; overflow-y: auto;
     font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 11.5px;
     white-space: pre-wrap; word-break: break-word; color: var(--text-dim);
   }
+  #logbox::-webkit-scrollbar { width: 8px; }
+  #logbox::-webkit-scrollbar-track { background: transparent; }
+  #logbox::-webkit-scrollbar-thumb { background: var(--line-hi); border-radius: 8px; }
   .logline { border-bottom: 1px solid var(--line); padding: 3px 0; }
   .logline .t { color: var(--text-mute); margin-right: 6px; }
+  .logline.lvl-error { color: var(--danger); }
+  .logline.lvl-warn { color: var(--warn); }
+  .logline.lvl-alert { color: var(--accent); }
+
+  .jump-btn {
+    position: absolute; bottom: 14px; left: 50%;
+    transform: translateX(-50%) translateY(10px);
+    background: var(--accent); color: #fff; border: none; border-radius: 999px;
+    padding: 8px 16px; font-size: 12px; font-weight: 700; cursor: pointer;
+    box-shadow: var(--shadow); opacity: 0; pointer-events: none;
+    transition: opacity .2s var(--ease), transform .2s var(--ease);
+  }
+  .jump-btn.show { opacity: 1; pointer-events: auto; transform: translateX(-50%) translateY(0); }
 
   table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
   th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); }
   th { color: var(--text-mute); font-size: 10px; text-transform: uppercase; }
+  tbody tr { transition: background .12s var(--ease); }
+  tbody tr:hover { background: var(--panel-hi); }
 
   .add-form { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
   .add-form input, .add-form select {
     background: var(--panel); border: 1px solid var(--line); color: var(--text);
     border-radius: 8px; padding: 8px 10px; font-size: 12.5px; font-family: inherit;
+    transition: border-color .15s var(--ease), box-shadow .15s var(--ease);
+  }
+  .add-form input:focus, .add-form select:focus {
+    outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft);
   }
   .add-form input { flex: 1; min-width: 120px; }
   .empty { color: var(--text-mute); font-size: 12.5px; padding: 20px 0; text-align: center; }
@@ -141,20 +207,20 @@
     </div>
   </div>
   <div class="stats-row">
-    <div class="stat"><div class="n" id="stat-scanned">0</div><div class="l">Scanned</div></div>
-    <div class="stat"><div class="n" id="stat-alerts">0</div><div class="l">Alerts</div></div>
-    <div class="stat"><div class="n" id="stat-skipped">0</div><div class="l">Skipped</div></div>
+    <div class="stat"><div class="n" id="stat-scanned">0</div><div class="l">🔍 Scanned</div></div>
+    <div class="stat"><div class="n" id="stat-alerts">0</div><div class="l">🔔 Alerts</div></div>
+    <div class="stat"><div class="n" id="stat-skipped">0</div><div class="l">⏭ Skipped</div></div>
   </div>
   <div class="activity" id="activity">Idle</div>
   <div class="engine" id="engine"></div>
 </header>
 
 <nav class="tabs">
-  <button data-view="alerts" class="active">Alerts</button>
-  <button data-view="logs">Logs</button>
-  <button data-view="portfolio">Portfolio</button>
-  <button data-view="sources">Sources</button>
-  <button data-view="keywords">Keywords</button>
+  <button data-view="alerts" class="active">🔔 Alerts</button>
+  <button data-view="logs">📜 Logs</button>
+  <button data-view="portfolio">💼 Portfolio</button>
+  <button data-view="sources">📡 Sources</button>
+  <button data-view="keywords">🔑 Keywords</button>
 </nav>
 
 <main>
@@ -169,6 +235,7 @@
 
   <section id="view-logs" class="view">
     <div id="logbox"></div>
+    <button class="jump-btn" id="jump-latest">↓ Jump to latest</button>
   </section>
 
   <section id="view-portfolio" class="view">
@@ -223,9 +290,29 @@
 const $ = (sel) => document.querySelector(sel);
 let sinceSeq = 0;
 let autoscroll = true;
+let pendingNewLogs = 0;
 
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function logLevelClass(text) {
+  const t = text.toLowerCase();
+  if (/\berror\b|\bfailed\b|\bfailure\b|exception/.test(t)) return 'lvl-error';
+  if (/\bwarn/.test(t)) return 'lvl-warn';
+  if (/\balert\b|\bnotif/.test(t)) return 'lvl-alert';
+  return '';
+}
+
+function updateJumpButton() {
+  const btn = $('#jump-latest');
+  if (autoscroll || pendingNewLogs === 0) {
+    btn.classList.remove('show');
+    btn.textContent = '↓ Jump to latest';
+  } else {
+    btn.classList.add('show');
+    btn.textContent = `↓ ${pendingNewLogs} new`;
+  }
 }
 
 // --- Tabs -------------------------------------------------------------
@@ -259,26 +346,40 @@ async function pollState() {
       for (const line of data.logs) {
         sinceSeq = Math.max(sinceSeq, line.seq);
         const div = document.createElement('div');
-        div.className = 'logline';
+        div.className = 'logline ' + logLevelClass(line.text);
         div.innerHTML = `<span class="t">${esc(line.time)}</span>${esc(line.text)}`;
         box.appendChild(div);
       }
       while (box.children.length > 2000) box.removeChild(box.firstChild);
-      if (autoscroll) box.scrollTop = box.scrollHeight;
+      if (autoscroll) {
+        box.scrollTop = box.scrollHeight;
+      } else {
+        pendingNewLogs += data.logs.length;
+      }
+      updateJumpButton();
     }
 
     renderAlerts(data.alerts);
   } catch (e) { /* server unreachable - try again next tick */ }
 }
 
+let seenAlertKeys = new Set();
+function alertKey(a) {
+  return a.kind === 'sell_signal'
+    ? `sell|${a.ticker}|${a.time}|${a.reason}`
+    : `news|${a.company}|${a.time}|${a.headline}`;
+}
+
 function renderAlerts(alerts) {
   const list = $('#alerts-list');
-  if (!alerts.length) { list.innerHTML = '<div class="empty">No alerts yet.</div>'; return; }
+  if (!alerts.length) { list.innerHTML = '<div class="empty">No alerts yet.</div>'; seenAlertKeys = new Set(); return; }
   list.innerHTML = alerts.map(a => {
+    const isNew = !seenAlertKeys.has(alertKey(a));
+    const newCls = isNew ? ' alert-new' : '';
     if (a.kind === 'sell_signal') {
       const pct = a.entry_price ? ((a.current_price - a.entry_price) / a.entry_price * 100) : 0;
       const reasonText = a.reason === 'target_hit' ? 'Target price reached' : 'Time window expired without the move';
-      return `<div class="card">
+      return `<div class="card alert-sell${newCls}">
         <div class="row">
           <h3>${esc(a.company)}${a.ticker ? ' · ' + esc(a.ticker) : ''}</h3>
           <span class="badge sell">SELL SIGNAL</span>
@@ -291,7 +392,7 @@ function renderAlerts(alerts) {
       </div>`;
     }
     const sentimentClass = a.sentiment === 'POSITIVE' ? 'pos' : a.sentiment === 'NEGATIVE' ? 'neg' : 'neu';
-    return `<div class="card">
+    return `<div class="card alert-${sentimentClass}${newCls}">
       <div class="row">
         <h3>${esc(a.company)}${a.ticker ? ' · ' + esc(a.ticker) : ''}</h3>
         <span class="badge ${sentimentClass}">${esc(a.sentiment)}</span>
@@ -305,6 +406,7 @@ function renderAlerts(alerts) {
       ${a.url ? `<div class="meta"><a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.headline || 'Source article')}</a></div>` : ''}
     </div>`;
   }).join('');
+  seenAlertKeys = new Set(alerts.map(alertKey));
 }
 
 // --- Watches (open sell-signal targets) ----------------------------------
@@ -359,6 +461,16 @@ $('#btn-test-notify').addEventListener('click', async () => {
 $('#logbox').addEventListener('scroll', () => {
   const box = $('#logbox');
   autoscroll = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  if (autoscroll) pendingNewLogs = 0;
+  updateJumpButton();
+});
+
+$('#jump-latest').addEventListener('click', () => {
+  const box = $('#logbox');
+  autoscroll = true;
+  pendingNewLogs = 0;
+  box.scrollTop = box.scrollHeight;
+  updateJumpButton();
 });
 
 // --- Portfolio ------------------------------------------------------------
