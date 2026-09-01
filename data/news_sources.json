@@ -8,13 +8,6 @@
       "type": "webpage"
     },
     {
-      "id": "0e325c4c-e06b-442e-a102-40ddf237ed31",
-      "name": "MarketWatch",
-      "url": "https://feeds.marketwatch.com/marketwatch/marketpulse/",
-      "enabled": true,
-      "type": "webpage"
-    },
-    {
       "id": "8179c085-a574-41b3-8763-f6daa6ada981",
       "name": "Seeking Alpha",
       "url": "https://seekingalpha.com/feed.xml",

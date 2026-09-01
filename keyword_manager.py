@@ -14,7 +14,14 @@ class KeywordManager:
         if os.path.exists(self.keywords_file):
             try:
                 with open(self.keywords_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+                    data = json.load(f)
+                if not isinstance(data, dict):
+                    raise ValueError("keywords file is not a JSON object")
+                # A hand-edited file may be missing one list; add_keyword
+                # indexes both without checking.
+                data.setdefault("positive_keywords", {})
+                data.setdefault("negative_keywords", {})
+                return data
             except Exception as e:
                 print(f"Error loading keywords: {e}")
                 return self._get_default_keywords()
@@ -23,6 +30,11 @@ class KeywordManager:
             defaults = self._get_default_keywords()
             self._save_keywords(defaults)
             return defaults
+
+    def reload(self):
+        """Re-read the file - for a manager whose file another instance
+        (the dashboard's, say) has since written."""
+        self.keywords = self._load_keywords()
     
     def _get_default_keywords(self) -> Dict:
         """Get default keyword sets with weights."""

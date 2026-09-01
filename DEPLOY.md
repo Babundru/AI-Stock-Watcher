@@ -71,17 +71,15 @@ echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 
 ## 4. Configure
 
-Copy over (or recreate) `data/settings.json` with your ntfy topic and a
-Cloud AI provider + API key (see the Settings section in `gui.py`, or just
-hand-edit the JSON) - `USE_CLOUD_AI: true` plus `CLOUD_AI_PROVIDER`,
-`CLOUD_AI_MODEL`, `CLOUD_AI_API_KEY`. Leaving both `USE_CLOUD_AI` and
-`USE_LOCAL_LLM` false runs the offline keyword matcher instead, which needs
-no API key and no model at all.
+Only the dashboard login has to be set by hand, before the service is
+reachable by anyone else. Everything else - the ntfy topic, the AI engine
+and its API key, the paper-trading cost - can be set afterwards from the
+dashboard's **Settings** tab on any device, and applies to the running
+service without a restart.
 
-Also set a dashboard login - `DASHBOARD_USERNAME` and `DASHBOARD_PASSWORD`.
+Set `DASHBOARD_USERNAME` and `DASHBOARD_PASSWORD` in `data/settings.json`.
 Leaving `DASHBOARD_PASSWORD` empty disables the login prompt entirely, and
-`server.py` prints a warning at startup if you forget it. Put both in
-`data/settings.json`:
+`server.py` prints a warning at startup if you forget it:
 
 ```json
 {
@@ -90,9 +88,10 @@ Leaving `DASHBOARD_PASSWORD` empty disables the login prompt entirely, and
 }
 ```
 
-(Merge these into the file alongside `NTFY_TOPIC` etc. rather than
-replacing it - `data/settings.json` is a flat JSON object of whichever
-settings you've customized.)
+(`data/settings.json` is a flat JSON object of whichever settings you've
+customized; the Settings tab merges into it rather than replacing it. If
+you copied a `settings.json` over from the desktop app, it already holds
+your topic and engine choice.)
 
 ## 5. Install Tailscale and join your network
 
@@ -148,8 +147,13 @@ dashboard open anywhere.
 From your phone or any other device on your Tailscale network, open
 `http://<tailscale-ip-or-name>:8000` in a browser. Your browser will prompt
 for the username/password from step 4 the first time (and remember it for
-the session) - it's the same dashboard regardless of device: status,
-alerts, logs, portfolio, sources, and keywords, with Start/Stop control.
+the session) - it's the same dashboard regardless of device, and it covers
+everything the desktop app does: Start/Stop, alerts with the open
+positions, logs (with the AI traffic switch), the portfolio with live
+prices and the paper-trading record, sources, keywords, and a **Settings**
+tab for the ntfy topic, the AI engine and API key, the paper cost, the
+login, plus a "reload files from disk" button for anything edited by hand
+over SSH. Every change applies to the running service immediately.
 
 Notifications still go out via ntfy exactly as before, independent of
 whether the dashboard is open.

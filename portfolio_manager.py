@@ -12,7 +12,7 @@ class PortfolioManager:
         if not os.path.exists(self.filename):
             return {}
         try:
-            with open(self.filename, 'r') as f:
+            with open(self.filename, 'r', encoding='utf-8') as f:
                 data = json.load(f)
 
             # Migration: List -> Dict
@@ -21,21 +21,34 @@ class PortfolioManager:
                 for ticker in data:
                     new_data[ticker] = {"buy_price": 0.0}
                 data = new_data
+            if not isinstance(data, dict):
+                return {}
 
             # Older/malformed entries may be missing shares/buy_date (added
             # for the portfolio value graph) - default them so callers never
             # have to guard for a missing key.
-            for entry in data.values():
+            clean = {}
+            for ticker, entry in data.items():
+                if not isinstance(entry, dict):
+                    entry = {"buy_price": 0.0}
+                entry.setdefault("buy_price", 0.0)
                 entry.setdefault("shares", 0.0)
                 entry.setdefault("buy_date", None)
+                clean[str(ticker).upper().strip()] = entry
 
-            return data
-        except json.JSONDecodeError:
+            return clean
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"Warning: could not read {self.filename} ({e}); starting with an empty portfolio")
             return {}
+
+    def reload(self):
+        """Re-read the file - for a manager whose file another instance
+        has since written."""
+        self.portfolio = self._load_portfolio()
 
     def save_portfolio(self):
         try:
-            with open(self.filename, 'w') as f:
+            with open(self.filename, 'w', encoding='utf-8') as f:
                 json.dump(self.portfolio, f, indent=4)
         except Exception as e:
             print(f"Error saving portfolio: {e}")
@@ -72,4 +85,4 @@ class PortfolioManager:
         return self.portfolio
 
     def has_stock(self, ticker):
-        return ticker.upper().strip() in self.portfolio
+        return bool(ticker) and str(ticker).upper().strip() in self.portfolio

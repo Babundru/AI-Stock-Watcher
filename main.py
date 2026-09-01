@@ -1,4 +1,6 @@
-from config import CHECK_INTERVAL, WATCH_CHECK_INTERVAL, TARGET_COMPANIES, USE_LOCAL_LLM, USE_CLOUD_AI
+import config
+from config import (CHECK_INTERVAL, WATCH_CHECK_INTERVAL, TARGET_COMPANIES,
+                    PAPER_TRADING, PAPER_COST_PCT, PAPER_BENCHMARK)
 from local_time import now_local
 from news_collector import NewsCollector
 from analyzer import MarketAnalyzer
@@ -8,6 +10,7 @@ from notifier import Notifier
 from ollama_manager import OllamaManager
 from portfolio_manager import PortfolioManager
 from watch_manager import WatchManager
+from paper_trader import PaperTrader
 import price_lookup
 import time
 import datetime
@@ -37,7 +40,8 @@ def _release_memory():
 
 
 class StockAppBackend:
-    def __init__(self, log_callback=print, alert_callback=None, status_callback=None):
+    def __init__(self, log_callback=print, alert_callback=None, status_callback=None,
+                 portfolio_mgr=None, source_mgr=None):
         self.log_callback = log_callback
         # Called with a dict for every alert raised, so the UI can keep a
         # history instead of letting alerts scroll away in the log.
@@ -49,22 +53,33 @@ class StockAppBackend:
         self.stats_file = 'data/stats.json'
         self.stats = self._load_stats()
         self.running = False
-        self.collector = NewsCollector()
-        # Three interchangeable engines, in priority order: the Anthropic API
+        self.thread = None
+        # Bumped on every start(). A scan loop only keeps going while it is
+        # the current generation, so a stop() followed quickly by a start()
+        # cannot leave two loops alive: the old thread may still be inside a
+        # minute-long LLM call when the new one begins, and `running` alone
+        # would be True again by the time it looks.
+        self._generation = 0
+        # The UI's own manager instances are passed in so both sides read and
+        # write the same in-memory state. With separate instances, a holding
+        # or source added in the dashboard reached the file but not the
+        # running scan - no Owned tag, no portfolio context in the prompt, no
+        # new source fetched - until a restart.
+        self.collector = NewsCollector(source_mgr=source_mgr)
+        # Three interchangeable engines, in priority order: a hosted AI API
         # (when a key is configured), a local Ollama model, or - needing
         # neither a key nor a model install - the offline keyword scorer.
-        if USE_CLOUD_AI:
-            self.ollama = None
-            self.analyzer = CloudAnalyzer(ai_log_callback=self.log)
-        elif USE_LOCAL_LLM:
-            self.ollama = OllamaManager(log_callback=self.log)
-            self.analyzer = MarketAnalyzer(ai_log_callback=self.log)
-        else:
-            self.ollama = None
-            self.analyzer = KeywordAnalyzer()
+        self.ollama = None
+        self.analyzer = None
+        self._build_analyzer()
         self.notifier = Notifier()
-        self.portfolio_mgr = PortfolioManager()
+        self.portfolio_mgr = portfolio_mgr or PortfolioManager()
         self.watch_mgr = WatchManager()
+        # Passive record of every watch's round trip, for judging whether the
+        # alerts are actually worth acting on. Changes nothing about how the
+        # app behaves - see paper_trader.py.
+        self.paper = PaperTrader(cost_pct=PAPER_COST_PCT,
+                                 benchmark=PAPER_BENCHMARK) if PAPER_TRADING else None
         self._last_watch_check = 0
         self.processed_urls_file = 'data/processed_urls.json'
         self.max_stored_urls = 120  # Keep only last 120 processed URLs
@@ -78,6 +93,59 @@ class StockAppBackend:
         self.urls_lock = threading.Lock()
         # Let the collector skip re-downloading articles we've already analysed
         self.collector.is_seen = self.processed_set.__contains__
+
+    @staticmethod
+    def engine_name():
+        """Which engine the current config selects, read live."""
+        if config.USE_CLOUD_AI:
+            return "cloud AI"
+        if config.USE_LOCAL_LLM:
+            return "local LLM"
+        return "keyword matcher"
+
+    @staticmethod
+    def engine_description():
+        """Human-readable engine label for the UIs."""
+        if config.USE_CLOUD_AI:
+            return f"Cloud AI · {config.CLOUD_AI_PROVIDER}/{config.CLOUD_AI_MODEL}"
+        if config.USE_LOCAL_LLM:
+            return f"Local AI · {config.LOCAL_MODEL_NAME}"
+        return "Keyword scoring · offline"
+
+    def _build_analyzer(self):
+        """(Re)create the analysis engine from the current config."""
+        want_ollama = config.USE_LOCAL_LLM and not config.USE_CLOUD_AI
+        if self.ollama and not want_ollama:
+            # Only shuts down a server we spawned; an external one is left.
+            self.ollama.stop()
+            self.ollama = None
+        if want_ollama and not self.ollama:
+            self.ollama = OllamaManager(log_callback=self.log)
+            if self.running:
+                self.ollama.start()
+
+        if config.USE_CLOUD_AI:
+            self.analyzer = CloudAnalyzer(ai_log_callback=self.log)
+        elif config.USE_LOCAL_LLM:
+            self.analyzer = MarketAnalyzer(ai_log_callback=self.log)
+        else:
+            self.analyzer = KeywordAnalyzer()
+
+    def apply_settings(self):
+        """Apply the current config module values to the running backend.
+
+        Called after the dashboard saves settings (config.save_settings) or
+        re-reads the file (config.reload_from_disk): the engine is rebuilt,
+        the notifier picks up its topic/mute, and the paper ledger its cost.
+        Takes effect on the next article - an analysis already in flight
+        finishes on the engine it started with. No restart needed, which
+        matters when the backend is a headless VM reached from a phone.
+        """
+        self._build_analyzer()
+        self.notifier.apply_settings()
+        if self.paper:
+            self.paper.cost_pct = config.PAPER_COST_PCT
+        self.log(f"Settings applied: engine = {self.engine_description()}")
 
     def _load_processed_urls(self):
         """Load previously processed URLs from disk (last 120 only)."""
@@ -157,13 +225,21 @@ class StockAppBackend:
                 pass
 
     def start(self):
+        if self.running:
+            return
+        # Give a previous loop a moment to wind down so two cycles don't
+        # overlap; if it is stuck in a long analysis the generation check
+        # retires it at its next opportunity anyway.
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout=3)
+        self._generation += 1
         self.running = True
         # Bring the model server up before the first article arrives.
         # Attaches to an already-running Ollama rather than starting a second.
         if self.ollama:
             self.ollama.start()
         self.log(f"Monitoring started. Check interval: {CHECK_INTERVAL//60} minutes")
-        self.thread = threading.Thread(target=self._run_loop)
+        self.thread = threading.Thread(target=self._run_loop, args=(self._generation,))
         self.thread.daemon = True
         self.thread.start()
 
@@ -178,20 +254,31 @@ class StockAppBackend:
             self.ollama.stop()
         self.log("Monitoring stopped. Processed URLs saved.")
 
-    def _run_loop(self):
+    def _alive(self, generation):
+        """Whether the loop of this generation should keep going."""
+        return self.running and self._generation == generation
+
+    def _sleep(self, seconds, generation):
+        """Sleep in 1s steps so stop() stays responsive."""
+        for _ in range(int(seconds)):
+            if not self._alive(generation):
+                break
+            time.sleep(1)
+
+    def _run_loop(self, generation):
         self.log("Stocks Watcher Started...")
-        
+
         # Send startup notification
         self.notifier.notify_system("Stocks Watcher Started", "The Stocks Watcher is now running and monitoring for news.")
 
         from config import GLOBAL_SCAN
-        
+
         if GLOBAL_SCAN:
              self.log("🌍 GLOBAL MARKET SCAN: Enabled. Checking all major business sources.")
         else:
              self.log(f"Tracking companies: {', '.join(TARGET_COMPANIES)}")
-        
-        while self.running:
+
+        while self._alive(generation):
             try:
                 self.log(f"\nScanning for news at {now_local().strftime('%H:%M:%S')}...")
                 
@@ -211,32 +298,35 @@ class StockAppBackend:
                 # keyword analysis. The old sleeps paced Gemini/API calls that
                 # no longer exist, and made a cycle outlast CHECK_INTERVAL.
                 for article in custom_articles:
-                    if not self.running: break
+                    if not self._alive(generation): break
                     self._process_article("Custom Source News", article, market_open, is_discovery=True)
 
 
                 # --- GLOBAL SCAN vs WATCHLIST ---
-                if GLOBAL_SCAN:
+                if GLOBAL_SCAN and self._alive(generation):
                     self.log("Running Global Market Scan...")
                     # 1. Fetch General News
                     self.status("Fetching market news")
                     articles = self.collector.fetch_general_market_news()
                     for article in articles:
-                        if not self.running: break
+                        if not self._alive(generation): break
                         # Hint "General Market" so the analyzer identifies the entity itself
                         self._process_article("General Market News", article, market_open, is_discovery=True)
-                
+
                 # We can also still check specific targets if they might not show up in top headlines?
-                # For rate limit safety, if Global Scan is on, we might skip the targeted specific loop 
-                # OR we just rely on Global Scan finding them. 
+                # For rate limit safety, if Global Scan is on, we might skip the targeted specific loop
+                # OR we just rely on Global Scan finding them.
                 # Let's keep specific checks ONLY if Global Scan is OFF or if list is small.
                 if not GLOBAL_SCAN:
                     for company in TARGET_COMPANIES:
-                        if not self.running: break
+                        if not self._alive(generation): break
                         articles = self.collector.fetch_news(company)
                         for article in articles:
-                            if not self.running: break
+                            if not self._alive(generation): break
                             self._process_article(company, article, market_open)
+
+                if not self._alive(generation):
+                    break
 
                 # --- WATCH CHECK (sell signals) ---
                 # Coarser cadence than the news scan - price doesn't need to
@@ -266,15 +356,13 @@ class StockAppBackend:
                 self.log(f"Sleeping until {next_run_time.strftime('%H:%M:%S')} ({CHECK_INTERVAL}s)...")
                 self.status(f"Waiting until {next_run_time.strftime('%H:%M:%S')}")
                 
-                # Sleep loop for responsiveness
-                for _ in range(CHECK_INTERVAL):
-                    if not self.running: 
-                        break
-                    time.sleep(1)
-                
+                self._sleep(CHECK_INTERVAL, generation)
+
             except Exception as e:
                 self.log(f"Error in main loop: {e}")
-                time.sleep(60)
+                # Same responsive sleep as the normal path: a flat 60s
+                # sleep here made Stop take up to a minute after an error.
+                self._sleep(60, generation)
 
     def _process_article(self, company_hint, article, market_is_open, is_discovery=False):
         url = article.get('url')
@@ -314,8 +402,7 @@ class StockAppBackend:
         portfolio_tickers = list(self.portfolio_mgr.get_portfolio().keys())
         
         # Analyze
-        engine = "cloud AI" if USE_CLOUD_AI else ("local LLM" if USE_LOCAL_LLM else "keyword matcher")
-        self.log(f"   🔍 Analyzing with {engine}...")
+        self.log(f"   🔍 Analyzing with {self.engine_name()}...")
         self.stats['scanned'] += 1
         self.status(f"Analyzing: {title[:48]}")
         analysis = self.analyzer.analyze_article(company_hint, article, market_is_open, portfolio_tickers)
@@ -326,8 +413,11 @@ class StockAppBackend:
             return
         
         # Extract info
-        target = analysis.get('target_company', company_hint)
-        ticker = analysis.get('ticker')
+        target = analysis.get('target_company') or company_hint
+        # "NASDAQ: TSLA" / "$tsla" / "BRK.B" -> "TSLA" / "TSLA" / "BRK-B".
+        # Everything downstream (portfolio lookup, watch, price) keys off
+        # the clean form.
+        ticker = price_lookup.normalize_ticker(analysis.get('ticker'))
         sentiment = (analysis.get('sentiment') or 'NEUTRAL').upper()
         impact = (analysis.get('impact') or 'LOW').upper()
         prediction = (analysis.get('prediction') or 'FLAT').upper()
@@ -341,7 +431,7 @@ class StockAppBackend:
         skip_reasons = []
         
         # Normalize ticker if possible, else use name
-        stock_id = ticker if ticker else target
+        stock_id = ticker if ticker else (target or '')
         
         self.log(f"[{target}] Analyzing: Sentiment={sentiment}, Impact={impact}, Prediction={prediction}")
         
@@ -357,10 +447,13 @@ class StockAppBackend:
         else:
             skip_reasons.append(f"sentiment is {sentiment} (neutral)")
         
-        if impact not in ['CRITICAL', 'HIGH']:
+        # Threshold read live from the module, not captured at import: the
+        # sensitivity slider rewrites it and a running watcher must pick the
+        # change up without a restart.
+        if not config.impact_passes(impact):
             if should_notify:
                 self.log(f"  ✗ Impact too low ({impact}) - notification cancelled")
-            skip_reasons.append(f"impact is {impact} (need HIGH/CRITICAL)")
+            skip_reasons.append(f"impact is {impact} (need {config.MIN_IMPACT} or above)")
             should_notify = False  # Filter low impact noise
             
         # Extra Safety: Ignore "FLAT" predictions even if some other signal was high
@@ -383,7 +476,12 @@ class StockAppBackend:
             # the signal). Needs a ticker we can actually price.
             if sentiment in ('POSITIVE', 'NEGATIVE') and ticker:
                 direction = 'LONG' if sentiment == 'POSITIVE' else 'SHORT'
-                entry_price = price_lookup.fetch_prices([ticker]).get(ticker)
+                # The benchmark rides along in the same batched call, so
+                # recording what the market did over this trade's window
+                # costs no extra request.
+                wanted = [ticker] + ([PAPER_BENCHMARK] if self.paper else [])
+                prices = price_lookup.fetch_prices(wanted)
+                entry_price = prices.get(ticker)
                 if entry_price:
                     watch = self.watch_mgr.add_watch(
                         ticker, target, entry_price, impact,
@@ -395,6 +493,8 @@ class StockAppBackend:
                         verb = 'BUY' if direction == 'LONG' else 'SHORT'
                         self.log(f"  {verb} {ticker} at {entry_price:.2f} "
                                  f"-> exit target {watch['target_price']:.2f}")
+                        if self.paper:
+                            self.paper.open_trade(watch, prices.get(PAPER_BENCHMARK))
                     else:
                         self.log(f"  ({ticker} already has an open position - no new watch)")
                 else:
@@ -435,7 +535,10 @@ class StockAppBackend:
 
         self.log(f"👀 Checking {len(open_watches)} open watch(es) for exit signals...")
         tickers = list({w['ticker'] for w in open_watches})
+        if self.paper:
+            tickers.append(PAPER_BENCHMARK)
         prices = price_lookup.fetch_prices(tickers)
+        benchmark_price = prices.get(PAPER_BENCHMARK) if self.paper else None
         now = now_local()
 
         for watch in open_watches:
@@ -443,12 +546,33 @@ class StockAppBackend:
             if not price:
                 continue
 
+            # Note how far this position has run either way before deciding
+            # whether it resolves. Recorded for every open watch on every
+            # check, not just the ones closing - the worst point a trade
+            # passed through is exactly what a later stop-loss study needs,
+            # and it is unrecoverable if not captured live.
+            if self.paper:
+                self.paper.mark_price(watch['id'], price)
+
             expires_at = datetime.datetime.fromisoformat(watch['expires_at'])
             reason = None
-            if self.watch_mgr.target_reached(watch, price):
+            if self.watch_mgr.stop_loss_hit(watch, price):
+                reason = 'stop_loss'
+            elif self.watch_mgr.target_reached(watch, price):
                 reason = 'target_hit'
             elif now >= expires_at:
-                reason = 'horizon_expired'
+                # Horizon expired - the "scheduled" exit. If this watch has a
+                # stop-loss (profit protection is on) and it's currently at a
+                # loss, don't sell into it: push the expiry out and keep
+                # watching instead. Only a recovery to profit, the target, or
+                # the stop-loss itself can close it from here.
+                if watch.get('stop_loss_price') is not None and not self.watch_mgr.is_profitable(watch, price):
+                    self.watch_mgr.postpone_watch(watch['id'])
+                    self.log(f"  ⏳ {watch['company']} ({watch['ticker']}) horizon passed at a "
+                             f"loss ({watch['entry_price']:.2f} -> {price:.2f}) - postponing exit, "
+                             f"waiting for profit or stop-loss ({watch['stop_loss_price']:.2f})")
+                else:
+                    reason = 'horizon_expired'
 
             if not reason:
                 continue
@@ -456,6 +580,12 @@ class StockAppBackend:
             closed = self.watch_mgr.close_watch(watch['id'], reason, price)
             if not closed:
                 continue
+
+            if self.paper:
+                trade = self.paper.close_trade(closed, price, benchmark_price)
+                if trade:
+                    self.log(f"  📒 Paper trade #{len(self.paper.closed())}: "
+                             f"{trade['net_pct'] * 100:+.2f}% after costs")
 
             direction = watch.get('direction', 'LONG')
             signal = 'COVER SHORT' if direction == 'SHORT' else 'SELL'
@@ -484,5 +614,12 @@ class StockAppBackend:
                     })
                 except Exception as e:
                     self.log(f"  (alert view update failed: {e})")
+
+        # One write for the whole pass. mark_price only mutates in memory, so
+        # without this the excursions of every still-open position would be
+        # lost on restart (close_trade saves on its own, but only covers the
+        # watches that actually resolved).
+        if self.paper:
+            self.paper.save()
 
 

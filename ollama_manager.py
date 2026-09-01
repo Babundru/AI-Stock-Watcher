@@ -19,12 +19,32 @@ class OllamaManager:
             print(f"[OLLAMA_MGR] {msg}")
 
     def is_ollama_running(self):
-        """Checks if Ollama is already running via tasklist."""
+        """Checks if an Ollama server is already reachable.
+
+        Asks the API itself first - that works on every OS and also covers a
+        server on another host (OLLAMA_URL). The Windows process-list check
+        remains as a fallback for a server that is starting up and not yet
+        answering.
+        """
         try:
-            # Windows-only check; treat any failure as "not running".
-            output = subprocess.check_output('tasklist /FI "IMAGENAME eq ollama.exe"', shell=True).decode()
+            import requests
+            from urllib.parse import urlsplit
+            from config import OLLAMA_URL
+            parts = urlsplit(OLLAMA_URL)
+            root = f"{parts.scheme}://{parts.netloc}/"
+            if requests.get(root, timeout=2).ok:
+                return True
+        except Exception:
+            pass
+        if os.name != 'nt':
+            return False
+        try:
+            output = subprocess.check_output(
+                'tasklist /FI "IMAGENAME eq ollama.exe"', shell=True,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            ).decode(errors='replace')
             return 'ollama.exe' in output
-        except:
+        except Exception:
             return False
 
     def start(self):

@@ -195,6 +195,121 @@
   .kw-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
   @media (max-width: 560px) { .kw-cols { grid-template-columns: 1fr; } }
   .kw-item { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
+
+  /* Master mute for phone alerts, in the header next to the test button. */
+  .toggle { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; user-select: none; }
+  .toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
+  .toggle .track {
+    width: 34px; height: 18px; border-radius: 999px; background: var(--line-hi);
+    position: relative; transition: background .18s var(--ease); flex: none;
+  }
+  .toggle .knob {
+    position: absolute; top: 2px; left: 2px; width: 14px; height: 14px;
+    border-radius: 50%; background: var(--text-dim);
+    transition: transform .18s var(--ease), background .18s var(--ease);
+  }
+  .toggle input:checked + .track { background: rgba(61,220,132,.35); }
+  .toggle input:checked + .track .knob { transform: translateX(16px); background: var(--success); }
+  .toggle input:focus-visible + .track { box-shadow: 0 0 0 3px var(--accent-soft); }
+  .toggle-label { font-size: 12px; color: var(--text-dim); }
+  .toggle.muted .toggle-label { color: var(--text-mute); }
+  .toggle.no-topic .toggle-label { color: var(--warn); }
+
+  /* Alert-sensitivity slider at the top of the Alerts view. */
+  .sens-card { margin-bottom: 12px; }
+  .sens-now { color: var(--accent); font-weight: 800; font-size: 12px; letter-spacing: 0; }
+  .sens-card input[type="range"] {
+    -webkit-appearance: none; appearance: none; width: 100%;
+    height: 4px; border-radius: 999px; background: var(--line-hi);
+    outline: none; margin: 10px 0 4px;
+  }
+  .sens-card input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none; width: 15px; height: 15px;
+    border-radius: 50%; background: var(--accent); cursor: pointer;
+    border: 2px solid var(--panel); box-shadow: 0 0 0 1px var(--accent);
+  }
+  .sens-card input[type="range"]::-moz-range-thumb {
+    width: 15px; height: 15px; border-radius: 50%; background: var(--accent);
+    cursor: pointer; border: 2px solid var(--panel); box-shadow: 0 0 0 1px var(--accent);
+  }
+  .sens-card input[type="range"]:focus-visible { box-shadow: 0 0 0 3px var(--accent-soft); }
+  .sens-ticks { display: flex; justify-content: space-between; font-size: 9.5px;
+                color: var(--text-mute); text-transform: uppercase; letter-spacing: .04em; }
+  .sens-ticks span { cursor: pointer; }
+  .sens-ticks span.on { color: var(--accent); font-weight: 700; }
+
+  /* Paper-trading block in the Portfolio view. */
+  .section-head {
+    font-size: 15px; margin: 0 0 12px; padding-top: 20px;
+    border-top: 1px solid var(--line); display: flex; align-items: baseline;
+    gap: 10px; flex-wrap: wrap;
+  }
+  .section-sub { font-size: 11px; color: var(--text-mute); font-weight: 400; }
+  .card-title {
+    font-size: 11px; color: var(--text-mute); text-transform: uppercase;
+    letter-spacing: .05em; margin-bottom: 8px; display: flex;
+    align-items: baseline; gap: 8px; flex-wrap: wrap;
+  }
+  .card-title .section-sub { text-transform: none; letter-spacing: 0; }
+  .note {
+    background: var(--accent-soft); border: 1px solid var(--line-hi);
+    border-left: 3px solid var(--warn); border-radius: 8px;
+    padding: 10px 12px; font-size: 12px; color: var(--text-dim);
+    margin-bottom: 14px;
+  }
+  .up { color: var(--success); }
+  .down { color: var(--danger); }
+  .num { font-variant-numeric: tabular-nums; }
+  .pill {
+    font-size: 10px; padding: 2px 7px; border-radius: 999px;
+    text-transform: uppercase; letter-spacing: .04em; font-weight: 700;
+  }
+  .pill.long { background: rgba(61,220,132,.14); color: var(--success); }
+  .pill.short { background: rgba(255,92,108,.14); color: var(--danger); }
+  /* Toolbars above the alert list and the log box. */
+  .toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+  .toolbar .spacer { flex: 1; }
+  .check { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-dim); cursor: pointer; user-select: none; }
+  .check input { accent-color: var(--accent); }
+  body:not(.show-ai) .logline.ai { display: none; }
+  .logline.ai { color: #4A5468; }
+
+  /* Settings view. */
+  .form-grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field label { font-size: 11px; color: var(--text-mute); text-transform: uppercase; letter-spacing: .04em; }
+  .field input, .field select {
+    background: var(--bg); border: 1px solid var(--line); color: var(--text);
+    border-radius: 8px; padding: 9px 10px; font-size: 13px; font-family: inherit;
+    transition: border-color .15s var(--ease), box-shadow .15s var(--ease);
+  }
+  .field input:focus, .field select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .field .hint { font-size: 11px; color: var(--text-mute); line-height: 1.4; }
+  .engine-choice { display: flex; gap: 6px; flex-wrap: wrap; }
+  .engine-choice label {
+    flex: 1; min-width: 120px; padding: 10px; border-radius: 8px; cursor: pointer;
+    background: var(--bg); border: 1px solid var(--line); font-size: 12px; color: var(--text-dim);
+    display: flex; gap: 8px; align-items: flex-start;
+  }
+  .engine-choice label:has(input:checked) { border-color: var(--accent); color: var(--text); background: var(--accent-soft); }
+  .engine-choice input { margin-top: 2px; accent-color: var(--accent); }
+  .engine-choice b { display: block; font-size: 12.5px; color: var(--text); }
+  .settings-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
+  .status-msg { font-size: 12px; color: var(--text-dim); }
+  .status-msg.err { color: var(--danger); }
+  .status-msg.ok { color: var(--success); }
+  .inactive-note {
+    background: #2A1D05; border: 1px solid var(--warn); color: var(--warn);
+    border-radius: 8px; padding: 10px 12px; font-size: 12px; margin-bottom: 12px;
+  }
+
+  /* Progress toward the exit target, drawn behind the percentage. */
+  .prog { position: relative; min-width: 74px; }
+  .prog i {
+    position: absolute; left: 0; top: 50%; transform: translateY(-50%);
+    height: 14px; border-radius: 3px; background: var(--accent-soft);
+  }
+  .prog span { position: relative; }
 </style>
 </head>
 <body>
@@ -206,6 +321,11 @@
       <span class="pill"><span class="dot" id="dot"></span><span id="running-text">Offline</span></span>
       <button class="primary" id="btn-start">Start</button>
       <button class="danger-btn" id="btn-stop">Stop</button>
+      <label class="toggle" id="notify-toggle" title="Mute or unmute phone alerts">
+        <input type="checkbox" id="notify-switch">
+        <span class="track"><span class="knob"></span></span>
+        <span class="toggle-label" id="notify-label">Alerts</span>
+      </label>
       <button id="btn-test-notify">Send Test Notification</button>
       <span class="meta" id="test-notify-result"></span>
     </div>
@@ -225,19 +345,51 @@
   <button data-view="portfolio">💼 Portfolio</button>
   <button data-view="sources">📡 Sources</button>
   <button data-view="keywords">🔑 Keywords</button>
+  <button data-view="settings">⚙️ Settings</button>
 </nav>
 
 <main>
   <section id="view-alerts" class="view active">
+    <div class="card sens-card">
+      <div class="card-title">Alert on
+        <span class="sens-now" id="sens-now">HIGH+</span>
+        <span class="section-sub" id="sens-hint"></span>
+      </div>
+      <input type="range" id="sens-range" min="0" max="3" step="1" value="2"
+             aria-label="Minimum impact to alert on">
+      <div class="sens-ticks" id="sens-ticks"></div>
+    </div>
+    <div class="card sens-card">
+      <div class="card-title">Stop-loss
+        <span class="sens-now" id="sl-now">Off</span>
+        <span class="section-sub">0 = sell on schedule; above 0, a scheduled exit at a loss is postponed until it's profitable, hits its target, or hits this stop</span>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px; margin-top:8px;">
+        <input type="number" id="sl-input" min="0" step="0.5" style="width:90px;" placeholder="0">
+        <span class="meta" style="margin:0;">%</span>
+        <button id="sl-save">Save</button>
+      </div>
+    </div>
     <div class="card" id="watches-card" style="display:none;">
       <h3 style="margin:0 0 8px;">Watching <span class="meta" style="margin:0;">(open positions, pending exit signals)</span></h3>
-      <table><thead><tr><th>Ticker</th><th>Side</th><th>Entry</th><th>Target</th><th>Expires</th><th></th></tr></thead>
+      <table><thead><tr><th>Ticker</th><th>Side</th><th>Entry</th><th>Target</th><th>Stop</th><th>Expires</th><th></th></tr></thead>
         <tbody id="watches-body"></tbody></table>
+    </div>
+    <div class="toolbar">
+      <span class="meta" style="margin:0;" id="alerts-count"></span>
+      <span class="spacer"></span>
+      <button class="danger-btn" id="alerts-clear">Clear alerts</button>
     </div>
     <div id="alerts-list"><div class="empty">No alerts yet.</div></div>
   </section>
 
   <section id="view-logs" class="view">
+    <div class="toolbar">
+      <label class="check" title="Show the full prompt sent to the model and its raw reply"><input type="checkbox" id="log-ai"> AI traffic</label>
+      <label class="check"><input type="checkbox" id="log-autoscroll" checked> Auto-scroll</label>
+      <span class="spacer"></span>
+      <button id="log-clear">Clear</button>
+    </div>
     <div id="logbox"></div>
     <button class="jump-btn" id="jump-latest">↓ Jump to latest</button>
   </section>
@@ -258,8 +410,47 @@
       <input id="pf-date" type="date">
       <button class="primary" id="pf-add">Add</button>
     </div>
-    <div class="card"><table><thead><tr><th>Ticker</th><th>Shares</th><th>Buy Price</th><th></th></tr></thead>
+    <div class="toolbar">
+      <span class="meta" style="margin:0;">Holdings you own. Buy price optional; shares and date drive the value graph.</span>
+      <span class="spacer"></span>
+      <button id="pf-refresh">Refresh prices</button>
+      <button class="danger-btn" id="pf-clear">Clear all</button>
+    </div>
+    <div class="card" style="overflow-x:auto;"><table><thead><tr><th>Ticker</th><th>Shares</th><th>Buy price</th><th>Live</th><th>P/L %</th><th>Gain / share</th><th></th></tr></thead>
       <tbody id="pf-body"></tbody></table></div>
+
+    <!-- Paper trading: the app's own track record. Deliberately a separate
+         block from the holdings above - these are simulated positions opened
+         from its alerts, not stock the user owns. -->
+    <div id="paper-section" style="display:none; margin-top:26px;">
+      <h2 class="section-head">📒 Paper Trading <span class="section-sub">the app's track record — simulated, not holdings you own</span></h2>
+
+      <div class="stats-row" style="margin-bottom:14px;">
+        <div class="stat"><div class="n" id="pp-stat-exp">—</div><div class="l">Expectancy / trade</div></div>
+        <div class="stat"><div class="n" id="pp-stat-win">—</div><div class="l">Win rate</div></div>
+        <div class="stat"><div class="n" id="pp-stat-alpha">—</div><div class="l">Alpha vs market</div></div>
+        <div class="stat"><div class="n" id="pp-stat-open">—</div><div class="l">Open positions</div></div>
+      </div>
+
+      <div class="note" id="pp-warn" style="display:none;"></div>
+
+      <div class="card" id="pp-chart-card" style="display:none;">
+        <div class="card-title">Equity curve <span id="pp-chart-sub" class="section-sub"></span></div>
+        <canvas id="pp-chart" style="width:100%; height:150px; display:block;"></canvas>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Open positions <span class="section-sub">marked to live prices — not yet counted in the record</span></div>
+        <table><thead><tr><th>Ticker</th><th>Side</th><th>Entry</th><th>Now</th><th>P/L</th><th>To target</th><th>Opened</th></tr></thead>
+          <tbody id="pp-open-body"></tbody></table>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Closed trades <span class="section-sub">the actual record, after <span id="pp-cost">0.20%</span> costs</span></div>
+        <table><thead><tr><th>Closed</th><th>Ticker</th><th>Side</th><th>Entry</th><th>Exit</th><th>P/L</th><th>Why</th></tr></thead>
+          <tbody id="pp-closed-body"></tbody></table>
+      </div>
+    </div>
   </section>
 
   <section id="view-sources" class="view">
@@ -273,19 +464,103 @@
       </select>
       <button class="primary" id="src-add">Add</button>
     </div>
+    <div class="toolbar">
+      <span class="meta" style="margin:0;">Twitter/X profile links are converted to a Nitter mirror automatically.</span>
+      <span class="spacer"></span>
+      <button class="danger-btn" id="src-reset">Reset to defaults</button>
+    </div>
     <div id="src-list"></div>
   </section>
 
   <section id="view-keywords" class="view">
+    <div class="inactive-note" id="kw-inactive" style="display:none;">
+      ⚠ Inactive - an AI engine is doing the analysis. These keywords only drive scoring when the engine in Settings is "Keyword scoring".
+    </div>
     <div class="add-form">
       <input id="kw-word" placeholder="Keyword or phrase">
-      <input id="kw-weight" placeholder="Weight (1-10)" type="number">
+      <input id="kw-weight" placeholder="Weight (1-10)" type="number" min="1" max="10">
       <select id="kw-type"><option value="positive">Positive</option><option value="negative">Negative</option></select>
       <button class="primary" id="kw-add">Add</button>
+    </div>
+    <div class="toolbar">
+      <span class="spacer"></span>
+      <button class="danger-btn" id="kw-reset">Reset to defaults</button>
     </div>
     <div class="kw-cols">
       <div><h3 style="color:var(--success)">Positive</h3><div id="kw-pos"></div></div>
       <div><h3 style="color:var(--danger)">Negative</h3><div id="kw-neg"></div></div>
+    </div>
+  </section>
+
+  <section id="view-settings" class="view">
+    <div class="note">Changes apply to the running backend immediately - no restart, no SSH. They are saved to <code>data/settings.json</code> on the server.</div>
+
+    <div class="card">
+      <div class="card-title">Phone notifications</div>
+      <div class="form-grid">
+        <div class="field">
+          <label for="st-topic">ntfy topic</label>
+          <input id="st-topic" placeholder="e.g. stockwatch-7f3a91c2b8e4" autocomplete="off">
+          <div class="hint">Public channel on ntfy.sh - anyone who knows the name can read it, so make it long and random. Subscribe to the same name in the ntfy app.</div>
+        </div>
+        <label class="check"><input type="checkbox" id="st-ownership"> Mark alerts about stocks I hold with [OWNED] in the notification (discloses holdings on the public topic)</label>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Analysis engine <span class="section-sub" id="st-engine-now"></span></div>
+      <div class="engine-choice" id="st-engine">
+        <label><input type="radio" name="engine" value="cloud"><span><b>Cloud AI</b>Hosted model via API key. Light enough for a small VM.</span></label>
+        <label><input type="radio" name="engine" value="local"><span><b>Local AI (Ollama)</b>Needs Ollama and a pulled model on the backend machine.</span></label>
+        <label><input type="radio" name="engine" value="keywords"><span><b>Keyword scoring</b>Offline, instant, cruder. Uses the Keywords tab.</span></label>
+      </div>
+      <div class="form-grid" id="st-cloud-fields" style="margin-top:12px;">
+        <div class="field">
+          <label for="st-provider">Provider</label>
+          <select id="st-provider"></select>
+          <div class="hint">"openai" plus a base URL also reaches any OpenAI-compatible host; "openrouter" and "routera" route one key to many models (model names like <code>anthropic/claude-opus-5</code>).</div>
+        </div>
+        <div class="field"><label for="st-cloud-model">Model</label><input id="st-cloud-model" autocomplete="off"></div>
+        <div class="field">
+          <label for="st-cloud-key">API key</label>
+          <input id="st-cloud-key" type="password" autocomplete="new-password" placeholder="">
+          <div class="hint" id="st-key-hint"></div>
+          <label class="check"><input type="checkbox" id="st-clear-key"> Remove the stored key</label>
+        </div>
+        <div class="field"><label for="st-cloud-url">Base URL (optional)</label><input id="st-cloud-url" placeholder="https://..." autocomplete="off"></div>
+      </div>
+      <div class="form-grid" id="st-local-fields" style="margin-top:12px;">
+        <div class="field"><label for="st-local-model">Ollama model</label><input id="st-local-model" placeholder="gemma3:12b" autocomplete="off"><div class="hint">Must already be pulled on the backend: <code>ollama pull &lt;name&gt;</code></div></div>
+        <div class="field"><label for="st-threads">Threads</label><input id="st-threads" type="number" min="1" step="1"></div>
+        <div class="field"><label for="st-ollama-url">Ollama URL</label><input id="st-ollama-url" placeholder="http://localhost:11434/api/generate" autocomplete="off"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Paper trading</div>
+      <div class="field">
+        <label for="st-cost">Round-trip cost %</label>
+        <input id="st-cost" type="number" min="0" max="99" step="0.01" style="max-width:140px;">
+        <div class="hint">Spread on both sides plus commission and financing. Subtracted from every paper trade; set it to your broker's real figure before reading the record.</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Dashboard login</div>
+      <div class="form-grid">
+        <div class="field"><label for="st-user">Username</label><input id="st-user" autocomplete="username"></div>
+        <div class="field">
+          <label for="st-pass">New password</label>
+          <input id="st-pass" type="password" autocomplete="new-password" placeholder="">
+          <div class="hint" id="st-pass-hint">Leave blank to keep the current one. After changing it the browser will ask you to sign in again.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-actions">
+      <button class="primary" id="st-save">Save and apply</button>
+      <button id="st-reload" title="Re-read every JSON file in data/ (for edits made by hand on the server)">Reload files from disk</button>
+      <span class="status-msg" id="st-msg"></span>
     </div>
   </section>
 </main>
@@ -339,8 +614,13 @@ document.querySelectorAll('nav.tabs button').forEach(btn => {
     if (btn.dataset.view === 'portfolio') loadPortfolio();
     if (btn.dataset.view === 'sources') loadSources();
     if (btn.dataset.view === 'keywords') loadKeywords();
+    if (btn.dataset.view === 'settings') loadSettings();
   });
 });
+
+function isAiTraffic(text) {
+  return /SENT TO|<-- RESPONSE|AI RESPONSE/.test(text);
+}
 
 // --- Status / logs / alerts polling ------------------------------------
 async function pollState() {
@@ -360,7 +640,9 @@ async function pollState() {
       for (const line of data.logs) {
         sinceSeq = Math.max(sinceSeq, line.seq);
         const div = document.createElement('div');
-        div.className = 'logline ' + logLevelClass(line.text);
+        // Prompt/response dumps are huge and drown everything else; they
+        // are kept in the DOM but hidden unless "AI traffic" is ticked.
+        div.className = 'logline ' + (isAiTraffic(line.text) ? 'ai' : logLevelClass(line.text));
         div.innerHTML = `<span class="t">${esc(line.time)}</span>${esc(line.text)}`;
         box.appendChild(div);
       }
@@ -378,14 +660,28 @@ async function pollState() {
 }
 
 let seenAlertKeys = new Set();
+let lastAlertSig = '';
 function alertKey(a) {
   return a.kind === 'sell_signal'
     ? `exit|${a.direction || 'LONG'}|${a.ticker}|${a.time}|${a.reason}`
     : `news|${a.company}|${a.time}|${a.headline}`;
 }
 
+const EXIT_REASONS = {
+  target_hit: 'Target price reached',
+  stop_loss: 'Stop-loss reached',
+  horizon_expired: 'Time window expired without the move',
+};
+
 function renderAlerts(alerts) {
   const list = $('#alerts-list');
+  // The state poll runs every 2s; rebuilding a few hundred cards each
+  // time - and replaying the "new card" animation on every one - is
+  // wasted work when nothing changed.
+  const sig = alerts.map(alertKey).join('\n');
+  if (sig === lastAlertSig) return;
+  lastAlertSig = sig;
+  $('#alerts-count').textContent = alerts.length ? `${alerts.length} this session` : '';
   if (!alerts.length) { list.innerHTML = '<div class="empty">No alerts yet.</div>'; seenAlertKeys = new Set(); return; }
   list.innerHTML = alerts.map(a => {
     const isNew = !seenAlertKeys.has(alertKey(a));
@@ -395,7 +691,7 @@ function renderAlerts(alerts) {
       const isShort = a.direction === 'SHORT';
       // A short earns when the price falls, so show the position's P/L, not the stock's.
       const posPct = isShort ? -pct : pct;
-      const reasonText = a.reason === 'target_hit' ? 'Target price reached' : 'Time window expired without the move';
+      const reasonText = EXIT_REASONS[a.reason] || a.reason || '';
       const action = isShort ? 'Buy back to close the short CFD' : 'Sell to close the long CFD';
       return `<div class="card ${isShort ? 'alert-cover' : 'alert-sell'}${newCls}">
         <div class="row">
@@ -444,7 +740,8 @@ async function loadWatches() {
         <td><span class="badge ${w.direction === 'SHORT' ? 'side-short' : 'side-long'}">${w.direction === 'SHORT' ? 'Short' : 'Long'}</span></td>
         <td>$${fmtPrice(w.entry_price)}</td>
         <td>$${fmtPrice(w.target_price)}</td>
-        <td>${esc((w.expires_at || '').replace('T', ' ').slice(0, 16))}</td>
+        <td>${w.stop_loss_price ? '$' + fmtPrice(w.stop_loss_price) : '—'}</td>
+        <td>${esc((w.expires_at || '').replace('T', ' ').slice(0, 16))}${w.postponed_count ? ` <span class="meta" style="margin:0;" title="Horizon expired at a loss and was postponed">⏳×${w.postponed_count}</span>` : ''}</td>
         <td><button class="danger-btn" data-del="${esc(w.id)}">Remove</button></td>
       </tr>`).join('');
     $('#watches-body').querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', async () => {
@@ -459,7 +756,7 @@ loadWatches();
 setInterval(pollState, 2000);
 pollState();
 
-fetch('/api/engine').then(r => r.json()).then(d => { $('#engine').textContent = d.engine; });
+loadEngine();
 
 // --- Controls -----------------------------------------------------------
 $('#btn-start').addEventListener('click', () => fetch('/api/control', {
@@ -468,6 +765,130 @@ $('#btn-start').addEventListener('click', () => fetch('/api/control', {
 $('#btn-stop').addEventListener('click', () => fetch('/api/control', {
   method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'stop'})
 }).then(pollState));
+
+// --- Alert sensitivity ----------------------------------------------------
+// Weakest impact rating that raises an alert. Discrete stops, because the
+// analysers emit four labels - there is nothing between HIGH and CRITICAL.
+const SENS_HINTS = {
+  CRITICAL: 'Rarest. Only game-changing news; a handful a month.',
+  HIGH: 'Default. Significant events, 5-15% expected moves.',
+  MEDIUM: 'Louder. Routine news too — more alerts, more misreads.',
+  LOW: 'Everything not rejected outright. Expect a lot of noise.',
+};
+let sensLevels = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
+
+function renderSensitivity(level) {
+  const i = Math.max(0, sensLevels.indexOf(level));
+  const range = $('#sens-range');
+  range.max = String(sensLevels.length - 1);
+  range.value = String(i);
+  $('#sens-now').textContent = level + '+';
+  $('#sens-hint').textContent = SENS_HINTS[level] || '';
+  // Tick labels double as click targets - easier than dragging on a phone.
+  $('#sens-ticks').innerHTML = sensLevels.map((l, n) =>
+    `<span class="${n === i ? 'on' : ''}" data-level="${l}">${l}</span>`).join('');
+  $('#sens-ticks').querySelectorAll('[data-level]').forEach(el =>
+    el.addEventListener('click', () => setSensitivity(el.dataset.level)));
+}
+
+async function loadSensitivity() {
+  try {
+    const d = await (await fetch('/api/sensitivity')).json();
+    if (Array.isArray(d.levels) && d.levels.length) sensLevels = d.levels;
+    renderSensitivity(d.level);
+  } catch (e) { /* dashboard poll - try again next tick */ }
+}
+
+async function setSensitivity(level) {
+  try {
+    const res = await fetch('/api/sensitivity', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({level}),
+    });
+    const d = await res.json();
+    if (d.level) renderSensitivity(d.level);
+    else loadSensitivity();
+  } catch (e) {
+    loadSensitivity();   // never leave a value the server did not accept
+  }
+}
+
+// Label follows the drag; only the release is saved.
+$('#sens-range').addEventListener('input', (e) => {
+  const level = sensLevels[Number(e.target.value)];
+  $('#sens-now').textContent = level + '+';
+  $('#sens-hint').textContent = SENS_HINTS[level] || '';
+});
+$('#sens-range').addEventListener('change', (e) =>
+  setSensitivity(sensLevels[Number(e.target.value)]));
+
+loadSensitivity();
+
+// --- Stop-loss / profit protection ----------------------------------------
+async function loadStopLoss() {
+  try {
+    const d = await (await fetch('/api/stop-loss')).json();
+    $('#sl-input').value = d.pct ? d.pct : '';
+    $('#sl-now').textContent = d.pct ? d.pct + '%' : 'Off';
+  } catch (e) { /* dashboard poll - try again next tick */ }
+}
+$('#sl-save').addEventListener('click', async () => {
+  const pct = Number($('#sl-input').value) || 0;
+  try {
+    const res = await fetch('/api/stop-loss', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({pct}),
+    });
+    const d = await res.json();
+    if (typeof d.pct === 'number') {
+      $('#sl-input').value = d.pct ? d.pct : '';
+      $('#sl-now').textContent = d.pct ? d.pct + '%' : 'Off';
+    } else loadStopLoss();
+  } catch (e) { loadStopLoss(); }
+});
+loadStopLoss();
+
+// --- Notification mute ----------------------------------------------------
+// Master switch for phone alerts. Muting stops only the push to ntfy.sh:
+// scanning, analysis, watches and the paper record all carry on.
+function renderNotifyToggle(state) {
+  const wrap = $('#notify-toggle');
+  const box = $('#notify-switch');
+  const label = $('#notify-label');
+  box.checked = !!state.enabled;
+  wrap.classList.toggle('muted', !state.enabled);
+  // A configured-but-topicless app looks "on" while delivering nothing;
+  // say so rather than letting it read as working.
+  const noTopic = state.enabled && !state.has_topic;
+  wrap.classList.toggle('no-topic', noTopic);
+  label.textContent = !state.enabled ? 'Muted' : (noTopic ? 'No topic' : 'Alerts');
+  wrap.title = !state.enabled
+    ? 'Phone alerts are muted. Scanning and the paper record continue.'
+    : (noTopic ? 'No ntfy topic is set, so nothing can be delivered.'
+               : 'Phone alerts are on.');
+}
+
+async function loadNotifyState() {
+  try {
+    renderNotifyToggle(await (await fetch('/api/notifications')).json());
+  } catch (e) { /* dashboard poll - try again next tick */ }
+}
+
+$('#notify-switch').addEventListener('change', async (e) => {
+  const wanted = e.target.checked;
+  try {
+    const res = await fetch('/api/notifications', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({enabled: wanted}),
+    });
+    renderNotifyToggle(await res.json());
+  } catch (err) {
+    // Never leave the switch showing a state the server did not accept.
+    e.target.checked = !wanted;
+  }
+});
+
+loadNotifyState();
 
 $('#btn-test-notify').addEventListener('click', async () => {
   const btn = $('#btn-test-notify');
@@ -487,7 +908,10 @@ $('#btn-test-notify').addEventListener('click', async () => {
 
 $('#logbox').addEventListener('scroll', () => {
   const box = $('#logbox');
-  autoscroll = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  // Scrolling away from the bottom pauses auto-scroll; only re-enable it
+  // on reaching the bottom if the checkbox still wants it.
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  autoscroll = atBottom && $('#log-autoscroll').checked;
   if (autoscroll) pendingNewLogs = 0;
   updateJumpButton();
 });
@@ -495,35 +919,246 @@ $('#logbox').addEventListener('scroll', () => {
 $('#jump-latest').addEventListener('click', () => {
   const box = $('#logbox');
   autoscroll = true;
+  $('#log-autoscroll').checked = true;
   pendingNewLogs = 0;
   box.scrollTop = box.scrollHeight;
   updateJumpButton();
 });
 
+$('#log-autoscroll').addEventListener('change', (e) => {
+  autoscroll = e.target.checked;
+  if (autoscroll) { const box = $('#logbox'); box.scrollTop = box.scrollHeight; pendingNewLogs = 0; }
+  updateJumpButton();
+});
+
+$('#log-ai').addEventListener('change', (e) => {
+  document.body.classList.toggle('show-ai', e.target.checked);
+  if (autoscroll) { const box = $('#logbox'); box.scrollTop = box.scrollHeight; }
+});
+
+$('#log-clear').addEventListener('click', () => {
+  $('#logbox').innerHTML = '';
+  pendingNewLogs = 0;
+  updateJumpButton();
+});
+
+$('#alerts-clear').addEventListener('click', async () => {
+  try {
+    await fetch('/api/alerts', {method: 'DELETE'});
+    lastAlertSig = null;   // force a redraw on the next poll
+    pollState();
+  } catch (e) { /* server unreachable - the next poll will show the truth */ }
+});
+
 // --- Portfolio ------------------------------------------------------------
 $('#pf-date').value = new Date().toISOString().slice(0, 10);
 
-async function loadPortfolio() {
-  const data = await (await fetch('/api/portfolio')).json();
+function renderHoldingsRows(rows, pending) {
   const body = $('#pf-body');
-  const tickers = Object.keys(data);
-  body.innerHTML = tickers.length ? tickers.map(t => `
-    <tr><td>${esc(t)}</td><td>${Number(data[t].shares || 0)}</td><td>$${Number(data[t].buy_price || 0).toFixed(2)}</td>
-    <td><button class="danger-btn" data-del="${esc(t)}">Remove</button></td></tr>
-  `).join('') : '<tr><td colspan="4" class="empty">No holdings yet.</td></tr>';
+  if (!rows.length) { body.innerHTML = '<tr><td colspan="7" class="empty">No holdings yet.</td></tr>'; return; }
+  body.innerHTML = rows.map(h => {
+    const live = h.price ? '$' + fmtPrice(h.price) : (pending ? '…' : '<span class="down">ERR</span>');
+    const pl = h.pl_pct === null || h.pl_pct === undefined ? (h.buy_price > 0 ? '—' : '<span class="meta" style="margin:0">no buy price</span>')
+      : `<span class="${h.pl_pct >= 0 ? 'up' : 'down'}">${h.pl_pct >= 0 ? '+' : ''}${h.pl_pct.toFixed(2)}%</span>`;
+    const gain = h.gain_per_share === null || h.gain_per_share === undefined ? '—'
+      : `<span class="${h.gain_per_share >= 0 ? 'up' : 'down'}">${h.gain_per_share >= 0 ? '+' : '-'}$${fmtPrice(Math.abs(h.gain_per_share))}</span>`;
+    return `<tr>
+      <td><strong>${esc(h.ticker)}</strong></td>
+      <td class="num">${Number(h.shares || 0) || '—'}</td>
+      <td class="num">${h.buy_price > 0 ? '$' + fmtPrice(h.buy_price) : '—'}</td>
+      <td class="num">${live}</td>
+      <td class="num">${pl}</td>
+      <td class="num">${gain}</td>
+      <td><button class="danger-btn" data-del="${esc(h.ticker)}">Remove</button></td>
+    </tr>`;
+  }).join('');
   body.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', async () => {
     await fetch('/api/portfolio/' + encodeURIComponent(b.dataset.del), {method: 'DELETE'});
     loadPortfolio();
-    loadPortfolioSummary();
-    loadPortfolioHistory();
   }));
+}
+
+async function loadPortfolio() {
+  // Draw the holdings immediately from the cheap endpoint, then fill in
+  // live prices when the quote call returns.
+  const data = await (await fetch('/api/portfolio')).json();
+  renderHoldingsRows(Object.entries(data).map(([ticker, d]) => ({
+    ticker, shares: d.shares || 0, buy_price: d.buy_price || 0, price: null, pl_pct: null, gain_per_share: null,
+  })), true);
   loadPortfolioSummary();
   loadPortfolioHistory();
+  loadPaper();
+}
+
+$('#pf-refresh').addEventListener('click', loadPortfolio);
+$('#pf-clear').addEventListener('click', async () => {
+  if (!confirm('Remove every holding from the portfolio?')) return;
+  await fetch('/api/portfolio', {method: 'DELETE'});
+  loadPortfolio();
+});
+
+// --- Paper trading --------------------------------------------------------
+// The app's own track record, shown under the real holdings. Realised and
+// unrealised are kept visually apart on purpose: only closed trades are
+// evidence, and an open position's paper gain can evaporate before its
+// signal fires.
+const PP_MIN_TRADES = 30;
+
+function pctText(v, places) {
+  if (v === null || v === undefined) return '—';
+  const p = v * 100;
+  return (p >= 0 ? '+' : '') + p.toFixed(places === undefined ? 2 : places) + '%';
+}
+function pctClass(v) {
+  if (v === null || v === undefined) return '';
+  return v >= 0 ? 'up' : 'down';
+}
+
+async function loadPaper() {
+  let d;
+  try {
+    d = await (await fetch('/api/paper')).json();
+  } catch (e) { return; }
+
+  const sec = $('#paper-section');
+  if (!d || d.enabled === false) { sec.style.display = 'none'; return; }
+  sec.style.display = 'block';
+  $('#pp-cost').textContent = ((d.cost_pct || 0) * 100).toFixed(2) + '%';
+
+  const s = d.stats;
+  const warn = $('#pp-warn');
+
+  if (s) {
+    const exp = $('#pp-stat-exp');
+    exp.textContent = pctText(s.expectancy);
+    exp.className = 'n ' + pctClass(s.expectancy);
+    $('#pp-stat-win').textContent = (s.win_rate * 100).toFixed(0) + '%';
+    const al = $('#pp-stat-alpha');
+    al.textContent = pctText(s.avg_alpha);
+    al.className = 'n ' + pctClass(s.avg_alpha);
+  } else {
+    ['#pp-stat-exp', '#pp-stat-win', '#pp-stat-alpha'].forEach(id => {
+      $(id).textContent = '—'; $(id).className = 'n';
+    });
+  }
+  $('#pp-stat-open').textContent = String(d.open_count || 0);
+
+  // One honest caveat at a time, most important first.
+  const n = s ? s.trades : 0;
+  if (!s) {
+    warn.style.display = 'block';
+    warn.textContent = d.open_count
+      ? 'No closed trades yet — a trade only counts once its sell/cover signal fires.'
+      : 'Nothing recorded yet. The ledger fills as alerts fire; with the HIGH/CRITICAL filter that is a slow drip.';
+  } else if (n < PP_MIN_TRADES) {
+    warn.style.display = 'block';
+    warn.textContent = `Only ${n} closed trade${n === 1 ? '' : 's'}. Below about ${PP_MIN_TRADES} these figures are noise — a run of luck looks identical to an edge. Keep it running.`;
+  } else if (s.avg_alpha !== null && s.avg_alpha <= 0 && s.expectancy > 0) {
+    warn.style.display = 'block';
+    warn.textContent = 'Profitable, but not beating the market over the same windows — the gains look like drift rather than the analyser picking winners.';
+  } else {
+    warn.style.display = 'none';
+  }
+
+  // Open positions.
+  const ob = $('#pp-open-body');
+  ob.innerHTML = (d.positions && d.positions.length) ? d.positions.map(p => {
+    const prog = p.progress === null || p.progress === undefined
+      ? '—'
+      : `<div class="prog"><i style="width:${Math.max(0, Math.min(1, p.progress)) * 100}%"></i><span class="num">${(p.progress * 100).toFixed(0)}%</span></div>`;
+    return `<tr>
+      <td><strong>${esc(p.ticker)}</strong></td>
+      <td><span class="pill ${p.direction === 'SHORT' ? 'short' : 'long'}">${p.direction === 'SHORT' ? 'Short' : 'Long'}</span></td>
+      <td class="num">${fmtPrice(p.entry_price)}</td>
+      <td class="num">${p.current_price ? fmtPrice(p.current_price) : '—'}</td>
+      <td class="num ${pctClass(p.unrealised_pct)}">${pctText(p.unrealised_pct)}</td>
+      <td>${prog}</td>
+      <td class="num" style="color:var(--text-mute)">${esc((p.opened_at || '').slice(5, 16).replace('T', ' '))}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="7" class="empty">No open positions.</td></tr>';
+
+  // Closed trades.
+  const cb = $('#pp-closed-body');
+  const closed = d.closed_recent || [];
+  cb.innerHTML = closed.length ? closed.map(t => `
+    <tr>
+      <td class="num" style="color:var(--text-mute)">${esc((t.closed_at || '').slice(5, 16).replace('T', ' '))}</td>
+      <td><strong>${esc(t.ticker)}</strong></td>
+      <td><span class="pill ${t.direction === 'SHORT' ? 'short' : 'long'}">${t.direction === 'SHORT' ? 'Short' : 'Long'}</span></td>
+      <td class="num">${fmtPrice(t.entry_price)}</td>
+      <td class="num">${t.exit_price !== null ? fmtPrice(t.exit_price) : '—'}</td>
+      <td class="num ${pctClass(t.net_pct)}"><strong>${pctText(t.net_pct)}</strong></td>
+      <td style="color:var(--text-mute)">${({target_hit: 'target hit', stop_loss: 'stop-loss', horizon_expired: 'time stop'})[t.reason] || esc(t.reason || '')}</td>
+    </tr>`).join('') : '<tr><td colspan="7" class="empty">No closed trades yet.</td></tr>';
+
+  // Equity curve.
+  const card = $('#pp-chart-card');
+  if (s && s.equity_curve && s.equity_curve.length > 1) {
+    card.style.display = 'block';
+    $('#pp-chart-sub').textContent =
+      `${s.trades} trades · max drawdown -${(s.max_drawdown * 100).toFixed(1)}%`;
+    drawPaperChart(s.equity_curve);
+  } else {
+    card.style.display = 'none';
+  }
+}
+
+function drawPaperChart(curve) {
+  const canvas = $('#pp-chart');
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight || 150;
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  const vals = curve.map(p => p.equity);
+  const start = vals[0], last = vals[vals.length - 1];
+  // The starting capital is the reference line, so it must be inside the
+  // range even when every trade so far has gone one way.
+  const all = vals.concat([start]);
+  let min = Math.min(...all), max = Math.max(...all);
+  if (max === min) { max += 1; min -= 1; }
+  const pad = (max - min) * 0.12;
+  min -= pad; max += pad;
+
+  const pl = 8, pr = 8, pt = 10, pb = 10;
+  const x = i => pl + (i / Math.max(1, vals.length - 1)) * (w - pl - pr);
+  const y = v => pt + (1 - (v - min) / (max - min)) * (h - pt - pb);
+
+  // Break-even line.
+  ctx.strokeStyle = '#2C3444';
+  ctx.setLineDash([3, 4]);
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(pl, y(start)); ctx.lineTo(w - pr, y(start)); ctx.stroke();
+  ctx.setLineDash([]);
+
+  const up = last >= start;
+  const line = up ? '#3DDC84' : '#FF5C6C';
+  const fill = up ? 'rgba(61,220,132,0.12)' : 'rgba(255,92,108,0.12)';
+
+  ctx.beginPath();
+  ctx.moveTo(x(0), y(vals[0]));
+  vals.forEach((v, i) => ctx.lineTo(x(i), y(v)));
+  ctx.lineTo(x(vals.length - 1), y(start));
+  ctx.lineTo(x(0), y(start));
+  ctx.closePath();
+  ctx.fillStyle = fill; ctx.fill();
+
+  ctx.beginPath();
+  ctx.moveTo(x(0), y(vals[0]));
+  vals.forEach((v, i) => ctx.lineTo(x(i), y(v)));
+  ctx.strokeStyle = line; ctx.lineWidth = 2;
+  ctx.lineJoin = 'round'; ctx.stroke();
+
+  ctx.fillStyle = line;
+  ctx.beginPath(); ctx.arc(x(vals.length - 1), y(last), 3, 0, Math.PI * 2); ctx.fill();
 }
 
 async function loadPortfolioSummary() {
   try {
     const s = await (await fetch('/api/portfolio/summary')).json();
+    if (Array.isArray(s.holdings)) renderHoldingsRows(s.holdings, false);
     $('#pf-stat-value').textContent = '$' + Number(s.total_value || 0).toFixed(2);
     const profit = Number(s.total_profit || 0);
     const profitEl = $('#pf-stat-profit');
@@ -648,11 +1283,26 @@ $('#src-add').addEventListener('click', async () => {
   const res = await fetch('/api/sources', {method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({name, url, type})});
   if (res.ok) { $('#src-name').value = ''; $('#src-url').value = ''; }
+  else { const d = await res.json().catch(() => ({})); alert(d.error || 'Could not add source'); }
+  loadSources();
+});
+$('#src-reset').addEventListener('click', async () => {
+  if (!confirm('Replace your sources with the default set?')) return;
+  await fetch('/api/sources/reset', {method: 'POST'});
   loadSources();
 });
 
 // --- Keywords ---------------------------------------------------------------
+async function loadEngine() {
+  try {
+    const d = await (await fetch('/api/engine')).json();
+    $('#engine').textContent = d.engine || '';
+    $('#kw-inactive').style.display = d.ai_active ? 'block' : 'none';
+  } catch (e) { /* dashboard poll - try again next tick */ }
+}
+
 async function loadKeywords() {
+  loadEngine();
   const data = await (await fetch('/api/keywords')).json();
   const render = (obj, type) => Object.entries(obj).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).map(([k, w]) => `
     <div class="kw-item"><span>${esc(k)} <span class="meta">${w}</span></span>
@@ -674,6 +1324,122 @@ $('#kw-add').addEventListener('click', async () => {
     body: JSON.stringify({keyword, weight, type})});
   $('#kw-word').value = ''; $('#kw-weight').value = '';
   loadKeywords();
+});
+$('#kw-reset').addEventListener('click', async () => {
+  if (!confirm('Replace your keywords with the built-in set?')) return;
+  await fetch('/api/keywords/reset', {method: 'POST'});
+  loadKeywords();
+});
+
+// --- Settings ---------------------------------------------------------------
+// The desktop app's Settings dialog, for a backend that only exists as a
+// service on a VM. Everything saved here applies live (see /api/settings).
+function currentEngineChoice() {
+  return document.querySelector('input[name="engine"]:checked')?.value || 'keywords';
+}
+
+function refreshEngineFields() {
+  const choice = currentEngineChoice();
+  $('#st-cloud-fields').style.display = choice === 'cloud' ? 'grid' : 'none';
+  $('#st-local-fields').style.display = choice === 'local' ? 'grid' : 'none';
+}
+document.querySelectorAll('input[name="engine"]').forEach(r => r.addEventListener('change', refreshEngineFields));
+
+function setSettingsMsg(text, cls) {
+  const el = $('#st-msg');
+  el.textContent = text;
+  el.className = 'status-msg ' + (cls || '');
+}
+
+function renderSettings(s) {
+  $('#st-topic').value = s.NTFY_TOPIC || '';
+  $('#st-ownership').checked = !!s.NOTIFY_OWNERSHIP;
+
+  const choice = s.USE_CLOUD_AI ? 'cloud' : (s.USE_LOCAL_LLM ? 'local' : 'keywords');
+  document.querySelectorAll('input[name="engine"]').forEach(r => { r.checked = r.value === choice; });
+  refreshEngineFields();
+  $('#st-engine-now').textContent = s.engine ? 'now: ' + s.engine : '';
+
+  const sel = $('#st-provider');
+  sel.innerHTML = (s.providers || []).map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
+  sel.value = s.CLOUD_AI_PROVIDER || '';
+  $('#st-cloud-model').value = s.CLOUD_AI_MODEL || '';
+  $('#st-cloud-url').value = s.CLOUD_AI_BASE_URL || '';
+  $('#st-cloud-key').value = '';
+  $('#st-cloud-key').placeholder = s.cloud_api_key_set ? 'Leave blank to keep the stored key' : 'Paste your API key';
+  $('#st-key-hint').textContent = s.cloud_api_key_set
+    ? `A key is stored${s.cloud_api_key_hint ? ' (' + s.cloud_api_key_hint + ')' : ''}. It is never shown here.`
+    : 'No key stored yet.';
+  $('#st-clear-key').checked = false;
+
+  $('#st-local-model').value = s.LOCAL_MODEL_NAME || '';
+  $('#st-threads').value = s.OLLAMA_NUM_THREADS || 1;
+  $('#st-ollama-url').value = s.OLLAMA_URL || '';
+
+  $('#st-cost').value = ((s.PAPER_COST_PCT || 0) * 100).toFixed(2);
+
+  $('#st-user').value = s.DASHBOARD_USERNAME || '';
+  $('#st-pass').value = '';
+  $('#st-pass').placeholder = s.dashboard_password_set ? 'Leave blank to keep the current password' : 'No password set - dashboard is open';
+
+  $('#engine').textContent = s.engine || '';
+  $('#kw-inactive').style.display = s.ai_active ? 'block' : 'none';
+}
+
+async function loadSettings() {
+  try {
+    renderSettings(await (await fetch('/api/settings')).json());
+    setSettingsMsg('', '');
+  } catch (e) { setSettingsMsg('Could not load settings.', 'err'); }
+}
+
+$('#st-save').addEventListener('click', async () => {
+  const choice = currentEngineChoice();
+  const cost = Number($('#st-cost').value);
+  if (!isFinite(cost) || cost < 0 || cost >= 100) { setSettingsMsg('Cost % must be between 0 and 100.', 'err'); return; }
+  const threads = parseInt($('#st-threads').value, 10);
+  const body = {
+    NTFY_TOPIC: $('#st-topic').value.trim(),
+    NOTIFY_OWNERSHIP: $('#st-ownership').checked,
+    USE_CLOUD_AI: choice === 'cloud',
+    USE_LOCAL_LLM: choice === 'local',
+    CLOUD_AI_PROVIDER: $('#st-provider').value,
+    CLOUD_AI_MODEL: $('#st-cloud-model').value.trim(),
+    CLOUD_AI_BASE_URL: $('#st-cloud-url').value.trim(),
+    CLOUD_AI_API_KEY: $('#st-cloud-key').value,
+    clear_api_key: $('#st-clear-key').checked,
+    LOCAL_MODEL_NAME: $('#st-local-model').value.trim(),
+    OLLAMA_NUM_THREADS: isFinite(threads) && threads >= 1 ? threads : 1,
+    OLLAMA_URL: $('#st-ollama-url').value.trim(),
+    PAPER_COST_PCT: cost / 100,
+    DASHBOARD_USERNAME: $('#st-user').value.trim(),
+    DASHBOARD_PASSWORD: $('#st-pass').value,
+  };
+  const passwordChanged = !!body.DASHBOARD_PASSWORD;
+  const btn = $('#st-save');
+  btn.disabled = true;
+  setSettingsMsg('Saving…', '');
+  try {
+    const res = await fetch('/api/settings', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    const d = await res.json();
+    if (!res.ok) { setSettingsMsg(d.error || 'Save failed.', 'err'); }
+    else {
+      renderSettings(d);
+      setSettingsMsg(passwordChanged ? 'Saved and applied. Reload the page and sign in with the new password.' : 'Saved and applied.', 'ok');
+      loadNotifyState();
+    }
+  } catch (e) { setSettingsMsg('Save failed - server unreachable.', 'err'); }
+  btn.disabled = false;
+});
+
+$('#st-reload').addEventListener('click', async () => {
+  setSettingsMsg('Reloading…', '');
+  try {
+    const res = await fetch('/api/reload', {method: 'POST'});
+    renderSettings(await res.json());
+    setSettingsMsg('Reloaded settings, portfolio, sources and keywords from disk.', 'ok');
+    loadSensitivity(); loadStopLoss(); loadNotifyState();
+  } catch (e) { setSettingsMsg('Reload failed.', 'err'); }
 });
 </script>
 </body>

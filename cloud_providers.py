@@ -16,6 +16,11 @@ must never raise out of complete() - on failure it logs and returns None so
 one bad call doesn't take down the scan loop.
 """
 
+# Seconds to wait for one completion. Generous for a long article, but far
+# below the SDKs' 10-minute defaults, which would freeze the scan loop on a
+# single stuck connection.
+REQUEST_TIMEOUT = 120
+
 
 class BaseCloudProvider:
     """Common constructor + logging for every provider.
@@ -53,7 +58,10 @@ class AnthropicProvider(BaseCloudProvider):
         except ImportError:
             raise ImportError("The 'anthropic' package is not installed. Run: pip install anthropic")
         self._sdk = anthropic
-        self._client = anthropic.Anthropic(api_key=self.api_key, base_url=self.base_url)
+        # The SDK default timeout is 10 minutes; one hung request would
+        # stall the whole scan loop for that long.
+        self._client = anthropic.Anthropic(api_key=self.api_key, base_url=self.base_url,
+                                           timeout=REQUEST_TIMEOUT)
 
     def complete(self, prompt, system=None):
         anthropic = self._sdk
@@ -79,6 +87,10 @@ class AnthropicProvider(BaseCloudProvider):
             self._log(f"Cloud AI Error ({e.status_code}): {e.message}")
         except anthropic.APIConnectionError as e:
             self._log(f"Cloud AI Error: connection failed ({e}).")
+        except Exception as e:
+            # The contract is "never raise": anything else (a malformed
+            # response, an SDK bug) must not take the scan loop down.
+            self._log(f"Cloud AI Error: {type(e).__name__}: {e}")
         return None
 
 
@@ -96,7 +108,8 @@ class OpenAIProvider(BaseCloudProvider):
         except ImportError:
             raise ImportError("The 'openai' package is not installed. Run: pip install openai")
         self._sdk = openai
-        self._client = openai.OpenAI(api_key=self.api_key, base_url=self.base_url)
+        self._client = openai.OpenAI(api_key=self.api_key, base_url=self.base_url,
+                                     timeout=REQUEST_TIMEOUT)
 
     def complete(self, prompt, system=None):
         openai = self._sdk
@@ -121,6 +134,8 @@ class OpenAIProvider(BaseCloudProvider):
             self._log(f"Cloud AI Error ({e.status_code}): {e.message}")
         except openai.APIConnectionError as e:
             self._log(f"Cloud AI Error: connection failed ({e}).")
+        except Exception as e:
+            self._log(f"Cloud AI Error: {type(e).__name__}: {e}")
         return None
 
 
