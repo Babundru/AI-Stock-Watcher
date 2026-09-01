@@ -377,18 +377,28 @@ class StockAppBackend:
             is_owned = self.portfolio_mgr.has_stock(stock_id)
             self.notifier.notify(target, article, analysis, is_owned=is_owned)
 
-            # Open a watch so we can later tell the user when to sell: only
-            # for POSITIVE (buy-signal) alerts, and only if we can price it.
-            if sentiment == 'POSITIVE' and ticker:
+            # Open a watch so we can later tell the user when to close the
+            # position: POSITIVE opens a long (buy now, sell on the signal),
+            # NEGATIVE opens a short (sell a CFD short now, buy it back on
+            # the signal). Needs a ticker we can actually price.
+            if sentiment in ('POSITIVE', 'NEGATIVE') and ticker:
+                direction = 'LONG' if sentiment == 'POSITIVE' else 'SHORT'
                 entry_price = price_lookup.fetch_prices([ticker]).get(ticker)
                 if entry_price:
-                    self.watch_mgr.add_watch(
+                    watch = self.watch_mgr.add_watch(
                         ticker, target, entry_price, impact,
                         analysis.get('horizon'), prediction,
                         article_url=url, article_headline=title,
+                        direction=direction,
                     )
+                    if watch:
+                        verb = 'BUY' if direction == 'LONG' else 'SHORT'
+                        self.log(f"  {verb} {ticker} at {entry_price:.2f} "
+                                 f"-> exit target {watch['target_price']:.2f}")
+                    else:
+                        self.log(f"  ({ticker} already has an open position - no new watch)")
                 else:
-                    self.log(f"  (couldn't price {ticker} - no sell watch opened)")
+                    self.log(f"  (couldn't price {ticker} - no exit watch opened)")
 
             self.stats['alerts'] += 1
             self._save_stats()
@@ -417,12 +427,13 @@ class StockAppBackend:
 
     def _check_watches(self):
         """Check every open watch's current price against its target/expiry
-        and close+notify any that have resolved (see watch_manager.py)."""
+        and close+notify any that have resolved - a sell signal for longs,
+        a buy-back signal for shorts (see watch_manager.py)."""
         open_watches = self.watch_mgr.get_open_watches()
         if not open_watches:
             return
 
-        self.log(f"👀 Checking {len(open_watches)} open watch(es) for sell signals...")
+        self.log(f"👀 Checking {len(open_watches)} open watch(es) for exit signals...")
         tickers = list({w['ticker'] for w in open_watches})
         prices = price_lookup.fetch_prices(tickers)
         now = now_local()
@@ -434,7 +445,7 @@ class StockAppBackend:
 
             expires_at = datetime.datetime.fromisoformat(watch['expires_at'])
             reason = None
-            if price >= watch['target_price']:
+            if self.watch_mgr.target_reached(watch, price):
                 reason = 'target_hit'
             elif now >= expires_at:
                 reason = 'horizon_expired'
@@ -446,11 +457,14 @@ class StockAppBackend:
             if not closed:
                 continue
 
-            self.log(f"💰 SELL SIGNAL: {watch['company']} ({watch['ticker']}) - {reason}")
+            direction = watch.get('direction', 'LONG')
+            signal = 'COVER SHORT' if direction == 'SHORT' else 'SELL'
+            self.log(f"💰 {signal} SIGNAL: {watch['company']} ({watch['ticker']}) - {reason}")
             self.notifier.notify_sell(
                 watch['ticker'], watch['company'], reason,
                 watch['entry_price'], price, watch['target_price'],
                 article_url=watch.get('article_url'),
+                direction=direction,
             )
 
             if self.alert_callback:
@@ -460,6 +474,7 @@ class StockAppBackend:
                         'kind': 'sell_signal',
                         'company': watch['company'],
                         'ticker': watch['ticker'],
+                        'direction': direction,
                         'reason': reason,
                         'entry_price': watch['entry_price'],
                         'current_price': price,

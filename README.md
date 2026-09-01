@@ -172,6 +172,35 @@ higher relevance.
 **You will only be notified when sentiment is clearly positive or negative
 *and* impact is HIGH or CRITICAL.** Everything else is logged but not sent.
 
+### Entry and exit alerts
+
+Every alert that passes the filter comes in two parts: the news alert telling
+you to open a position, and a later alert telling you to close it.
+
+| News | Entry alert says | The app then watches for | Exit alert says |
+|---|---|---|---|
+| Positive | **BUY** — open a long CFD | the price rising to the target | **SELL SIGNAL** — close the long |
+| Negative | **SHORT** — open a short CFD | the price falling to the target | **COVER SHORT** — buy the CFD back |
+
+The target is 5% away from the price at the moment of the alert, or 10% for
+CRITICAL impact — above entry for a long, below it for a short. If the move
+does not happen within the expected window (1 day, 5 days, or 21 days,
+depending on how far ahead the analyser expects the news to matter), the exit
+alert fires anyway as a time stop, telling you to reassess rather than sit in
+the position indefinitely.
+
+The exit alert reports both the raw price move and your profit or loss *on the
+position* — for a short those have opposite signs, since a short earns when the
+price falls. Open positions awaiting their exit alert are listed in the
+**Watching** card at the top of the Alerts tab, tagged Long or Short.
+
+Only one position per stock is watched at a time: if a stock you already have
+an open watch on gets alerted again, no second watch is opened.
+
+> Shorting via CFDs carries losses that are not capped by the amount you put
+> in — a stock can rise without limit. These alerts are a news-timing aid, not
+> a risk-managed strategy, and they say nothing about position size.
+
 **Analysis is slow, and that is normal.** A local model takes roughly one
 minute per article on CPU, so a scan of a dozen articles can take well over ten
 minutes. The Logs tab shows the prompt sent and the reply received, so you can

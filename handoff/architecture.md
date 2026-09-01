@@ -28,7 +28,8 @@ Runs in a daemon thread, started by `.start()`. Every `CHECK_INTERVAL`
    processed URLs, `data/processed_urls.json`) -> analyze
    (`self.analyzer.analyze_article`, one of three interchangeable engines,
    see `ai_engines.md`) -> notify if POSITIVE/NEGATIVE + HIGH/CRITICAL
-   impact + not FLAT prediction -> open a sell-signal watch if POSITIVE
+   impact + not FLAT prediction -> open an exit-signal watch (LONG for
+   POSITIVE, SHORT for NEGATIVE)
 5. Every `WATCH_CHECK_INTERVAL` (5 min): `_check_watches` prices every
    open watch and closes+notifies any that hit their target or expired
    (see `portfolio_and_notifications.md`)
@@ -58,7 +59,7 @@ main.py              StockAppBackend - the scan loop, orchestrates everything be
 ├── ollama_manager.py     Spawns/manages a local `ollama serve` process (Windows-only)
 ├── notifier.py            ntfy.sh push notifications + US market-hours check
 ├── portfolio_manager.py  Holdings (data/portfolio.json)
-├── watch_manager.py       Sell-signal watches opened after a POSITIVE alert (data/watches.json)
+├── watch_manager.py       Long/short exit watches opened after an alert (data/watches.json)
 ├── price_lookup.py        Batched yfinance quote lookup, shared by watch-checking + portfolio summary
 └── portfolio_history.py  Reconstructs daily portfolio value history via yfinance (server.py only)
 

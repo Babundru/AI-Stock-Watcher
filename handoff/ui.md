@@ -24,7 +24,8 @@ activity line, engine label. Below that, tabs: **Alerts** (default),
   status, and stats. Drives the header, the Logs tab, and the Alerts tab.
 - `loadWatches()` every 15s -> `GET /api/watches`, filtered client-side to
   `status === 'OPEN'` for the "Watching" card above the alert list (hidden
-  entirely when there are none).
+  entirely when there are none). Each row shows a Long/Short badge from the
+  watch's `direction`.
 - Portfolio tab loads on-demand (tab click, not polled): `GET
   /api/portfolio` (holdings table), `GET /api/portfolio/summary` (cheap
   live value/profit stat tiles), `GET /api/portfolio/history` (heavier -
@@ -36,9 +37,13 @@ activity line, engine label. Below that, tabs: **Alerts** (default),
 ### Alert rendering (`renderAlerts`)
 
 Two shapes share the same list: a regular news alert (sentiment badge,
-impact/prediction line, explanation, source link) and a sell-signal alert
-(`a.kind === 'sell_signal'`, distinct amber "SELL SIGNAL" badge, shows
-entry->current price and % change instead of sentiment). Both come back
+impact/prediction line, explanation, source link) and an exit-signal alert
+(`a.kind === 'sell_signal'`, shows entry->current price and % change
+instead of sentiment). The exit card reads off `a.direction`: an amber
+"SELL SIGNAL" badge for a long, a blue "COVER SHORT" one for a short, with
+the matching close action ("Sell to close the long CFD" / "Buy back to
+close the short CFD") and the P/L restated from the position's side, since
+a short earns when the price falls. Both come back
 from the same `/api/state` alerts array - `main.py`'s two different
 `alert_callback` payload shapes (see `main.py: _process_article` vs.
 `_check_watches`) are what `kind` distinguishes.
