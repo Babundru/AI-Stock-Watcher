@@ -153,7 +153,8 @@ class Notifier:
         Args:
             ticker: Stock ticker
             company: Company name
-            reason: "target_hit", "stop_loss", or "horizon_expired"
+            reason: "target_hit", "stop_loss", "horizon_expired",
+                "max_age" or "max_postponed"
             entry_price: Price when the original alert fired
             current_price: Price now
             target_price: Price that would have counted as the move "playing out"
@@ -172,6 +173,14 @@ class Notifier:
         elif reason == "stop_loss":
             emoji = "🛑"
             reason_text = "Stop-loss reached - closing now to cap the loss."
+        elif reason == "max_age":
+            emoji = "📅"
+            reason_text = ("Held the maximum time without resolving - this is no longer "
+                           "tracking the news it was opened on. Closing at the current price.")
+        elif reason == "max_postponed":
+            emoji = "⏱"
+            reason_text = ("Postponed as long as allowed and still not in profit - "
+                           "closing rather than holding it open indefinitely.")
         else:
             emoji = "⏰"
             reason_text = "Expected time window passed without the alerted-on move happening - reassess the position."

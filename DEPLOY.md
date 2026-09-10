@@ -60,13 +60,45 @@ pip install -r requirements-server.txt
 `requirements-server.txt` skips `customtkinter`/`matplotlib` - those exist
 only for the desktop GUI (`gui.py`) and are unnecessary weight here. It does
 include `yfinance`/`pandas`, which the server side now needs too (sell-signal
-watches and the portfolio value/profit graph). If `pip install` gets
-OOM-killed on `e2-micro`, add a small swapfile first:
+watches and the portfolio value/profit graph).
+
+### Add zram swap first - not a swapfile
+
+1GB with no swap at all is the single most dangerous part of this setup. When
+memory runs out the kernel does *not* necessarily OOM-kill anything: it can
+instead settle into permanent reclaim, where the box stays `RUNNING` while
+journald logs `Under memory pressure, flushing caches` every minute, sshd
+can't fork, `tailscaled` stops answering, and `systemctl` times out talking
+to PID 1. The VM looks frozen and only a hard reset recovers it.
+
+Use **zram** (compressed swap in RAM), not a swapfile. A 30GB
+Standard persistent disk has a baseline of roughly 45 write / 22 read IOPS,
+so swapping to `/swapfile` makes that livelock *worse* - the box ends up
+waiting on a disk that can't keep up. zram costs no disk I/O at all:
 
 ```bash
-sudo fallocate -l 1G /swapfile && sudo chmod 600 /swapfile
-sudo mkswap /swapfile && sudo swapon /swapfile
-echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+sudo apt install -y zram-tools
+sudo tee /etc/default/zramswap >/dev/null <<'EOF'
+ALGO=zstd
+PERCENT=50
+PRIORITY=100
+EOF
+sudo systemctl restart zramswap
+swapon --show          # expect a /dev/zram0 device of ~500M
+```
+
+With zstd compression a 500MB zram device typically holds well over a
+gigabyte of real pages, so it buys back a few hundred MB of usable memory
+for the cost of a little CPU.
+
+Also silence the kernel's martian-source logging. On GCE this fires every
+few seconds forever, and it is pure noise that costs journald writes on a
+disk with no IOPS to spare - it can be a quarter of your entire serial log:
+
+```bash
+echo 'net.ipv4.conf.all.log_martians=0'     | sudo tee /etc/sysctl.d/99-quiet.conf
+echo 'net.ipv4.conf.default.log_martians=0' | sudo tee -a /etc/sysctl.d/99-quiet.conf
+sudo sysctl --system
 ```
 
 ## 4. Configure
@@ -119,6 +151,9 @@ Tailscale devices can reach the dashboard even though the app itself binds
 [Unit]
 Description=Stocks AI backend + dashboard
 After=network-online.target tailscaled.service
+# Don't restart-loop into a disk that has ~45 write IOPS.
+StartLimitIntervalSec=600
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -126,10 +161,34 @@ User=<your-user>
 WorkingDirectory=/home/<your-user>/stocks-ai
 ExecStart=/home/<your-user>/stocks-ai/venv/bin/python server.py
 Restart=on-failure
-RestartSec=5
+RestartSec=30
+
+# THE IMPORTANT PART on a 1GB VM. Without a cap, this process growing past
+# what the box has does not kill *this* service - it takes down sshd,
+# tailscaled and journald with it, and you lose all access to the machine.
+# With the cap the kernel kills only this unit and systemd restarts it,
+# while everything you need to get in stays alive.
+MemoryAccounting=yes
+MemoryHigh=420M
+MemoryMax=550M
+OOMPolicy=stop
+
+# Let sshd and tailscaled win every contest for CPU and disk. Losing a scan
+# cycle costs nothing; losing your way into the box costs a reset.
+Nice=5
+IOSchedulingClass=idle
 
 [Install]
 WantedBy=multi-user.target
+```
+
+`MemoryHigh` throttles the process and forces reclaim as it approaches the
+limit; `MemoryMax` is the hard kill. Confirm both took effect - a typo here
+silently gives you no protection at all:
+
+```bash
+systemctl show stocks-ai -p MemoryHigh -p MemoryMax -p OOMPolicy
+systemctl status stocks-ai | grep -i memory      # shows live usage
 ```
 
 ```bash
