@@ -42,6 +42,26 @@ A source is auto-classified by URL shape when added
   hardcoded list of 5 instances in order and falls back through them on
   failure. Expect this source type to be the flakiest one; a 403/503 here
   is normal, not a bug to chase.
+- **Reddit** (`reddit_source.py: RedditPoller`): any subreddit link -
+  `r/stocks`, `old.reddit.com/r/stocks/new/`, a post inside it - is
+  normalized to `https://www.reddit.com/r/<name>/` with type `reddit`
+  (`source_manager.py: _reddit_subreddit`, which also refuses duplicates
+  and non-subreddit links). Read through Reddit's public Atom feeds
+  (`/r/<sub>/new/.rss`, `<post>/.rss` for comments), because the `.json`
+  endpoints are 403 for unauthenticated clients since May 2026 and new
+  OAuth apps need Reddit's approval. **The feeds allow ~1 request a
+  minute per IP, shared across all feeds** (a different feed 2s later
+  gets a 429), so all Reddit sources share one poller that makes at most
+  one request per scan cycle and never sleeps. Each post is queued, and
+  `REDDIT_COMMENT_DELAY_MIN` (30) after posting its comment feed is
+  fetched once and the post + top `REDDIT_COMMENTS_PER_POST` (10)
+  comments become one article (`source: "Reddit/r/<sub>"`). Posts the
+  mods removed meanwhile are dropped; megathreads and bot posts are
+  skipped. State lives in `data/reddit_state.json`. Downstream,
+  `llm_prompts._source_note` frames these as unverified retail opinion,
+  and `main._may_trade_on` keeps them alert-only unless
+  `REDDIT_CAN_TRADE` is on. Throughput is roughly 40-50 analysed posts an
+  hour in total, whatever the number of subreddits.
 
 ## Scraping mechanics (`news_collector.py`)
 
@@ -107,8 +127,8 @@ effect without a restart.
 
 - **Add a new RSS-only global source**: append to
   `NewsCollector.MARKET_RSS_FEEDS`.
-- **Support a new source type** (e.g. Reddit, a different scraping
-  target): add detection logic alongside `_is_twitter_url`/`_is_rss_feed`
+- **Support a new source type** (a different scraping target): add
+  detection logic alongside `_is_twitter_url`/`_is_rss_feed`
   in `source_manager.py`, and a `_fetch_from_X` method in
   `news_collector.py`, dispatched from `fetch_from_custom_sources`'s
   `fetch_one()`.

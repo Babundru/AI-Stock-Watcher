@@ -12,6 +12,7 @@ from portfolio_manager import PortfolioManager
 from watch_manager import WatchManager
 from paper_trader import PaperTrader
 import price_lookup
+import reddit_source
 import strategy
 from strategy import LONG, SHORT
 import time
@@ -102,7 +103,11 @@ class StockAppBackend:
                                  benchmark=PAPER_BENCHMARK) if PAPER_TRADING else None
         self._last_watch_check = 0
         self.processed_urls_file = 'data/processed_urls.json'
-        self.max_stored_urls = 120  # Keep only last 120 processed URLs
+        # Oldest processed URLs are forgotten past this. Was 120: Reddit
+        # sources add dozens of posts an hour, which would push feed articles
+        # still inside their lookback window out early - and a forgotten URL
+        # gets analysed (and alerted) again.
+        self.max_stored_urls = 500
         self.processed_urls = self._load_processed_urls()
         # Mirror of the deque for O(1) lookups; the deque owns eviction order.
         self.processed_set = set(self.processed_urls)
@@ -168,7 +173,7 @@ class StockAppBackend:
         self.log(f"Settings applied: engine = {self.engine_description()}")
 
     def _load_processed_urls(self):
-        """Load previously processed URLs from disk (last 120 only)."""
+        """Load previously processed URLs from disk (the last max_stored_urls only)."""
         if os.path.exists(self.processed_urls_file):
             try:
                 with open(self.processed_urls_file, 'r', encoding='utf-8') as f:
@@ -176,7 +181,7 @@ class StockAppBackend:
                     
                     # If data is a list, load directly
                     if isinstance(data, list):
-                        # Keep only last 120 URLs
+                        # Keep only the most recent max_stored_urls
                         urls = collections.deque(data[-self.max_stored_urls:], maxlen=self.max_stored_urls)
                         self.log(f"Loaded {len(urls)} previously processed URLs")
                         return urls
@@ -219,7 +224,7 @@ class StockAppBackend:
             self.log(f"Error saving stats: {e}")
 
     def _save_processed_urls(self):
-        """Save processed URLs to disk (last 120 only)."""
+        """Save processed URLs to disk (the last max_stored_urls only)."""
         try:
             # Convert deque to list for JSON serialization
             with self.urls_lock:
@@ -404,7 +409,7 @@ class StockAppBackend:
         self.log(f"\n📰 Processing article: {title}")
         self.log(f"   URL: {url[:80]}...")
 
-        # Add to processed deque (automatically maintains 120 URL limit).
+        # Add to processed deque (automatically capped at max_stored_urls).
         # Once the deque is full, appending evicts the oldest entry - drop that
         # from the mirror set too so the two stay in sync.
         with self.urls_lock:
@@ -468,7 +473,9 @@ class StockAppBackend:
         # News that contradicts an open position closes it first - whatever
         # happens next. The old code ignored it ("already has an open
         # position"), throwing away the most useful exit signal the app had.
-        if ticker:
+        # A source that may not open positions doesn't get to close them
+        # either - a Reddit thread alone shouldn't unwind a news-driven trade.
+        if ticker and self._may_trade_on(article):
             self._close_on_reversal(ticker, direction)
 
         # Negative news on a stock you don't hold is a short setup; on one
@@ -529,6 +536,13 @@ class StockAppBackend:
         self.status("Idle")
 
     @staticmethod
+    def _may_trade_on(article):
+        """Whether an alert from this article may open or close positions.
+        Reddit posts are retail opinion, not reporting, so by default they
+        notify only (REDDIT_CAN_TRADE, read live like every other setting)."""
+        return config.REDDIT_CAN_TRADE or not reddit_source.is_reddit_article(article)
+
+    @staticmethod
     def _alert_skip_reasons(analysis, sentiment, impact, prediction, confidence):
         """Why this analysis should not raise an alert at all; empty if it
         should. Flags a model left out (the keyword engine has none of them)
@@ -569,6 +583,8 @@ class StockAppBackend:
 
         if not ticker:
             return no("no tradable ticker")
+        if not self._may_trade_on(article):
+            return no("Reddit posts only raise alerts (trading on them is off in settings)")
         if direction == SHORT:
             if not config.ALLOW_SHORTS and not config.NOTIFY_SHORTS:
                 return no("short selling is off in settings")

@@ -688,6 +688,19 @@ class StockAppGUI(ctk.CTk):
                          "news about a stock you hold is always sent as a warning.",
                     text_color=COLOR_TEXT_MUTE, font=UI(9), justify="left").pack(anchor="w", padx=20, pady=(5, 20))
 
+        ctk.CTkLabel(scroll, text="Reddit sources", font=UI(16, "bold"),
+                    text_color=COLOR_ACCENT).pack(pady=(10, 0))
+        e_reddit_comments = add_input("Comments per post (0 = post only, no waiting)",
+                                      getattr(config, 'REDDIT_COMMENTS_PER_POST', 10))
+        e_reddit_delay = add_input("Minutes to wait for comments",
+                                   getattr(config, 'REDDIT_COMMENT_DELAY_MIN', 30))
+        reddit_trade_var = add_check("Let Reddit posts open trades (paper trading)",
+                                     getattr(config, 'REDDIT_CAN_TRADE', False))
+        ctk.CTkLabel(scroll,
+                    text="ℹ️ Reddit allows about one request a minute, so each post's\n"
+                         "comments cost a minute. Off: Reddit posts alert but never trade.",
+                    text_color=COLOR_TEXT_MUTE, font=UI(9), justify="left").pack(anchor="w", padx=20, pady=(5, 20))
+
         ctk.CTkLabel(scroll, text="Local AI model", font=UI(16, "bold"),
                     text_color=COLOR_ACCENT).pack(pady=(10, 10))
 
@@ -758,6 +771,16 @@ class StockAppGUI(ctk.CTk):
                     messagebox.showerror("Error", "Confidence must be 0-100 and positions 1-50.")
                     return
 
+                try:
+                    reddit_comments = int(e_reddit_comments.get().strip() or config.REDDIT_COMMENTS_PER_POST)
+                    reddit_delay = int(e_reddit_delay.get().strip() or config.REDDIT_COMMENT_DELAY_MIN)
+                except ValueError:
+                    messagebox.showerror("Error", "Reddit comments and minutes must be whole numbers.")
+                    return
+                if not (0 <= reddit_comments <= 25) or not (0 <= reddit_delay <= 240):
+                    messagebox.showerror("Error", "Reddit comments must be 0-25 and minutes 0-240.")
+                    return
+
                 # save_settings merges into the file (so settings this dialog
                 # does not expose survive) and updates the config module, so
                 # a running watcher can apply the change immediately.
@@ -777,6 +800,9 @@ class StockAppGUI(ctk.CTk):
                     "AI_TRADE_CONFIRM": confirm_var.get(),
                     "ALLOW_SHORTS": allow_shorts_var.get(),
                     "NOTIFY_SHORTS": notify_shorts_var.get(),
+                    "REDDIT_COMMENTS_PER_POST": reddit_comments,
+                    "REDDIT_COMMENT_DELAY_MIN": reddit_delay,
+                    "REDDIT_CAN_TRADE": reddit_trade_var.get(),
                 })
                 if self.backend:
                     self.backend.apply_settings()

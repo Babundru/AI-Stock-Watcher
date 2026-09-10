@@ -9,6 +9,7 @@ from bs4 import BeautifulSoup, SoupStrainer, XMLParsedAsHTMLWarning
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 from source_manager import SourceManager
+from reddit_source import RedditPoller, is_reddit_url
 from config import LOOKBACK_MINUTES
 import feedparser
 
@@ -144,6 +145,9 @@ class NewsCollector:
         # for a fresh TCP + TLS handshake, and a cycle makes dozens of them.
         self.session = requests.Session()
         self.session.headers.update(BROWSER_HEADERS)
+        # One poller for every Reddit source: Reddit's feed budget is about
+        # one request a minute for the whole app, not per source.
+        self.reddit = RedditPoller()
 
     def _seen(self, url):
         return bool(url and self.is_seen and self.is_seen(url))
@@ -317,10 +321,21 @@ class NewsCollector:
                 print(f"Error fetching from {source_name}: {e}")
                 return []
 
+        # Reddit sources go to the poller as a group - they share one request
+        # budget - and it runs alongside the others as one more job.
+        reddit = [s for s in sources if s.get('type') == 'reddit' or is_reddit_url(s.get('url'))]
+        others = [s for s in sources if s not in reddit]
+
         all_articles = []
         with ThreadPoolExecutor(max_workers=min(len(sources), MAX_SCRAPE_WORKERS)) as pool:
-            for articles in pool.map(fetch_one, sources):
+            reddit_job = pool.submit(self.reddit.poll, reddit, self._seen) if reddit else None
+            for articles in pool.map(fetch_one, others):
                 all_articles.extend(articles)
+            if reddit_job:
+                try:
+                    all_articles.extend(reddit_job.result())
+                except Exception as e:
+                    print(f"Error polling Reddit: {e}")
 
         print(f"Collected {len(all_articles)} articles from custom sources.")
         return all_articles
