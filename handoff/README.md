@@ -21,6 +21,7 @@ things are, never what the values are.
 | [`ui.md`](ui.md) | The web dashboard (`web/index.html` + `server.py`'s API) or the desktop GUI (`gui.py`) |
 | [`api_keys_and_secrets.md`](api_keys_and_secrets.md) | Config/settings loading, where every credential lives, adding a new one |
 | [`deployment_vm.md`](deployment_vm.md) | The actual running VM - what's deployed, how to update it, ops commands |
+| [`incidents.md`](incidents.md) | The VM froze / went unreachable / "the journal" is complaining - past incidents, how they were diagnosed, what was changed |
 
 `DEPLOY.md` (repo root, not in this folder) is the generic "how to
 provision a fresh VM from scratch" guide - still the right place for that.
@@ -55,6 +56,6 @@ the full module map.
 1. If the task is "fix/change how X is analyzed" -> `ai_engines.md`
 2. If it's "add a news source type" or "tune keyword scoring" -> `data_sources.md`
 3. If it's "change the dashboard" or "add a GUI feature" -> `ui.md`
-4. If it's "the VM is doing something weird" or "deploy an update" -> `deployment_vm.md`
+4. If it's "the VM is doing something weird" or "deploy an update" -> `deployment_vm.md`, plus `incidents.md` if it's frozen or unreachable
 5. If it's "add a new API key / provider" -> `api_keys_and_secrets.md`
 6. If it's "I don't know where anything is" -> `architecture.md`, then drill into the specific file above

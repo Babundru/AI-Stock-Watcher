@@ -22,6 +22,24 @@ import json
 import os
 
 
+def _process_rss_mb():
+    """This process's resident memory in MB, or None where unavailable.
+
+    Deliberately dependency-free (no psutil) and Linux-only in effect: it is
+    for the always-on VM, where knowing whether the footprint is flat or
+    climbing is the difference between a five-minute diagnosis and days of
+    guesswork. A 1GB box that runs out of memory does not necessarily
+    OOM-kill anything - it can just stop responding - so the growth has to be
+    visible *before* that point, in the logs the dashboard already shows.
+    """
+    try:
+        with open('/proc/self/statm', 'r') as f:
+            pages = int(f.read().split()[1])
+        return pages * os.sysconf('SC_PAGE_SIZE') / (1024 * 1024)
+    except (OSError, ValueError, IndexError, AttributeError):
+        return None
+
+
 def _release_memory():
     """Free a finished scan cycle's garbage and hand it back to the OS.
 
@@ -348,6 +366,10 @@ class StockAppBackend:
                 # just gone unreachable at once.
                 _release_memory()
 
+                rss = _process_rss_mb()
+                if rss is not None:
+                    self.log(f"   💾 Memory in use: {rss:.0f} MB")
+
                 # --- SMART SCHEDULER ---
                 # Calculate sleep time until next 15-minute mark (xx:00, xx:15, xx:30, xx:45)
                 # To sync with device time.
@@ -556,7 +578,14 @@ class StockAppBackend:
 
             expires_at = datetime.datetime.fromisoformat(watch['expires_at'])
             reason = None
-            if self.watch_mgr.stop_loss_hit(watch, price):
+            if self.watch_mgr.over_age_limit(watch, now):
+                # Outranks every other exit: a watch this old is no longer
+                # tracking the news it was opened on, and keeping it costs a
+                # price lookup on every check forever.
+                reason = 'max_age'
+                self.log(f"  📅 {watch['company']} ({watch['ticker']}) open past the age "
+                         f"limit - closing at {price:.2f}")
+            elif self.watch_mgr.stop_loss_hit(watch, price):
                 reason = 'stop_loss'
             elif self.watch_mgr.target_reached(watch, price):
                 reason = 'target_hit'
@@ -567,10 +596,17 @@ class StockAppBackend:
                 # watching instead. Only a recovery to profit, the target, or
                 # the stop-loss itself can close it from here.
                 if watch.get('stop_loss_price') is not None and not self.watch_mgr.is_profitable(watch, price):
-                    self.watch_mgr.postpone_watch(watch['id'])
-                    self.log(f"  ⏳ {watch['company']} ({watch['ticker']}) horizon passed at a "
-                             f"loss ({watch['entry_price']:.2f} -> {price:.2f}) - postponing exit, "
-                             f"waiting for profit or stop-loss ({watch['stop_loss_price']:.2f})")
+                    if self.watch_mgr.postpone_watch(watch['id']):
+                        self.log(f"  ⏳ {watch['company']} ({watch['ticker']}) horizon passed at a "
+                                 f"loss ({watch['entry_price']:.2f} -> {price:.2f}) - postponing exit, "
+                                 f"waiting for profit or stop-loss ({watch['stop_loss_price']:.2f})")
+                    else:
+                        # Postponement budget spent - take the loss rather
+                        # than carry this position (and its price check)
+                        # forever. See watch_manager.MAX_POSTPONEMENTS.
+                        reason = 'max_postponed'
+                        self.log(f"  ⏱ {watch['company']} ({watch['ticker']}) postponed too many "
+                                 f"times - closing at {price:.2f}")
                 else:
                     reason = 'horizon_expired'
 
@@ -621,5 +657,12 @@ class StockAppBackend:
         # watches that actually resolved).
         if self.paper:
             self.paper.save()
+
+        # The price call above is the single largest allocation this process
+        # makes (yfinance/pandas frames), and it runs on a coarser cadence
+        # than the news scan's own _release_memory() at the end of a cycle.
+        # Without trimming here the high-water mark of the last price fetch
+        # stays resident until the next scan finishes.
+        _release_memory()
 
 
