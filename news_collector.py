@@ -505,6 +505,10 @@ class NewsCollector:
                 'description': summary,
                 'url': link,
                 'publishedAt': entry.get('published', ''),
+                # Parsed, UTC. Survives the '_pub_dt' cleanup below: the
+                # prompt reports the article's age, and the trade check
+                # measures how far the price has moved since this moment.
+                'published_ts': pub_datetime.isoformat() if pub_datetime else None,
                 'source': f"Custom/{source_name}",
                 'content': None,
                 '_pub_dt': pub_datetime or datetime.datetime.min.replace(tzinfo=pytz.UTC),

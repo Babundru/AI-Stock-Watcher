@@ -32,6 +32,7 @@ os.chdir(os.path.dirname(os.path.abspath(__file__)))
 from flask import Flask, jsonify, request, send_from_directory
 
 import config
+import strategy
 from cloud_providers import PROVIDERS
 from local_time import now_local
 from main import StockAppBackend
@@ -176,6 +177,9 @@ _SETTINGS_PUBLIC = (
     "USE_CLOUD_AI", "CLOUD_AI_PROVIDER", "CLOUD_AI_MODEL", "CLOUD_AI_BASE_URL",
     "USE_LOCAL_LLM", "LOCAL_MODEL_NAME", "OLLAMA_NUM_THREADS", "OLLAMA_URL",
     "PAPER_COST_PCT", "DASHBOARD_USERNAME",
+    "ALLOW_SHORTS", "NOTIFY_SHORTS", "SHORT_MIN_IMPACT",
+    "MIN_CONFIDENCE", "AI_TRADE_CONFIRM", "LET_WINNERS_RUN",
+    "MAX_OPEN_POSITIONS", "STOP_ATR_MULT",
 )
 _SETTINGS_SECRET = ("CLOUD_AI_API_KEY", "DASHBOARD_PASSWORD")
 
@@ -218,6 +222,16 @@ def api_settings():
                 return jsonify({"error": "OLLAMA_NUM_THREADS must be at least 1"}), 400
             if "PAPER_COST_PCT" in updates and not (0 <= float(updates["PAPER_COST_PCT"]) < 1):
                 return jsonify({"error": "PAPER_COST_PCT must be a fraction between 0 and 1"}), 400
+            if "MIN_CONFIDENCE" in updates and not (0 <= int(updates["MIN_CONFIDENCE"]) <= 100):
+                return jsonify({"error": "MIN_CONFIDENCE must be between 0 and 100"}), 400
+            # Capped for the 1GB VM: every open position is priced on every
+            # watch check.
+            if "MAX_OPEN_POSITIONS" in updates and not (1 <= int(updates["MAX_OPEN_POSITIONS"]) <= 50):
+                return jsonify({"error": "MAX_OPEN_POSITIONS must be between 1 and 50"}), 400
+            if "STOP_ATR_MULT" in updates and not (0 <= float(updates["STOP_ATR_MULT"]) <= 10):
+                return jsonify({"error": "STOP_ATR_MULT must be between 0 and 10"}), 400
+            if "SHORT_MIN_IMPACT" in updates and str(updates["SHORT_MIN_IMPACT"]).upper() not in config.IMPACT_LEVELS:
+                return jsonify({"error": f"SHORT_MIN_IMPACT must be one of {config.IMPACT_LEVELS}"}), 400
             config.save_settings(updates)
         except (KeyError, TypeError, ValueError) as e:
             return jsonify({"error": f"invalid setting: {e}"}), 400
@@ -273,8 +287,13 @@ def api_sensitivity():
 
 @app.route("/api/stop-loss", methods=["GET", "POST"])
 def api_stop_loss():
-    """Stop-loss / profit-protection level, as a percent (5 means 5%).
-    POST {"pct": 5}. 0 disables it - watches close on schedule as before.
+    """Maximum stop distance, as a percent (8 means 8%). POST {"pct": 8}.
+
+    Each position's stop is sized to the stock's volatility (see
+    strategy.stop_pct_for) and capped at this; it is also the stop used when
+    no volatility data is available. 0 means the built-in default
+    (config.DEFAULT_STOP_LOSS_PCT) - stops can't be turned off.
+    `effective_pct` is the cap actually in force.
 
     Applies to watches opened from here on (captured per-watch at open
     time); persists to data/settings.json like the other live settings.
@@ -287,8 +306,11 @@ def api_stop_loss():
             return jsonify({"error": "pct must be a number"}), 400
         if pct < 0:
             return jsonify({"error": "pct must be >= 0"}), 400
+        if pct >= 100:
+            return jsonify({"error": "pct must be below 100"}), 400
         config.save_setting("STOP_LOSS_PCT", pct / 100.0)
-    return jsonify({"pct": config.STOP_LOSS_PCT * 100.0})
+    return jsonify({"pct": config.STOP_LOSS_PCT * 100.0,
+                    "effective_pct": strategy.max_stop_pct() * 100.0})
 
 
 @app.route("/api/notifications", methods=["GET", "POST"])

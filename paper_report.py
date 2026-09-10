@@ -84,7 +84,8 @@ def main():
           f"({pct(stats['total_return'])})")
     print(f"    Max drawdown  -{stats['max_drawdown'] * 100:.2f}%")
 
-    for label, key in (("By direction", "by_direction"),
+    for label, key in (("By strategy version", "by_strategy"),
+                       ("By direction", "by_direction"),
                        ("By impact", "by_impact"),
                        ("By horizon", "by_horizon"),
                        ("By exit reason", "by_reason")):

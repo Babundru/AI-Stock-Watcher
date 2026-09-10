@@ -139,6 +139,16 @@ class PaperTrader:
             "ticker": watch['ticker'],
             "company": watch['company'],
             "direction": watch.get('direction', LONG),
+            # Which rule set opened it (strategy.STRATEGY_VERSION), plus what
+            # the decision was based on - so the record can be split by the
+            # rules in force and by how confident the AI was.
+            "strategy": watch.get('strategy', 'v1'),
+            "confidence": watch.get('confidence'),
+            "ai_confirmed": watch.get('ai_confirmed'),
+            "expected_move_pct": watch.get('expected_move_pct'),
+            "already_moved_pct": watch.get('already_moved_pct'),
+            "atr_pct": watch.get('atr_pct'),
+            "stop_pct": watch.get('stop_pct'),
             "impact": watch.get('impact'),
             "horizon": watch.get('horizon'),
             "headline": watch.get('article_headline'),
@@ -302,6 +312,7 @@ class PaperTrader:
             "avg_alpha": (sum(alphas) / len(alphas)) if alphas else None,
             "avg_holding_hours": _avg([t['holding_hours'] for t in trades
                                        if t.get('holding_hours') is not None]),
+            "by_strategy": _group(trades, lambda t: t.get('strategy') or 'v1'),
             "by_direction": _group(trades, lambda t: t['direction']),
             "by_impact": _group(trades, lambda t: t.get('impact') or '?'),
             "by_horizon": _group(trades, lambda t: t.get('horizon') or '?'),

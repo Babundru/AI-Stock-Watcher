@@ -74,7 +74,7 @@ class Notifier:
 
         return self._send_ntfy(title, message, priority='default')
 
-    def notify(self, company, article, analysis, is_owned=False):
+    def notify(self, company, article, analysis, is_owned=False, decision=None):
         """
         Sends a notification (Prints to console for MVP).
 
@@ -83,6 +83,9 @@ class Notifier:
             article: Article dict
             analysis: Analysis dict
             is_owned: Whether the stock is in user's portfolio
+            decision: What main.py:_decide_trade made of it - a position
+                opened (with entry/target/stop), or the reason none was.
+                None (simulate.py) keeps the plain BUY/SHORT action line.
 
         Returns whether ntfy accepted it, so a caller like the desktop test
         button can tell "delivered" apart from "muted" or "no topic set"
@@ -118,16 +121,26 @@ class Notifier:
         # is as actionable as the exit one that follows it. Only sentiments
         # that open a watch get an action line.
         action = ""
-        if sentiment == "POSITIVE":
-            action = "\nAction: BUY (open a long CFD) - a SELL alert follows when to close."
-        elif sentiment == "NEGATIVE":
-            action = "\nAction: SHORT (open a short CFD) - a BUY BACK alert follows when to close."
+        priority = 'high' if impact == 'CRITICAL' else 'default'
+        if decision is None:
+            if sentiment == "POSITIVE":
+                action = "\nAction: BUY (open a long CFD) - a SELL alert follows when to close."
+            elif sentiment == "NEGATIVE":
+                action = "\nAction: SHORT (open a short CFD) - a BUY BACK alert follows when to close."
+        else:
+            action = "\n" + self._decision_text(decision)
+            if not decision.get('opened'):
+                # Still worth knowing about, but not worth a buzz: nothing
+                # to act on. ntfy delivers 'low' silently.
+                priority = 'low'
 
         title = f"{company} ({analysis.get('ticker') or '???'}){ownership_tag}"
+        confidence = analysis.get('confidence')
+        confidence_text = f" · confidence {confidence}" if confidence is not None else ""
         # Add emoji to message body instead to avoid Header encoding issues
         message = (
             f"{emoji} {analysis.get('explanation')}\n\n"
-            f"Price Prediction: {analysis.get('prediction')}{action}"
+            f"Price Prediction: {analysis.get('prediction')}{confidence_text}{action}"
         )
         
         # Console Output
@@ -141,7 +154,52 @@ class Notifier:
         print("="*50 + "\n")
         
         # Send Mobile Notification
-        return self._send_ntfy(title, message, priority='high' if impact == 'CRITICAL' else 'default', url=article.get('url'))
+        return self._send_ntfy(title, message, priority=priority, url=article.get('url'))
+
+    def _decision_text(self, d):
+        """The trade line(s) of an alert: the position opened, the setup
+        that wasn't tracked, or why no trade was taken."""
+        is_short = d.get('direction') == 'SHORT'
+        entry = d.get('entry_price')
+        if entry:
+            target, stop = d.get('target_price'), d.get('stop_price')
+            levels = (f"Target {target:.2f} ({(target - entry) / entry * 100:+.1f}%) · "
+                      f"Stop {stop:.2f} ({(stop - entry) / entry * 100:+.1f}%)")
+        if d.get('opened'):
+            verb = "SHORT (open a short CFD)" if is_short else "BUY (open a long CFD)"
+            exit_text = ""
+            if d.get('expires_at'):
+                try:
+                    when = datetime.datetime.fromisoformat(d['expires_at']).astimezone(self.timezone)
+                    exit_text = f"\nTime exit: {when:%a %d %b %H:%M} ET at the latest"
+                except (TypeError, ValueError):
+                    pass
+            follow = "BUY BACK" if is_short else "SELL"
+            return (f"Action: {verb} at ~{entry:.2f}\n{levels}{exit_text}\n"
+                    f"A {follow} alert follows when to close.")
+        if entry:
+            side = "Short" if is_short else "Long"
+            return f"{side} setup at ~{entry:.2f}: {levels}\nNot tracked: {d.get('reason')}."
+        return f"No trade: {d.get('reason')}."
+
+    def notify_target_reached(self, ticker, company, direction, entry_price,
+                              current_price, stop_price, article_url=None):
+        """A position reached its target and is being left to run with a
+        trailing stop (config.LET_WINNERS_RUN) - no action needed except
+        moving a broker-side stop up to match."""
+        is_short = (direction or "LONG").upper() == "SHORT"
+        move = ((current_price - entry_price) / entry_price * 100) if entry_price else 0.0
+        position_pct = -move if is_short else move
+        locked = ((entry_price - stop_price) if is_short else (stop_price - entry_price)) / entry_price * 100 \
+            if entry_price else 0.0
+        title = f"{company} ({ticker}) - TARGET REACHED"
+        message = (
+            f"🎯 Target reached ({position_pct:+.1f}% on the position). Holding to let it run.\n\n"
+            f"Trailing stop now {stop_price:.2f} (locks in {locked:+.1f}%) - move your stop there.\n"
+            f"A {'BUY BACK' if is_short else 'SELL'} alert follows when it's hit."
+        )
+        print(f"\n🎯 {title}\n{message}\n")
+        return self._send_ntfy(title, message, priority='default', url=article_url)
 
     def notify_sell(self, ticker, company, reason, entry_price, current_price,
                     target_price, article_url=None, direction="LONG"):
@@ -153,8 +211,9 @@ class Notifier:
         Args:
             ticker: Stock ticker
             company: Company name
-            reason: "target_hit", "stop_loss", "horizon_expired",
-                "max_age" or "max_postponed"
+            reason: "target_hit", "stop_loss", "trailing_stop",
+                "news_reversal", "horizon_expired", "max_age", or (records
+                from before v2) "max_postponed"
             entry_price: Price when the original alert fired
             current_price: Price now
             target_price: Price that would have counted as the move "playing out"
@@ -173,6 +232,12 @@ class Notifier:
         elif reason == "stop_loss":
             emoji = "🛑"
             reason_text = "Stop-loss reached - closing now to cap the loss."
+        elif reason == "trailing_stop":
+            emoji = "🔒"
+            reason_text = "Trailing stop reached - the move has turned, closing to keep the gain."
+        elif reason == "news_reversal":
+            emoji = "↩"
+            reason_text = "New news points the other way - the reason for this position no longer holds."
         elif reason == "max_age":
             emoji = "📅"
             reason_text = ("Held the maximum time without resolving - this is no longer "
