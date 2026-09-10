@@ -1,6 +1,6 @@
 import config
 from cloud_providers import PROVIDERS
-from llm_prompts import build_market_prompt, parse_json_response
+from llm_prompts import build_market_prompt, build_trade_prompt, parse_json_response
 
 # Ollama gets a JSON-mode flag to force this; hosted chat APIs don't have an
 # equivalent, so the constraint is stated in a system prompt instead.
@@ -65,3 +65,12 @@ class CloudAnalyzer:
             return None
 
         return data
+
+    def confirm_trade(self, article, analysis, context, direction):
+        """Second pass for a would-be trade, with live price context (see
+        llm_prompts.build_trade_prompt). Returns the parsed dict, or None if
+        the provider failed or answered with something unusable."""
+        if not self.provider:
+            return None
+        prompt = build_trade_prompt(article, analysis, context, direction)
+        return parse_json_response(self.provider.complete(prompt, system=JSON_ONLY_SYSTEM_PROMPT))

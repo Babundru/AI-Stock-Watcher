@@ -108,25 +108,84 @@ PAPER_BENCHMARK = "SPY"
 PAPER_START_CAPITAL = 10000.0
 PAPER_POSITION_PCT = 0.10
 
-# --- STOP LOSS / PROFIT PROTECTION ---
-# Percentage loss (as a fraction of entry price) at which an open watch is
-# force-closed to cap the downside - e.g. 0.05 = 5%. Applied per-watch,
-# below entry for a LONG and above entry for a SHORT.
+# --- STRATEGY: RISK PER TRADE (stop-loss) ---
+# Every position has a stop-loss; there is no "off" any more. The old rules
+# closed winners at a fixed +5/10% target but gave losers no floor (or, with
+# a stop set, postponed their time exit until they recovered) - so the
+# closed record hovered around zero while the open book filled with losers.
+# See strategy.py for the full set of exit rules.
 #
-# This also gates the "only sell for a profit" rule: leave it at 0 and
-# nothing changes - a watch closes exactly as before, on schedule (profit
-# target hit, or the horizon expiring) whatever the price happens to be
-# doing at that moment.
+# The stop's distance from entry is sized to the stock's own volatility:
+# STOP_ATR_MULT x its 14-day average true range (ATR - roughly how far it
+# moves on a normal day), clamped between STOP_MIN_PCT and STOP_LOSS_PCT. A
+# calm stock gets a tight stop and a jumpy one a wide one, instead of both
+# getting the same percentage and the jumpy one being stopped out by noise.
 #
-# Set it above 0 and a horizon-expiry exit (the scheduled one, not the
-# profit-target one) is gated on the position currently being in profit. If
-# the horizon passes while it's at a loss, the watch is NOT closed - its
-# expiry is pushed out and it keeps being re-checked on the normal
-# WATCH_CHECK_INTERVAL cadence, same as any other open watch, until one of
-# three things happens: the price recovers into profit, the profit target is
-# hit, or the price reaches this stop-loss level - which force-closes it
-# regardless of profit, so a postponed loser can't run forever.
-STOP_LOSS_PCT = 0.0
+# STOP_LOSS_PCT is therefore the most any single trade may risk, and the
+# stop used when no volatility data could be fetched. 0 - the old "off"
+# value, possibly still in data/settings.json - means DEFAULT_STOP_LOSS_PCT.
+STOP_LOSS_PCT = 0.08
+DEFAULT_STOP_LOSS_PCT = 0.08
+STOP_ATR_MULT = 1.5
+STOP_MIN_PCT = 0.02
+
+# Once a position has gained this fraction of its target, its stop moves up
+# to break-even (entry plus trading costs): a trade that was clearly working
+# can no longer turn into a loss.
+BREAKEVEN_AT = 0.5
+
+# Let winners run. On reaching its target a position is not closed; its stop
+# is tightened to trail TRAIL_AFTER_TARGET_MULT x the initial stop distance
+# behind the best price seen, and it closes when that is hit (or at its time
+# exit). False closes at the target, as the app used to.
+LET_WINNERS_RUN = True
+TRAIL_AFTER_TARGET_MULT = 0.5
+
+# A trade is skipped when the move still expected is not at least this many
+# times the stop distance - i.e. when the news is not expected to move the
+# stock clearly more than it moves on an ordinary day anyway.
+MIN_REWARD_RISK = 1.2
+
+# --- STRATEGY: ENTRIES ---
+# The AI rates its own confidence (0-100) in direction and size. Alerts
+# below this are dropped before they notify or trade.
+MIN_CONFIDENCE = 60
+
+# Second AI pass for would-be trades only (a handful a day, not every
+# article): the model sees the article again together with the live price
+# context - how far the stock has already moved since the previous close and
+# since the article was published, and its normal daily range - and decides
+# whether a position opened *now* still has room to run. Ignored by the
+# keyword engine, which trades on the hard rules alone.
+AI_TRADE_CONFIRM = True
+
+# Hard "already priced in" rule, applied whatever the AI says: skip a trade
+# when the stock has already moved this fraction of the expected move in the
+# trade's direction. By the time a story reaches an RSS feed, the fast money
+# has often already traded it; buying at that point is buying the top.
+PRICED_IN_FRACTION = 0.5
+
+# Most positions open at once. Also a memory guard for the 1GB VM: every
+# open position is priced on every watch check (see price_lookup.MAX_BATCH).
+MAX_OPEN_POSITIONS = 20
+
+# --- SHORT SELLING ---
+# Whether negative news on a stock you don't own opens a SHORT position
+# (sell a CFD short, buy it back on the cover signal) and records it in the
+# paper-trading ledger. Off suits anyone who doesn't use CFDs or shorting.
+ALLOW_SHORTS = True
+
+# Whether short setups - and the cover signals of short positions - are
+# pushed to your phone. Independent of ALLOW_SHORTS: on while shorts are not
+# traded still tells you about the setup (marked as not tracked); off keeps
+# them out of your notifications but still paper-trades them if allowed.
+# Negative news about a stock you own is a risk warning, not a short setup,
+# and is always notified.
+NOTIFY_SHORTS = True
+
+# Shorts carry costs longs don't (borrow/financing) and fight the market's
+# long-run upward drift, so they need a stronger signal than longs do.
+SHORT_MIN_IMPACT = "CRITICAL"
 
 # --- NOTIFICATION SETTINGS ---
 # Ntfy.sh topic name.
@@ -237,6 +296,7 @@ _BOOL = lambda v: bool(v)
 _INT = lambda v: int(v)
 _FLOAT = lambda v: float(v)
 _IMPACT = lambda v: str(v).upper() if str(v).upper() in IMPACT_LEVELS else MIN_IMPACT
+_SHORT_IMPACT = lambda v: str(v).upper() if str(v).upper() in IMPACT_LEVELS else "CRITICAL"
 
 USER_SETTINGS = {
     "NTFY_TOPIC": _STR,
@@ -244,6 +304,14 @@ USER_SETTINGS = {
     "NOTIFY_OWNERSHIP": _BOOL,
     "MIN_IMPACT": _IMPACT,
     "STOP_LOSS_PCT": _FLOAT,
+    "STOP_ATR_MULT": _FLOAT,
+    "LET_WINNERS_RUN": _BOOL,
+    "MIN_CONFIDENCE": _INT,
+    "AI_TRADE_CONFIRM": _BOOL,
+    "MAX_OPEN_POSITIONS": _INT,
+    "ALLOW_SHORTS": _BOOL,
+    "NOTIFY_SHORTS": _BOOL,
+    "SHORT_MIN_IMPACT": _SHORT_IMPACT,
     "USE_LOCAL_LLM": _BOOL,
     "LOCAL_MODEL_NAME": _STR,
     "OLLAMA_NUM_THREADS": _INT,

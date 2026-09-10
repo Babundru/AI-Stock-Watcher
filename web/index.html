@@ -362,7 +362,7 @@
     <div class="card sens-card">
       <div class="card-title">Stop-loss
         <span class="sens-now" id="sl-now">Off</span>
-        <span class="section-sub">0 = sell on schedule; above 0, a scheduled exit at a loss is postponed until it's profitable, hits its target, or hits this stop</span>
+        <span class="section-sub">the most any one position may lose. Each stop is sized to the stock's normal daily range and capped here; it rises to break-even and trails the price as the trade works. 0 = default</span>
       </div>
       <div style="display:flex; align-items:center; gap:8px; margin-top:8px;">
         <input type="number" id="sl-input" min="0" step="0.5" style="width:90px;" placeholder="0">
@@ -546,6 +546,45 @@
     </div>
 
     <div class="card">
+      <div class="card-title">Trading strategy</div>
+      <div class="form-grid">
+        <div class="field">
+          <label for="st-min-conf">Minimum AI confidence (0-100)</label>
+          <input id="st-min-conf" type="number" min="0" max="100" step="5" style="max-width:140px;">
+          <div class="hint">Alerts the AI is less sure of than this are dropped. 50 is a coin flip.</div>
+        </div>
+        <label class="check"><input type="checkbox" id="st-confirm"> AI trade check - before opening a position, ask the AI again with the live price action, so news the market has already priced in is skipped</label>
+        <label class="check"><input type="checkbox" id="st-let-run"> Let winners run - at the target, trail the stop close behind the price instead of selling</label>
+        <div class="field">
+          <label for="st-atr-mult">Stop distance (× the stock's normal daily range)</label>
+          <input id="st-atr-mult" type="number" min="0" max="10" step="0.1" style="max-width:140px;">
+          <div class="hint">1.5 puts the stop one and a half ordinary trading days away, so normal noise doesn't trigger it. Capped by the stop-loss % on the Alerts tab.</div>
+        </div>
+        <div class="field">
+          <label for="st-max-pos">Maximum open positions</label>
+          <input id="st-max-pos" type="number" min="1" max="50" step="1" style="max-width:140px;">
+          <div class="hint">Every open position is priced every 5 minutes - keep this modest on a small VM.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Short selling</div>
+      <div class="form-grid">
+        <label class="check"><input type="checkbox" id="st-allow-shorts"> Open short positions on negative news (paper trading) - following one for real needs CFDs or a margin account</label>
+        <label class="check"><input type="checkbox" id="st-notify-shorts"> Send phone notifications for short setups and their buy-back signals</label>
+        <div class="field">
+          <label for="st-short-impact">Minimum impact for a short</label>
+          <select id="st-short-impact" style="max-width:200px;">
+            <option value="LOW">LOW</option><option value="MEDIUM">MEDIUM</option>
+            <option value="HIGH">HIGH</option><option value="CRITICAL">CRITICAL</option>
+          </select>
+          <div class="hint">Negative news about a stock you hold is always sent as a warning, whatever these say.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
       <div class="card-title">Dashboard login</div>
       <div class="form-grid">
         <div class="field"><label for="st-user">Username</label><input id="st-user" autocomplete="username"></div>
@@ -670,8 +709,23 @@ function alertKey(a) {
 const EXIT_REASONS = {
   target_hit: 'Target price reached',
   stop_loss: 'Stop-loss reached',
-  horizon_expired: 'Time window expired without the move',
+  trailing_stop: 'Trailing stop reached - gain kept',
+  news_reversal: 'New news points the other way',
+  horizon_expired: 'Time window expired',
+  max_age: 'Closed at the age limit',
+  max_postponed: 'Postponed as long as allowed, still at a loss',
 };
+
+// What the app did with a news alert: the position it opened, or why not.
+function tradeLine(a) {
+  const t = a.trade;
+  if (!t) return '';
+  if (t.opened) {
+    const verb = t.direction === 'SHORT' ? 'Shorted' : 'Bought';
+    return `<div class="meta">📒 ${verb} at $${fmtPrice(t.entry_price)} &middot; target $${fmtPrice(t.target_price)} &middot; stop $${fmtPrice(t.stop_price)}</div>`;
+  }
+  return `<div class="meta">No trade: ${esc(t.reason || '')}</div>`;
+}
 
 function renderAlerts(alerts) {
   const list = $('#alerts-list');
@@ -716,10 +770,12 @@ function renderAlerts(alerts) {
       </div>
       <div class="meta">
         ${esc(a.impact)} impact &middot; ${esc(a.prediction)}
+        ${a.confidence != null ? '&middot; confidence ' + esc(a.confidence) : ''}
         ${a.is_owned ? '<span class="badge owned">OWNED</span>' : ''}
         &middot; ${esc((a.time || '').replace('T', ' ').slice(0, 19))}
       </div>
       <div class="explanation">${esc(a.explanation)}</div>
+      ${tradeLine(a)}
       ${a.url ? `<div class="meta"><a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.headline || 'Source article')}</a></div>` : ''}
     </div>`;
   }).join('');
@@ -740,8 +796,8 @@ async function loadWatches() {
         <td><span class="badge ${w.direction === 'SHORT' ? 'side-short' : 'side-long'}">${w.direction === 'SHORT' ? 'Short' : 'Long'}</span></td>
         <td>$${fmtPrice(w.entry_price)}</td>
         <td>$${fmtPrice(w.target_price)}</td>
-        <td>${w.stop_loss_price ? '$' + fmtPrice(w.stop_loss_price) : '—'}</td>
-        <td>${esc((w.expires_at || '').replace('T', ' ').slice(0, 16))}${w.postponed_count ? ` <span class="meta" style="margin:0;" title="Horizon expired at a loss and was postponed">⏳×${w.postponed_count}</span>` : ''}</td>
+        <td>${w.stop_loss_price ? '$' + fmtPrice(w.stop_loss_price) : '—'}${w.trailing ? ' <span class="meta" style="margin:0;" title="Target reached - the stop now trails the price">🎯 trailing</span>' : ''}</td>
+        <td>${esc((w.expires_at || '').replace('T', ' ').slice(0, 16))}</td>
         <td><button class="danger-btn" data-del="${esc(w.id)}">Remove</button></td>
       </tr>`).join('');
     $('#watches-body').querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', async () => {
@@ -827,10 +883,13 @@ loadSensitivity();
 // --- Stop-loss / profit protection ----------------------------------------
 async function loadStopLoss() {
   try {
-    const d = await (await fetch('/api/stop-loss')).json();
-    $('#sl-input').value = d.pct ? d.pct : '';
-    $('#sl-now').textContent = d.pct ? d.pct + '%' : 'Off';
+    renderStopLoss(await (await fetch('/api/stop-loss')).json());
   } catch (e) { /* dashboard poll - try again next tick */ }
+}
+function renderStopLoss(d) {
+  $('#sl-input').value = d.pct ? d.pct : '';
+  const eff = d.effective_pct ?? d.pct;
+  $('#sl-now').textContent = eff ? 'max ' + eff + '%' + (d.pct ? '' : ' (default)') : '—';
 }
 $('#sl-save').addEventListener('click', async () => {
   const pct = Number($('#sl-input').value) || 0;
@@ -840,10 +899,8 @@ $('#sl-save').addEventListener('click', async () => {
       body: JSON.stringify({pct}),
     });
     const d = await res.json();
-    if (typeof d.pct === 'number') {
-      $('#sl-input').value = d.pct ? d.pct : '';
-      $('#sl-now').textContent = d.pct ? d.pct + '%' : 'Off';
-    } else loadStopLoss();
+    if (typeof d.pct === 'number') renderStopLoss(d);
+    else loadStopLoss();
   } catch (e) { loadStopLoss(); }
 });
 loadStopLoss();
@@ -1088,7 +1145,7 @@ async function loadPaper() {
       <td class="num">${fmtPrice(t.entry_price)}</td>
       <td class="num">${t.exit_price !== null ? fmtPrice(t.exit_price) : '—'}</td>
       <td class="num ${pctClass(t.net_pct)}"><strong>${pctText(t.net_pct)}</strong></td>
-      <td style="color:var(--text-mute)">${({target_hit: 'target hit', stop_loss: 'stop-loss', horizon_expired: 'time stop'})[t.reason] || esc(t.reason || '')}</td>
+      <td style="color:var(--text-mute)">${({target_hit: 'target hit', stop_loss: 'stop-loss', trailing_stop: 'trailing stop', news_reversal: 'news reversal', horizon_expired: 'time stop', max_age: 'age limit', max_postponed: 'postpone limit'})[t.reason] || esc(t.reason || '')}</td>
     </tr>`).join('') : '<tr><td colspan="7" class="empty">No closed trades yet.</td></tr>';
 
   // Equity curve.
@@ -1378,6 +1435,15 @@ function renderSettings(s) {
 
   $('#st-cost').value = ((s.PAPER_COST_PCT || 0) * 100).toFixed(2);
 
+  $('#st-min-conf').value = s.MIN_CONFIDENCE ?? 60;
+  $('#st-confirm').checked = !!s.AI_TRADE_CONFIRM;
+  $('#st-let-run').checked = !!s.LET_WINNERS_RUN;
+  $('#st-atr-mult').value = s.STOP_ATR_MULT ?? 1.5;
+  $('#st-max-pos').value = s.MAX_OPEN_POSITIONS ?? 20;
+  $('#st-allow-shorts').checked = !!s.ALLOW_SHORTS;
+  $('#st-notify-shorts').checked = !!s.NOTIFY_SHORTS;
+  $('#st-short-impact').value = s.SHORT_MIN_IMPACT || 'CRITICAL';
+
   $('#st-user').value = s.DASHBOARD_USERNAME || '';
   $('#st-pass').value = '';
   $('#st-pass').placeholder = s.dashboard_password_set ? 'Leave blank to keep the current password' : 'No password set - dashboard is open';
@@ -1398,6 +1464,12 @@ $('#st-save').addEventListener('click', async () => {
   const cost = Number($('#st-cost').value);
   if (!isFinite(cost) || cost < 0 || cost >= 100) { setSettingsMsg('Cost % must be between 0 and 100.', 'err'); return; }
   const threads = parseInt($('#st-threads').value, 10);
+  const minConf = parseInt($('#st-min-conf').value, 10);
+  if (!isFinite(minConf) || minConf < 0 || minConf > 100) { setSettingsMsg('Minimum confidence must be between 0 and 100.', 'err'); return; }
+  const maxPos = parseInt($('#st-max-pos').value, 10);
+  if (!isFinite(maxPos) || maxPos < 1 || maxPos > 50) { setSettingsMsg('Maximum open positions must be between 1 and 50.', 'err'); return; }
+  const atrMult = Number($('#st-atr-mult').value);
+  if (!isFinite(atrMult) || atrMult < 0 || atrMult > 10) { setSettingsMsg('Stop distance must be between 0 and 10.', 'err'); return; }
   const body = {
     NTFY_TOPIC: $('#st-topic').value.trim(),
     NOTIFY_OWNERSHIP: $('#st-ownership').checked,
@@ -1412,6 +1484,14 @@ $('#st-save').addEventListener('click', async () => {
     OLLAMA_NUM_THREADS: isFinite(threads) && threads >= 1 ? threads : 1,
     OLLAMA_URL: $('#st-ollama-url').value.trim(),
     PAPER_COST_PCT: cost / 100,
+    MIN_CONFIDENCE: minConf,
+    AI_TRADE_CONFIRM: $('#st-confirm').checked,
+    LET_WINNERS_RUN: $('#st-let-run').checked,
+    STOP_ATR_MULT: atrMult,
+    MAX_OPEN_POSITIONS: maxPos,
+    ALLOW_SHORTS: $('#st-allow-shorts').checked,
+    NOTIFY_SHORTS: $('#st-notify-shorts').checked,
+    SHORT_MIN_IMPACT: $('#st-short-impact').value,
     DASHBOARD_USERNAME: $('#st-user').value.trim(),
     DASHBOARD_PASSWORD: $('#st-pass').value,
   };

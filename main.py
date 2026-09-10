@@ -12,6 +12,8 @@ from portfolio_manager import PortfolioManager
 from watch_manager import WatchManager
 from paper_trader import PaperTrader
 import price_lookup
+import strategy
+from strategy import LONG, SHORT
 import time
 import datetime
 import threading
@@ -20,6 +22,24 @@ import gc
 import ctypes
 import json
 import os
+
+
+def _process_rss_mb():
+    """This process's resident memory in MB, or None where unavailable.
+
+    Deliberately dependency-free (no psutil) and Linux-only in effect: it is
+    for the always-on VM, where knowing whether the footprint is flat or
+    climbing is the difference between a five-minute diagnosis and days of
+    guesswork. A 1GB box that runs out of memory does not necessarily
+    OOM-kill anything - it can just stop responding - so the growth has to be
+    visible *before* that point, in the logs the dashboard already shows.
+    """
+    try:
+        with open('/proc/self/statm', 'r') as f:
+            pages = int(f.read().split()[1])
+        return pages * os.sysconf('SC_PAGE_SIZE') / (1024 * 1024)
+    except (OSError, ValueError, IndexError, AttributeError):
+        return None
 
 
 def _release_memory():
@@ -348,6 +368,10 @@ class StockAppBackend:
                 # just gone unreachable at once.
                 _release_memory()
 
+                rss = _process_rss_mb()
+                if rss is not None:
+                    self.log(f"   💾 Memory in use: {rss:.0f} MB")
+
                 # --- SMART SCHEDULER ---
                 # Calculate sleep time until next 15-minute mark (xx:00, xx:15, xx:30, xx:45)
                 # To sync with device time.
@@ -421,114 +445,283 @@ class StockAppBackend:
         sentiment = (analysis.get('sentiment') or 'NEUTRAL').upper()
         impact = (analysis.get('impact') or 'LOW').upper()
         prediction = (analysis.get('prediction') or 'FLAT').upper()
-        
-        # --- PORTFOLIO LOGIC ---
-        # Rule: Positive news -> Notify Always (buying opportunities)
-        # Rule: Negative news -> Notify Always (risks and shorting opportunities)
-        # Rule: Only notify HIGH or CRITICAL impact to reduce noise
-        
-        should_notify = False
-        skip_reasons = []
-        
+        confidence = strategy.parse_confidence(analysis.get('confidence'))
+        expected_pct = strategy.parse_pct(analysis.get('expected_move_pct'))
+
         # Normalize ticker if possible, else use name
         stock_id = ticker if ticker else (target or '')
-        
-        self.log(f"[{target}] Analyzing: Sentiment={sentiment}, Impact={impact}, Prediction={prediction}")
-        
-        if sentiment == 'POSITIVE':
-            should_notify = True  # Always notify for opportunities
+        is_owned = self.portfolio_mgr.has_stock(stock_id)
+
+        self.log(f"[{target}] Analyzing: Sentiment={sentiment}, Impact={impact}, "
+                 f"Prediction={prediction}, Confidence={_fmt(confidence)}, "
+                 f"Expected move={_fmt_pct(expected_pct)}")
+
+        skip_reasons = self._alert_skip_reasons(analysis, sentiment, impact, prediction, confidence)
+        if skip_reasons:
+            self.log(f"  ⊘ No notification sent: {', '.join(skip_reasons)}")
+            self.stats['skipped'] += 1
+            self.status("Idle")
+            return
+
+        direction = LONG if sentiment == 'POSITIVE' else SHORT
+
+        # News that contradicts an open position closes it first - whatever
+        # happens next. The old code ignored it ("already has an open
+        # position"), throwing away the most useful exit signal the app had.
+        if ticker:
+            self._close_on_reversal(ticker, direction)
+
+        # Negative news on a stock you don't hold is a short setup; on one
+        # you do hold it is a risk warning, which is always worth sending.
+        is_short_setup = direction == SHORT and not is_owned
+        if is_short_setup and not config.ALLOW_SHORTS and not config.NOTIFY_SHORTS:
+            self.log(f"  ⊘ Negative news on {stock_id}, which you don't hold - short selling "
+                     f"is off in settings")
+            self.stats['skipped'] += 1
+            self.status("Idle")
+            return
+
+        if direction == LONG:
             self.log(f"  ✓ Positive sentiment detected - potential opportunity")
-        elif sentiment == 'NEGATIVE':
-            should_notify = True  # Always notify for risks (changed from portfolio-only)
-            if not self.portfolio_mgr.has_stock(stock_id):
-                self.log(f"  📉 MARKET ALERT: Negative news for {stock_id} (Not in Portfolio - potential short opportunity)")
-            else:
-                self.log(f"  ⚠️ WARNING: Negative news for portfolio stock {stock_id}")
+        elif is_owned:
+            self.log(f"  ⚠️ WARNING: Negative news for portfolio stock {stock_id}")
         else:
-            skip_reasons.append(f"sentiment is {sentiment} (neutral)")
-        
+            self.log(f"  📉 MARKET ALERT: Negative news for {stock_id} (Not in Portfolio - potential short opportunity)")
+
+        decision = self._decide_trade(ticker, target, direction, impact, prediction,
+                                      expected_pct, confidence, analysis, article, url, title)
+        if decision['opened']:
+            watch = decision['watch']
+            verb = 'BUY' if direction == LONG else 'SHORT'
+            self.log(f"  {verb} {ticker} at {watch['entry_price']:.2f} -> target "
+                     f"{watch['target_price']:.2f}, stop {watch['stop_loss_price']:.2f}, "
+                     f"time exit {watch['expires_at'][:16].replace('T', ' ')}")
+        else:
+            self.log(f"  ✗ No trade: {decision['reason']}")
+
+        self.log(f"🚀 ALERT: {target} ({sentiment}) - {analysis.get('explanation')}")
+        if is_short_setup and not config.NOTIFY_SHORTS:
+            self.log("  (short setups are muted in settings - no phone notification)")
+        else:
+            self.notifier.notify(target, article, analysis, is_owned=is_owned, decision=decision)
+
+        self.stats['alerts'] += 1
+        self._save_stats()
+        if self.alert_callback:
+            try:
+                self.alert_callback({
+                    'time': now_local(),
+                    'company': target,
+                    'ticker': ticker,
+                    'sentiment': sentiment,
+                    'impact': impact,
+                    'prediction': prediction,
+                    'confidence': confidence,
+                    'explanation': analysis.get('explanation') or '',
+                    'headline': title,
+                    'url': url,
+                    'is_owned': is_owned,
+                    'trade': {k: v for k, v in decision.items() if k != 'watch'},
+                })
+            except Exception as e:
+                self.log(f"  (alert view update failed: {e})")
+
+        self.status("Idle")
+
+    @staticmethod
+    def _alert_skip_reasons(analysis, sentiment, impact, prediction, confidence):
+        """Why this analysis should not raise an alert at all; empty if it
+        should. Flags a model left out (the keyword engine has none of them)
+        never count against an alert."""
+        reasons = []
+        if sentiment not in ('POSITIVE', 'NEGATIVE'):
+            reasons.append(f"sentiment is {sentiment} (neutral)")
         # Threshold read live from the module, not captured at import: the
         # sensitivity slider rewrites it and a running watcher must pick the
         # change up without a restart.
         if not config.impact_passes(impact):
-            if should_notify:
-                self.log(f"  ✗ Impact too low ({impact}) - notification cancelled")
-            skip_reasons.append(f"impact is {impact} (need {config.MIN_IMPACT} or above)")
-            should_notify = False  # Filter low impact noise
-            
-        # Extra Safety: Ignore "FLAT" predictions even if some other signal was high
-        prediction = (analysis.get('prediction') or '').upper()
+            reasons.append(f"impact is {impact} (need {config.MIN_IMPACT} or above)")
         if 'FLAT' in prediction:
-            if should_notify:
-                self.log(f"  ✗ Prediction is FLAT - notification cancelled")
-            skip_reasons.append("prediction is FLAT")
-            should_notify = False
+            reasons.append("prediction is FLAT")
+        if strategy.parse_flag(analysis.get('is_new_information')) is False:
+            reasons.append("not new information (a recap or commentary)")
+        if strategy.parse_flag(analysis.get('is_company_specific')) is False:
+            reasons.append("not company-specific (market/sector news)")
+        if confidence is not None and confidence < config.MIN_CONFIDENCE:
+            reasons.append(f"confidence {confidence} is below {config.MIN_CONFIDENCE}")
+        return reasons
 
-        if should_notify:
-            self.log(f"🚀 ALERT: {target} ({sentiment}) - {analysis.get('explanation')}")
-            # Pass ownership info to notifier
-            is_owned = self.portfolio_mgr.has_stock(stock_id)
-            self.notifier.notify(target, article, analysis, is_owned=is_owned)
+    def _decide_trade(self, ticker, company, direction, impact, prediction,
+                      expected_pct, confidence, analysis, article, url, title):
+        """Turn an alert into a position, or say why not.
 
-            # Open a watch so we can later tell the user when to close the
-            # position: POSITIVE opens a long (buy now, sell on the signal),
-            # NEGATIVE opens a short (sell a CFD short now, buy it back on
-            # the signal). Needs a ticker we can actually price.
-            if sentiment in ('POSITIVE', 'NEGATIVE') and ticker:
-                direction = 'LONG' if sentiment == 'POSITIVE' else 'SHORT'
-                # The benchmark rides along in the same batched call, so
-                # recording what the market did over this trade's window
-                # costs no extra request.
-                wanted = [ticker] + ([PAPER_BENCHMARK] if self.paper else [])
-                prices = price_lookup.fetch_prices(wanted)
-                entry_price = prices.get(ticker)
-                if entry_price:
-                    watch = self.watch_mgr.add_watch(
-                        ticker, target, entry_price, impact,
-                        analysis.get('horizon'), prediction,
-                        article_url=url, article_headline=title,
-                        direction=direction,
-                    )
-                    if watch:
-                        verb = 'BUY' if direction == 'LONG' else 'SHORT'
-                        self.log(f"  {verb} {ticker} at {entry_price:.2f} "
-                                 f"-> exit target {watch['target_price']:.2f}")
-                        if self.paper:
-                            self.paper.open_trade(watch, prices.get(PAPER_BENCHMARK))
-                    else:
-                        self.log(f"  ({ticker} already has an open position - no new watch)")
-                else:
-                    self.log(f"  (couldn't price {ticker} - no exit watch opened)")
+        Cheapest checks first: the price context and the AI trade check each
+        cost a request, so they only run for alerts that could still become
+        a trade. Returns a dict - 'opened', 'reason', and when the trade was
+        at least sized, its entry/target/stop (a short that is notified but
+        not paper-traded still shows its setup in the notification).
+        """
+        decision = {'opened': False, 'direction': direction, 'reason': None, 'watch': None}
 
-            self.stats['alerts'] += 1
-            self._save_stats()
-            if self.alert_callback:
-                try:
-                    self.alert_callback({
-                        'time': now_local(),
-                        'company': target,
-                        'ticker': ticker,
-                        'sentiment': sentiment,
-                        'impact': impact,
-                        'prediction': prediction,
-                        'explanation': analysis.get('explanation') or '',
-                        'headline': title,
-                        'url': url,
-                        'is_owned': is_owned,
-                    })
-                except Exception as e:
-                    self.log(f"  (alert view update failed: {e})")
+        def no(reason):
+            decision['reason'] = reason
+            return decision
+
+        if not ticker:
+            return no("no tradable ticker")
+        if direction == SHORT:
+            if not config.ALLOW_SHORTS and not config.NOTIFY_SHORTS:
+                return no("short selling is off in settings")
+            if config.impact_rank(impact) < config.impact_rank(config.SHORT_MIN_IMPACT):
+                return no(f"shorts need {config.SHORT_MIN_IMPACT} impact")
+        if self.watch_mgr.has_open_watch(ticker):
+            return no(f"already holding a position in {ticker}")
+        tracked = direction == LONG or config.ALLOW_SHORTS
+        if tracked and self.watch_mgr.open_count() >= config.MAX_OPEN_POSITIONS:
+            return no(f"position limit reached ({config.MAX_OPEN_POSITIONS} open)")
+
+        self.status(f"Checking price action: {ticker}")
+        context = price_lookup.fetch_context(ticker, article.get('published_ts'))
+        self.log(f"   📈 {_describe_context(context)}")
+        plan = strategy.plan_trade(direction, impact, expected_pct, context)
+        if not plan['ok']:
+            return no(plan['reason'])
+
+        horizon = analysis.get('horizon')
+        ai_confirmed = None
+        if config.AI_TRADE_CONFIRM and hasattr(self.analyzer, 'confirm_trade'):
+            self.status(f"AI trade check: {ticker}")
+            verdict = self.analyzer.confirm_trade(article, analysis, context, direction)
+            if not verdict:
+                # A provider hiccup shouldn't silently stop all trading; the
+                # hard rules above have already passed.
+                self.log("   (AI trade check unavailable - deciding on the rules alone)")
+            else:
+                take = strategy.parse_flag(verdict.get('take_trade'))
+                v_conf = strategy.parse_confidence(verdict.get('confidence'))
+                self.log(f"   🤖 Bull case: {verdict.get('bull_case')}")
+                self.log(f"   🤖 Bear case: {verdict.get('bear_case')}")
+                self.log(f"   🤖 Verdict: {'take it' if take else 'pass'} "
+                         f"(confidence {_fmt(v_conf)}) - {verdict.get('reason')}")
+                if take is not True:
+                    return no(f"AI trade check passed on it - {verdict.get('reason') or 'no edge left'}")
+                if v_conf is not None and v_conf < config.MIN_CONFIDENCE:
+                    return no(f"AI trade check confidence {v_conf} is below {config.MIN_CONFIDENCE}")
+                ai_confirmed = True
+                if v_conf is not None:
+                    confidence = v_conf
+                remaining = strategy.parse_pct(verdict.get('expected_remaining_move_pct'))
+                if remaining:
+                    plan = strategy.plan_trade(direction, impact, expected_pct, context,
+                                               remaining_pct=remaining)
+                    if not plan['ok']:
+                        return no(plan['reason'])
+                if (verdict.get('horizon') or '').upper() in strategy.HORIZON_TRADING_DAYS:
+                    horizon = verdict['horizon'].upper()
+
+        # Entry priced the same way every watch check prices it, with the
+        # benchmark riding along in the same batched call.
+        wanted = [ticker] + ([PAPER_BENCHMARK] if self.paper else [])
+        prices = price_lookup.fetch_prices(wanted)
+        entry = prices.get(ticker) or context.get('price')
+        if not entry:
+            return no(f"couldn't price {ticker}")
+
+        decision.update(
+            entry_price=entry,
+            target_price=round(strategy.price_at_gain(direction, entry, plan['target_pct']), 4),
+            stop_price=round(strategy.price_at_gain(direction, entry, -plan['stop_pct']), 4),
+            target_pct=plan['target_pct'],
+            stop_pct=plan['stop_pct'],
+            confidence=confidence,
+        )
+        if not tracked:
+            return no("shorts aren't paper-traded (off in settings), so no cover signal will follow")
+
+        watch = self.watch_mgr.add_watch(
+            ticker, company, entry, impact, horizon, prediction,
+            article_url=url, article_headline=title, direction=direction,
+            target_pct=plan['target_pct'], stop_pct=plan['stop_pct'],
+            extra={
+                'confidence': confidence,
+                'ai_confirmed': ai_confirmed,
+                'expected_move_pct': plan['expected_move_pct'],
+                'already_moved_pct': plan['already_moved_pct'],
+                'atr_pct': plan['atr_pct'],
+            },
+        )
+        if not watch:
+            return no(f"already holding a position in {ticker}")
+        if self.paper:
+            self.paper.open_trade(watch, prices.get(PAPER_BENCHMARK))
+        decision.update(opened=True, watch=watch, expires_at=watch['expires_at'])
+        return decision
+
+    def _close_on_reversal(self, ticker, direction):
+        """Close an open position in `ticker` facing the other way from new
+        news that has just passed the alert filters."""
+        for watch in self.watch_mgr.get_open_watches():
+            if watch['ticker'] != ticker or watch.get('direction', LONG) == direction:
+                continue
+            wanted = [ticker] + ([PAPER_BENCHMARK] if self.paper else [])
+            prices = price_lookup.fetch_prices(wanted)
+            price = prices.get(ticker)
+            if not price:
+                self.log(f"  (news contradicts the open {watch['direction']} on {ticker}, "
+                         f"but it couldn't be priced - left to the next watch check)")
+                return
+            self.log(f"  ↩ New {'positive' if direction == LONG else 'negative'} news contradicts "
+                     f"the open {watch['direction']} on {ticker} - closing it at {price:.2f}")
+            self._close_position(watch, 'news_reversal', price,
+                                 prices.get(PAPER_BENCHMARK), now_local())
+
+    def _close_position(self, watch, reason, price, benchmark_price, now):
+        """Close a watch, record the paper trade and send the exit signal."""
+        closed = self.watch_mgr.close_watch(watch['id'], reason, price)
+        if not closed:
+            return
+
+        if self.paper:
+            trade = self.paper.close_trade(closed, price, benchmark_price)
+            if trade:
+                self.log(f"  📒 Paper trade #{len(self.paper.closed())}: "
+                         f"{trade['net_pct'] * 100:+.2f}% after costs")
+
+        direction = watch.get('direction', LONG)
+        signal = 'COVER SHORT' if direction == SHORT else 'SELL'
+        self.log(f"💰 {signal} SIGNAL: {watch['company']} ({watch['ticker']}) - {reason}")
+        if direction == SHORT and not config.NOTIFY_SHORTS:
+            self.log("  (short notifications are muted in settings)")
         else:
-            reason_str = ", ".join(skip_reasons) if skip_reasons else "unknown reason"
-            self.log(f"  ⊘ No notification sent: {reason_str}")
-            self.stats['skipped'] += 1
+            self.notifier.notify_sell(
+                watch['ticker'], watch['company'], reason,
+                watch['entry_price'], price, watch['target_price'],
+                article_url=watch.get('article_url'),
+                direction=direction,
+            )
 
-        self.status("Idle")
+        if self.alert_callback:
+            try:
+                self.alert_callback({
+                    'time': now,
+                    'kind': 'sell_signal',
+                    'company': watch['company'],
+                    'ticker': watch['ticker'],
+                    'direction': direction,
+                    'reason': reason,
+                    'entry_price': watch['entry_price'],
+                    'current_price': price,
+                    'target_price': watch['target_price'],
+                    'headline': watch.get('article_headline'),
+                    'url': watch.get('article_url'),
+                })
+            except Exception as e:
+                self.log(f"  (alert view update failed: {e})")
 
     def _check_watches(self):
-        """Check every open watch's current price against its target/expiry
-        and close+notify any that have resolved - a sell signal for longs,
-        a buy-back signal for shorts (see watch_manager.py)."""
+        """Check every open watch's current price against its exits and close
+        + notify any that fire - a sell signal for longs, a buy-back signal
+        for shorts. The rules are in strategy.py."""
         open_watches = self.watch_mgr.get_open_watches()
         if not open_watches:
             return
@@ -540,6 +733,11 @@ class StockAppBackend:
         prices = price_lookup.fetch_prices(tickers)
         benchmark_price = prices.get(PAPER_BENCHMARK) if self.paper else None
         now = now_local()
+        # Time exits wait for the regular session: fired at 3am they would
+        # close on a stale after-hours print nobody could trade at. Price
+        # exits (stops) fire whenever a price is there.
+        market_open = strategy.us_market_open()
+        cost = self.paper.cost_pct if self.paper else config.PAPER_COST_PCT
 
         for watch in open_watches:
             price = prices.get(watch['ticker'])
@@ -547,79 +745,86 @@ class StockAppBackend:
                 continue
 
             # Note how far this position has run either way before deciding
-            # whether it resolves. Recorded for every open watch on every
-            # check, not just the ones closing - the worst point a trade
-            # passed through is exactly what a later stop-loss study needs,
-            # and it is unrecoverable if not captured live.
+            # whether it resolves - the worst point a trade passed through is
+            # what a later stop-loss study needs, and it is unrecoverable if
+            # not captured live.
             if self.paper:
                 self.paper.mark_price(watch['id'], price)
 
-            expires_at = datetime.datetime.fromisoformat(watch['expires_at'])
-            reason = None
-            if self.watch_mgr.stop_loss_hit(watch, price):
-                reason = 'stop_loss'
-            elif self.watch_mgr.target_reached(watch, price):
-                reason = 'target_hit'
-            elif now >= expires_at:
-                # Horizon expired - the "scheduled" exit. If this watch has a
-                # stop-loss (profit protection is on) and it's currently at a
-                # loss, don't sell into it: push the expiry out and keep
-                # watching instead. Only a recovery to profit, the target, or
-                # the stop-loss itself can close it from here.
-                if watch.get('stop_loss_price') is not None and not self.watch_mgr.is_profitable(watch, price):
-                    self.watch_mgr.postpone_watch(watch['id'])
-                    self.log(f"  ⏳ {watch['company']} ({watch['ticker']}) horizon passed at a "
-                             f"loss ({watch['entry_price']:.2f} -> {price:.2f}) - postponing exit, "
-                             f"waiting for profit or stop-loss ({watch['stop_loss_price']:.2f})")
-                else:
+            reason, target_reached = self.watch_mgr.update_exit(watch, price, cost)
+            if not reason and market_open:
+                if self.watch_mgr.over_age_limit(watch, now):
+                    reason = 'max_age'
+                    self.log(f"  📅 {watch['company']} ({watch['ticker']}) open past the age "
+                             f"limit - closing at {price:.2f}")
+                elif now >= _parse_time(watch.get('expires_at'), now):
                     reason = 'horizon_expired'
 
-            if not reason:
-                continue
+            if target_reached and not reason:
+                self._notify_target_reached(watch, price)
+            if reason:
+                self._close_position(watch, reason, price, benchmark_price, now)
 
-            closed = self.watch_mgr.close_watch(watch['id'], reason, price)
-            if not closed:
-                continue
-
-            if self.paper:
-                trade = self.paper.close_trade(closed, price, benchmark_price)
-                if trade:
-                    self.log(f"  📒 Paper trade #{len(self.paper.closed())}: "
-                             f"{trade['net_pct'] * 100:+.2f}% after costs")
-
-            direction = watch.get('direction', 'LONG')
-            signal = 'COVER SHORT' if direction == 'SHORT' else 'SELL'
-            self.log(f"💰 {signal} SIGNAL: {watch['company']} ({watch['ticker']}) - {reason}")
-            self.notifier.notify_sell(
-                watch['ticker'], watch['company'], reason,
-                watch['entry_price'], price, watch['target_price'],
-                article_url=watch.get('article_url'),
-                direction=direction,
-            )
-
-            if self.alert_callback:
-                try:
-                    self.alert_callback({
-                        'time': now,
-                        'kind': 'sell_signal',
-                        'company': watch['company'],
-                        'ticker': watch['ticker'],
-                        'direction': direction,
-                        'reason': reason,
-                        'entry_price': watch['entry_price'],
-                        'current_price': price,
-                        'target_price': watch['target_price'],
-                        'headline': watch.get('article_headline'),
-                        'url': watch.get('article_url'),
-                    })
-                except Exception as e:
-                    self.log(f"  (alert view update failed: {e})")
-
-        # One write for the whole pass. mark_price only mutates in memory, so
-        # without this the excursions of every still-open position would be
-        # lost on restart (close_trade saves on its own, but only covers the
-        # watches that actually resolved).
+        # One write for the whole pass: update_exit and mark_price only
+        # mutate in memory, so without this every still-open position's
+        # ratcheted stop and excursions would be lost on restart.
+        self.watch_mgr.save()
         if self.paper:
             self.paper.save()
 
+        # The price call above is the single largest allocation this process
+        # makes (yfinance/pandas frames), and it runs on a coarser cadence
+        # than the news scan's own _release_memory() at the end of a cycle.
+        # Without trimming here the high-water mark of the last price fetch
+        # stays resident until the next scan finishes.
+        _release_memory()
 
+    def _notify_target_reached(self, watch, price):
+        """A let-it-run position reached its target: it stays open, with its
+        stop now trailing close behind. Worth telling the user - their
+        broker-side stop should follow."""
+        direction = watch.get('direction', LONG)
+        self.log(f"  🎯 {watch['company']} ({watch['ticker']}) reached its target at "
+                 f"{price:.2f} - holding, trailing stop now {watch['stop_loss_price']:.2f}")
+        if direction == SHORT and not config.NOTIFY_SHORTS:
+            return
+        self.notifier.notify_target_reached(
+            watch['ticker'], watch['company'], direction, watch['entry_price'],
+            price, watch['stop_loss_price'], article_url=watch.get('article_url'))
+
+
+def _parse_time(value, fallback):
+    """ISO timestamp -> aware datetime; `fallback` (normally now, i.e. "due")
+    for a missing or unreadable one, so a damaged record still gets its
+    time exit instead of raising inside the watch pass."""
+    try:
+        parsed = datetime.datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return fallback
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=fallback.tzinfo)
+    return parsed
+
+
+def _fmt(value):
+    return "n/a" if value is None else str(value)
+
+
+def _fmt_pct(value):
+    return "n/a" if value is None else f"{value * 100:.1f}%"
+
+
+def _describe_context(ctx):
+    """One log line of the price context a trade decision was made on."""
+    if not ctx:
+        return "No price context available"
+    parts = []
+    if ctx.get('price') is not None:
+        parts.append(f"price {ctx['price']:.2f}")
+    if ctx.get('change_since_close_pct') is not None:
+        parts.append(f"{ctx['change_since_close_pct'] * 100:+.1f}% since close")
+    if ctx.get('change_since_publish_pct') is not None:
+        parts.append(f"{ctx['change_since_publish_pct'] * 100:+.1f}% since published")
+    if ctx.get('atr_pct') is not None:
+        parts.append(f"daily range {ctx['atr_pct'] * 100:.1f}%")
+    return "Price context: " + ", ".join(parts)
