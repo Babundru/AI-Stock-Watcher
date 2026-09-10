@@ -30,11 +30,37 @@ noise, or a full structured object for real news:
   "target_company": "...", "ticker": "...",
   "sentiment": "POSITIVE|NEGATIVE|NEUTRAL",
   "impact": "LOW|MEDIUM|HIGH|CRITICAL",
+  "expected_move_pct": 6.5,
+  "confidence": 0-100,
+  "is_new_information": true,
+  "is_company_specific": true,
   "explanation": "...",
   "prediction": "GAP UP|GAP DOWN|RALLY|DROP|FLAT",
   "horizon": "INTRADAY|DAYS|WEEKS"
 }
 ```
+
+`confidence`, `is_new_information` and `is_company_specific` gate the
+alert in `main.py:_alert_skip_reasons` (below `MIN_CONFIDENCE`, or either
+flag explicitly `false`, drops it). A field the engine leaves out never
+counts against an alert - the keyword engine has none of them.
+`expected_move_pct` feeds `strategy.plan_trade` (the priced-in check and
+the target). The prompt also gets the article's publish time and a
+calibration paragraph ("most news moves a large-cap < 2%").
+
+### The trade confirmation (`build_trade_prompt`)
+
+A second call, made only for alerts that are about to become a trade
+(after the rule checks in `strategy.plan_trade` pass, so a handful a day),
+via `confirm_trade()` on both LLM engines. It sends the article again with
+the live price context from `price_lookup.fetch_context` - move since the
+previous close and since publication, 5-day change, 14-day ATR - and asks
+for a bull case, a bear case, `take_trade`, `confidence` and
+`expected_remaining_move_pct`. A pass, or confidence below
+`MIN_CONFIDENCE`, cancels the trade; the remaining move sets the target.
+If the call fails the trade is decided on the rules alone (logged).
+`AI_TRADE_CONFIRM` turns it off. The keyword engine has no
+`confirm_trade`, so it always trades on the rules.
 
 `horizon` feeds `watch_manager.py`'s sell-signal expiry window - see
 `portfolio_and_notifications.md`. `parse_json_response()` tolerates a
