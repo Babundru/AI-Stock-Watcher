@@ -210,8 +210,9 @@ not sent.
 
 ### Alert sensitivity
 
-The **Alert on** slider in the sidebar — or the one at the top of the web
-dashboard's Alerts view — sets the weakest impact rating that raises an alert.
+The **Alert on** slider in the sidebar — or the Low / Medium / High / Critical
+switch in the web dashboard's **Alert rules** card (Alerts view) — sets the
+weakest impact rating that raises an alert.
 It applies immediately, with no restart, and is saved to `data/settings.json`.
 
 | Setting | What gets through | Expected move |
@@ -352,7 +353,7 @@ The app falls back to an offline weighted-keyword scorer that needs no model
 and analyses instantly. It is cruder — it matches vocabulary rather than
 understanding the article — but it weights headline mentions far above body
 text, handles negation, and filters non-market news. Its vocabulary is editable
-in the Keywords tab.
+from the app (on the web dashboard: Sources → Keywords).
 
 ---
 

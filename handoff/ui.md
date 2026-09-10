@@ -11,11 +11,25 @@ poll-based against a small JSON API - there's no websocket/SSE.
 
 ### Layout
 
-Header (always visible): connection dot + Start/Stop + alerts mute toggle
-+ "Send Test Notification" button, stat tiles (Scanned/Alerts/Skipped),
-current activity line, engine label. Below that, tabs: **Alerts**
-(default), **Logs**, **Portfolio**, **Sources**, **Keywords**,
-**Settings**.
+Dark, flat broker-app look modelled on the XTB mobile app: near-black
+ground, grey surfaces with no borders, one brand red (logo, active-tab
+marker), green/red only for up/down. Mobile-first and responsive:
+
+- **Under 1024px** (phones, tablets): sticky top bar (logo, status chip,
+  phone-alerts bell, one Start/Stop button) and a fixed bottom tab bar.
+- **1024px and up**: the same nav becomes a left sidebar (engine label in
+  its footer), the top bar shows the page title, and the Alerts view goes
+  two-column with the rules/Watching cards in a sticky right column.
+
+Five sections: **Alerts** (default - scan counters + activity line, an
+"Alert rules" card with the sensitivity segmented control and stop-loss
+cap, folded on phones, the Watching list, then the alert feed),
+**Portfolio** (segmented *My holdings* / *Paper trading*), **Logs**,
+**Sources** (segmented *News sources* / *Keywords*; Keywords is its own
+`view-keywords` section reached from that control), **Settings** (the
+test-notification button lives in its Phone notifications card). The
+current view is kept in the URL hash (`#portfolio`, `#keywords`, ...), so
+a reload or bookmark lands on it.
 
 The web dashboard is the primary front end (the backend runs as a service
 on a Debian VM, reached over Tailscale from phones/laptops), so it has
@@ -25,7 +39,7 @@ everything the desktop GUI has. Feature map, with the endpoint behind it:
 |---|---|
 | Start / Stop | `POST /api/control` |
 | Mute phone alerts | `GET/POST /api/notifications` |
-| Alert sensitivity slider | `GET/POST /api/sensitivity` |
+| Alert sensitivity (segmented control) | `GET/POST /api/sensitivity` |
 | Stop-loss % | `GET/POST /api/stop-loss` |
 | Clear alerts | `DELETE /api/alerts` |
 | Logs: AI-traffic filter, auto-scroll, clear | client-side only |
@@ -49,12 +63,13 @@ stored one, `clear_api_key: true` removes the key.
   client only receives what's new), the full current alert list, running
   status, and stats. Drives the header, the Logs tab, and the Alerts tab.
 - `loadWatches()` every 15s -> `GET /api/watches`, filtered client-side to
-  `status === 'OPEN'` for the "Watching" card above the alert list (hidden
+  `status === 'OPEN'` for the "Watching" card (right column on desktop,
+  above the feed on phones; hidden
   entirely when there are none). Each row shows a Long/Short badge from the
   watch's `direction`.
 - Portfolio tab loads on-demand (tab click, not polled): `GET
-  /api/portfolio` (holdings table), `GET /api/portfolio/summary` (cheap
-  live value/profit stat tiles), `GET /api/portfolio/history` (heavier -
+  /api/portfolio` (holdings list), `GET /api/portfolio/summary` (cheap
+  live value/profit in the hero card), `GET /api/portfolio/history` (heavier -
   drives the canvas chart, see `portfolio_and_notifications.md` for why
   it's split from `summary`).
 - Sources/Keywords tabs also load on-demand via their respective
@@ -74,6 +89,13 @@ from the same `/api/state` alerts array - `main.py`'s two different
 `alert_callback` payload shapes (see `main.py: _process_article` vs.
 `_check_watches`) are what `kind` distinguishes.
 
+Explanations are clamped to three lines; tapping one expands it, and the
+expanded keys are kept in `expandedAlerts` so the next re-render (only on
+a changed alert list) doesn't fold it again. Holdings, watches, paper
+positions, sources and closed trades all render as the same instrument
+row (`.row-item`: ticker avatar, title + sub line, value column, action)
+rather than tables, which is what keeps them inside a phone's width.
+
 ### Portfolio chart (`drawPortfolioChart`)
 
 Hand-rolled `<canvas>` line chart, no charting library - two lines
@@ -81,7 +103,9 @@ Hand-rolled `<canvas>` line chart, no charting library - two lines
 shaded green/red depending on whether the latest value is above or below
 cost basis. Redrawn from scratch on every `loadPortfolioHistory()` call;
 not incremental, fine at this data volume (one point per day since the
-earliest buy date).
+earliest buy date). Both canvases are also redrawn on window resize and
+when the Paper trading pane is unhidden (`redrawCharts`), because a canvas
+drawn while hidden has zero width.
 
 ### Auth
 
@@ -98,12 +122,17 @@ token handling in the JS at all. See `api_keys_and_secrets.md`.
   `fetch()` + render function in the `<script>` block - follow the
   existing `loadPortfolio`/`loadSources`/`loadKeywords` pattern (fetch on
   tab activation, re-fetch after any mutation).
-- **New tab**: add a `<nav.tabs>` button with `data-view="X"`, a matching
-  `<section id="view-X" class="view">`, and a load call in the tab-click
-  handler if it needs on-demand data.
+- **New section**: add a `#nav` button with `data-view="X"` (icon from
+  the SVG sprite at the top of `<body>` + label), a matching
+  `<section id="view-X" class="view">`, `X` in `VIEWS`/`VIEW_TITLES`, and
+  a load call in `showView()` if it needs on-demand data. The bottom bar
+  is sized for five items; a sixth fits better as a segmented tab inside
+  an existing section, the way Keywords sits under Sources.
 - **Theme/styling**: all CSS is inline in the `<head>`, driven by CSS
-  custom properties (`:root { --bg: ...; --accent: ...; }`) - change once,
-  applies everywhere.
+  custom properties (`:root { --bg: ...; --brand: ...; --up: ...; }`) -
+  change once, applies everywhere. Breakpoints: 400px (compact top bar),
+  640px (tablet: wider grids), 1024px (sidebar layout). Chart colours are
+  hard-coded in the two `draw*Chart` functions and mirror `--up`/`--down`.
 
 ## Desktop GUI (`gui.py`)
 

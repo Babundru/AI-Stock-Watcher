@@ -3,606 +3,889 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%93%88%3C/text%3E%3C/svg%3E">
+<meta name="theme-color" content="#0B0D10">
+<meta name="color-scheme" content="dark">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23E4202B'/%3E%3Cpath d='M7 21l6-6 4 4 8-8' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <title>Stocks AI</title>
 <style>
+  /* Dark, flat, broker-app look (after XTB): near-black ground, soft grey
+     surfaces with no borders or shadows, one brand red used sparingly,
+     green/red reserved for up/down. Mobile-first; a bottom tab bar under
+     1024px, a left sidebar above it. Every colour is a token here. */
   :root {
-    --bg: #0B0D11;
-    --sidebar: #0F1218;
-    --panel: #141821;
-    --panel-hi: #1A1F2A;
-    --line: #222835;
-    --line-hi: #2C3444;
-    --text: #E7EAF0;
-    --text-dim: #97A0B2;
-    --text-mute: #5B6474;
-    --accent: #5B8CFF;
-    --accent-hover: #4A7AEE;
-    --accent-soft: #182338;
-    --accent-glow: rgba(91, 140, 255, .35);
-    --success: #3DDC84;
-    --danger: #FF5C6C;
-    --danger-soft: #3A1E22;
-    --warn: #F5B94D;
-    --radius: 12px;
-    --shadow: 0 10px 28px rgba(0,0,0,.32);
-    --ease: cubic-bezier(.2,.7,.3,1);
+    --bg: #0B0D10;
+    --surface: #15181D;
+    --surface-2: #1C2026;
+    --surface-3: #262B32;
+    --line: #22262D;
+    --line-2: #30363F;
+    --text: #F3F5F7;
+    --text-2: #A0A8B3;
+    --text-3: #6A727E;
+    --brand: #E4202B;
+    --brand-soft: rgba(228, 32, 43, .14);
+    --up: #1FC07F;
+    --up-soft: rgba(31, 192, 127, .13);
+    --down: #F5475A;
+    --down-soft: rgba(245, 71, 90, .13);
+    --warn: #F2A93B;
+    --warn-soft: rgba(242, 169, 59, .13);
+    --info: #3D8BFF;
+    --info-soft: rgba(61, 139, 255, .14);
+    --r-lg: 18px;
+    --r: 14px;
+    --r-sm: 10px;
+    --nav-h: 64px;
+    --top-h: 60px;
+    --safe-b: env(safe-area-inset-bottom, 0px);
+    --ease: cubic-bezier(.2, .7, .3, 1);
+    color-scheme: dark;
   }
   * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
   body {
-    margin: 0;
-    background:
-      radial-gradient(circle at 12% -10%, #182033 0%, transparent 45%),
-      var(--bg);
-    background-attachment: fixed;
-    color: var(--text);
-    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    font-size: 14px;
-    -webkit-font-smoothing: antialiased;
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-size: 14px; line-height: 1.45;
+    -webkit-font-smoothing: antialiased; -webkit-tap-highlight-color: transparent;
   }
-  ::selection { background: var(--accent-soft); color: var(--text); }
-  header {
-    position: sticky; top: 0; z-index: 10;
-    background: rgba(15, 18, 24, .85);
-    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
-    border-bottom: 1px solid var(--line);
-    padding: 12px 16px;
+  ::selection { background: var(--surface-3); }
+  a { color: var(--text); text-decoration: none; }
+  code { font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: .92em;
+         background: var(--surface-3); padding: 1px 5px; border-radius: 5px; }
+  svg.i { width: 20px; height: 20px; flex: none; stroke: currentColor; fill: none;
+          stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .num { font-variant-numeric: tabular-nums; }
+  .up { color: var(--up); }
+  .down { color: var(--down); }
+  .muted { color: var(--text-3); }
+  [hidden] { display: none !important; }
+
+  /* ---- App shell ------------------------------------------------------ */
+  .app { min-height: 100vh; min-height: 100dvh; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 17px; letter-spacing: -.01em; }
+  .logo {
+    width: 30px; height: 30px; border-radius: 9px; background: var(--brand);
+    display: grid; place-items: center; flex: none;
   }
-  .top-row {
-    display: flex; align-items: center; justify-content: space-between;
-    flex-wrap: wrap; gap: 10px;
+  .logo svg { width: 18px; height: 18px; stroke: #fff; fill: none; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+
+  /* Bottom tab bar (phones/tablets). */
+  .sidebar {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
+    background: rgba(15, 17, 21, .94);
+    backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    border-top: 1px solid var(--line);
+    padding-bottom: var(--safe-b);
   }
-  h1 {
-    font-size: 17px; margin: 0; font-weight: 800; letter-spacing: -.01em;
-    background: linear-gradient(135deg, var(--accent), #8AB4FF);
-    -webkit-background-clip: text; background-clip: text; color: transparent;
+  .sidebar .brand, .sidebar .side-foot { display: none; }
+  .nav { display: flex; height: var(--nav-h); }
+  .nav button {
+    flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+    background: none; border: 0; color: var(--text-3); font: inherit; font-size: 10.5px; font-weight: 600;
+    cursor: pointer; position: relative; padding: 0 2px;
+    transition: color .15s var(--ease);
   }
-  .pill {
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 600;
-    background: var(--panel); border: 1px solid var(--line);
+  .nav button span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .nav button svg.i { width: 22px; height: 22px; }
+  .nav button.active { color: var(--text); }
+  .nav button.active::before {
+    content: ''; position: absolute; top: -1px; left: 50%; width: 26px; height: 3px;
+    transform: translateX(-50%); border-radius: 0 0 3px 3px; background: var(--brand);
+  }
+  .nav .badge-dot {
+    position: absolute; top: 9px; left: calc(50% + 7px); min-width: 16px; height: 16px; padding: 0 4px;
+    border-radius: 999px; background: var(--brand); color: #fff; font-size: 9.5px; font-weight: 800;
+    display: grid; place-items: center; line-height: 1;
+  }
+
+  /* Top bar. */
+  .topbar {
+    position: sticky; top: 0; z-index: 20; height: var(--top-h);
+    display: flex; align-items: center; gap: 10px; padding: 0 16px;
+    padding-top: env(safe-area-inset-top, 0px); height: calc(var(--top-h) + env(safe-area-inset-top, 0px));
+    background: rgba(11, 13, 16, .9);
+    backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    border-bottom: 1px solid transparent;
     transition: border-color .2s var(--ease);
   }
-  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--danger); transition: background .25s var(--ease); }
-  .dot.on { background: var(--success); animation: pulse 2s infinite; }
+  .topbar.scrolled { border-bottom-color: var(--line); }
+  .topbar .page-title { display: none; font-size: 20px; font-weight: 800; letter-spacing: -.02em; margin: 0; }
+  .topbar .spacer { flex: 1; }
+  .status {
+    display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 12px;
+    border-radius: 999px; background: var(--surface-2); font-size: 12px; font-weight: 700; color: var(--text-2);
+    white-space: nowrap;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); flex: none; }
+  .dot.on { background: var(--up); animation: pulse 2s infinite; }
   @keyframes pulse {
-    0% { box-shadow: 0 0 0 0 rgba(61,220,132,.45); }
-    70% { box-shadow: 0 0 0 6px rgba(61,220,132,0); }
-    100% { box-shadow: 0 0 0 0 rgba(61,220,132,0); }
-  }
-  button {
-    font-family: inherit; font-weight: 700; font-size: 12px;
-    border: none; border-radius: 8px; padding: 8px 14px; cursor: pointer;
-    background: var(--panel-hi); color: var(--text-dim);
-    transition: background .15s var(--ease), transform .1s var(--ease), box-shadow .2s var(--ease), color .15s var(--ease);
-  }
-  button:hover { background: var(--line-hi); }
-  button:active { transform: scale(.96); }
-  button:disabled { opacity: .55; cursor: default; transform: none; }
-  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  button.primary { background: var(--accent); color: #fff; box-shadow: 0 2px 12px var(--accent-glow); }
-  button.primary:hover { background: var(--accent-hover); box-shadow: 0 4px 16px var(--accent-glow); }
-  button.danger-btn { background: var(--danger-soft); color: var(--danger); }
-  .stats-row { display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
-  .stat {
-    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
-    padding: 8px 14px; min-width: 90px;
-    transition: transform .15s var(--ease), border-color .15s var(--ease);
-  }
-  .stat:hover { transform: translateY(-2px); border-color: var(--line-hi); }
-  .stat .n { font-size: 19px; font-weight: 800; font-variant-numeric: tabular-nums; transition: color .2s var(--ease); }
-  .stat .l { font-size: 10px; color: var(--text-mute); text-transform: uppercase; letter-spacing: .05em; }
-  .activity { font-size: 12px; color: var(--text-dim); margin-top: 8px; }
-  .engine { font-size: 11px; color: var(--text-mute); }
-
-  nav.tabs {
-    display: flex; gap: 4px; padding: 10px 16px 0; overflow-x: auto;
-    background: var(--sidebar);
-  }
-  nav.tabs button {
-    position: relative;
-    background: transparent; color: var(--text-dim); border-radius: 8px 8px 0 0;
-    padding: 8px 14px; white-space: nowrap;
-    transition: background .18s var(--ease), color .18s var(--ease);
-  }
-  nav.tabs button:hover { background: var(--panel-hi); color: var(--text); }
-  nav.tabs button.active { background: var(--panel); color: var(--accent); }
-  nav.tabs button.active::after {
-    content: ''; position: absolute; left: 10px; right: 10px; bottom: -1px; height: 2px;
-    background: var(--accent); border-radius: 2px;
+    0% { box-shadow: 0 0 0 0 rgba(31, 192, 127, .5); }
+    70% { box-shadow: 0 0 0 7px rgba(31, 192, 127, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(31, 192, 127, 0); }
   }
 
-  main { padding: 14px 16px 40px; max-width: 900px; margin: 0 auto; }
+  main {
+    padding: 12px 16px calc(var(--nav-h) + var(--safe-b) + 28px);
+    max-width: 1180px; margin: 0 auto;
+  }
   .view { display: none; }
-  .view.active { display: block; animation: fadeIn .25s var(--ease); }
+  .view.active { display: block; animation: fadeIn .22s var(--ease); }
   @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 
-  .card {
-    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
-    padding: 14px; margin-bottom: 10px;
-    transition: transform .15s var(--ease), border-color .15s var(--ease), box-shadow .2s var(--ease);
+  /* ---- Buttons & controls --------------------------------------------- */
+  button { font-family: inherit; }
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+    height: 38px; padding: 0 16px; border: 0; border-radius: 999px; cursor: pointer;
+    font-size: 13px; font-weight: 700; white-space: nowrap;
+    background: var(--surface-2); color: var(--text);
+    transition: background .15s var(--ease), transform .1s var(--ease), opacity .15s var(--ease);
   }
-  .card:hover { border-color: var(--line-hi); box-shadow: var(--shadow); transform: translateY(-1px); }
-  .card.alert-pos { border-left: 3px solid var(--success); }
-  .card.alert-neg { border-left: 3px solid var(--danger); }
-  .card.alert-neu { border-left: 3px solid var(--line-hi); }
-  .card.alert-sell { border-left: 3px solid var(--warn); }
-  .card.alert-cover { border-left: 3px solid var(--accent); }
-  @keyframes cardIn { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
-  .card.alert-new { animation: cardIn .4s var(--ease); }
-  .card h3 { margin: 0 0 4px; font-size: 14px; }
-  .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
-  .badge {
-    font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 999px;
-    text-transform: uppercase; letter-spacing: .03em;
+  .btn svg.i { width: 17px; height: 17px; }
+  .btn:hover { background: var(--surface-3); }
+  .btn:active { transform: scale(.97); }
+  .btn:disabled { opacity: .5; cursor: default; transform: none; }
+  .btn:focus-visible, .icon-btn:focus-visible, .seg button:focus-visible, .nav button:focus-visible {
+    outline: 2px solid var(--text-2); outline-offset: 2px;
   }
-  .badge.pos { background: #123321; color: var(--success); }
-  .badge.neg { background: var(--danger-soft); color: var(--danger); }
-  .badge.neu { background: var(--panel-hi); color: var(--text-dim); }
-  .badge.owned { background: var(--accent-soft); color: var(--accent); }
-  .badge.sell { background: #3A2E12; color: var(--warn); }
-  .badge.cover { background: var(--accent-soft); color: var(--accent); }
-  .badge.side-long { background: #123321; color: var(--success); }
-  .badge.side-short { background: var(--danger-soft); color: var(--danger); }
-  .meta { font-size: 11px; color: var(--text-mute); margin-top: 6px; }
-  .explanation { font-size: 12px; color: var(--text-dim); margin-top: 8px; line-height: 1.4; }
-  a { color: var(--accent); text-decoration: none; }
-  a:hover { text-decoration: underline; }
+  .btn.primary { background: var(--text); color: #0B0D10; }
+  .btn.primary:hover { background: #fff; }
+  .btn.brand { background: var(--brand); color: #fff; }
+  .btn.brand:hover { background: #F02E39; }
+  .btn.danger { background: var(--down-soft); color: var(--down); }
+  .btn.danger:hover { background: rgba(245, 71, 90, .22); }
+  .btn.ghost { background: transparent; color: var(--text-2); }
+  .btn.ghost:hover { background: var(--surface-2); color: var(--text); }
+  .btn.sm { height: 32px; padding: 0 12px; font-size: 12px; }
+  .btn.block { width: 100%; }
+  .icon-btn {
+    width: 36px; height: 36px; flex: none; border: 0; border-radius: 50%; cursor: pointer;
+    display: grid; place-items: center; background: var(--surface-2); color: var(--text-2);
+    transition: background .15s var(--ease), color .15s var(--ease);
+  }
+  .icon-btn:hover { background: var(--surface-3); color: var(--text); }
+  .icon-btn.plain { background: transparent; }
+  .icon-btn.plain:hover { background: var(--surface-2); }
+  .icon-btn.sm { width: 30px; height: 30px; }
+  .icon-btn.sm svg.i { width: 16px; height: 16px; }
+  .icon-btn.del:hover { color: var(--down); background: var(--down-soft); }
 
+  /* Phone-alerts bell in the top bar: on / muted / on-but-no-topic. */
+  .bell { position: relative; }
+  .bell .ic-off { display: none; }
+  .bell.muted { color: var(--text-3); }
+  .bell.muted .ic-on { display: none; }
+  .bell.muted .ic-off { display: block; }
+  .bell.no-topic { color: var(--warn); background: var(--warn-soft); }
+  .bell-label { display: none; }
+
+  /* Segmented control. */
+  .seg {
+    display: flex; gap: 2px; padding: 3px; border-radius: 999px; background: var(--surface);
+    overflow-x: auto; scrollbar-width: none;
+  }
+  .seg::-webkit-scrollbar { display: none; }
+  .seg button {
+    flex: 1; border: 0; background: transparent; color: var(--text-2); cursor: pointer;
+    height: 34px; padding: 0 14px; border-radius: 999px; font-size: 12.5px; font-weight: 700; white-space: nowrap;
+    transition: background .15s var(--ease), color .15s var(--ease);
+  }
+  .seg button:hover { color: var(--text); }
+  .seg button.on { background: var(--surface-3); color: var(--text); }
+  .seg.top { margin-bottom: 14px; }
+
+  /* Switch (sources on/off, settings flags). */
+  .switch { position: relative; display: inline-flex; flex: none; cursor: pointer; }
+  .switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+  .switch .track {
+    width: 42px; height: 24px; border-radius: 999px; background: var(--surface-3);
+    position: relative; transition: background .18s var(--ease);
+  }
+  .switch .track::after {
+    content: ''; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%;
+    background: var(--text-2); transition: transform .18s var(--ease), background .18s var(--ease);
+  }
+  .switch input:checked + .track { background: var(--up); }
+  .switch input:checked + .track::after { transform: translateX(18px); background: #fff; }
+  .switch input:focus-visible + .track { outline: 2px solid var(--text-2); outline-offset: 2px; }
+
+  /* Chips & badges. */
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 10px; border-radius: 999px;
+    font-size: 11px; font-weight: 800; letter-spacing: .02em; white-space: nowrap; text-transform: uppercase;
+    background: var(--surface-3); color: var(--text-2);
+  }
+  .chip.pos, .chip.long { background: var(--up-soft); color: var(--up); }
+  .chip.neg, .chip.short { background: var(--down-soft); color: var(--down); }
+  .chip.sell { background: var(--warn-soft); color: var(--warn); }
+  .chip.cover { background: var(--info-soft); color: var(--info); }
+  .chip.sm { height: 20px; padding: 0 7px; font-size: 10px; }
+  .chip.owned { background: var(--info-soft); color: var(--info); }
+  .tag {
+    display: inline-flex; align-items: center; height: 24px; padding: 0 9px; border-radius: 8px;
+    background: var(--surface-2); color: var(--text-2); font-size: 11.5px; font-weight: 600; white-space: nowrap;
+  }
+  .pl-chip {
+    display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 7px;
+    font-size: 12px; font-weight: 800; font-variant-numeric: tabular-nums;
+  }
+  .pl-chip.up { background: var(--up-soft); }
+  .pl-chip.down { background: var(--down-soft); }
+
+  /* ---- Surfaces ------------------------------------------------------- */
+  .card { background: var(--surface); border-radius: var(--r-lg); padding: 16px; margin-bottom: 12px; }
+  .card.flush { padding: 4px 0; }
+  .card-title {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    font-size: 15px; font-weight: 800; margin: 0 0 12px; letter-spacing: -.01em;
+  }
+  .card.flush > .card-title { padding: 12px 16px 0; margin-bottom: 4px; }
+  .card-title .sub, .sub { font-size: 12px; color: var(--text-3); font-weight: 500; letter-spacing: 0; }
+  .card-title .end { margin-left: auto; }
+  .section-head {
+    display: flex; align-items: center; gap: 10px; margin: 20px 2px 10px;
+  }
+  .section-head h2 { font-size: 18px; font-weight: 800; letter-spacing: -.02em; margin: 0; }
+  .section-head .spacer { flex: 1; }
+  .empty { color: var(--text-3); font-size: 13px; padding: 26px 16px; text-align: center; }
+  .note {
+    background: var(--warn-soft); color: #F5C77E; border-radius: var(--r);
+    padding: 12px 14px; font-size: 12.5px; margin-bottom: 12px; line-height: 1.5;
+  }
+  .note.info { background: var(--surface); color: var(--text-2); }
+
+  /* Hero (the XTB "balance" block). */
+  .hero { padding: 18px 16px; }
+  .hero-label { font-size: 12.5px; color: var(--text-2); font-weight: 600; }
+  .hero-value { font-size: 32px; font-weight: 800; letter-spacing: -.03em; line-height: 1.15; margin: 2px 0 6px; }
+  .hero-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; }
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .stats.four { grid-template-columns: repeat(2, 1fr); }
+  .stat { background: var(--surface-2); border-radius: var(--r); padding: 12px; min-width: 0; }
+  .stats.plain .stat { background: var(--surface); }
+  .stat .n { font-size: 20px; font-weight: 800; letter-spacing: -.02em; font-variant-numeric: tabular-nums;
+             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .stat .l { font-size: 11.5px; color: var(--text-3); font-weight: 600; margin-top: 1px; }
+  .activity {
+    display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 12.5px; color: var(--text-2);
+    min-width: 0;
+  }
+  .activity span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* ---- Rows (instrument-list style) ----------------------------------- */
+  .avatar {
+    width: 40px; height: 40px; border-radius: 50%; flex: none; display: grid; place-items: center;
+    font-size: 12px; font-weight: 800; letter-spacing: -.02em; color: #fff; background: var(--surface-3);
+  }
+  .avatar svg.i { width: 18px; height: 18px; }
+  .rows > .row-item + .row-item { border-top: 1px solid var(--line); }
+  .row-item { display: flex; align-items: center; gap: 12px; padding: 12px 16px; min-width: 0; }
+  .row-main { flex: 1; min-width: 0; }
+  .row-title { display: flex; align-items: center; gap: 7px; font-weight: 800; font-size: 14.5px; min-width: 0; }
+  .row-title .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row-sub { font-size: 12px; color: var(--text-3); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row-end { text-align: right; flex: none; }
+  .row-end .v { font-weight: 800; font-size: 14.5px; font-variant-numeric: tabular-nums; }
+  .row-end .s { font-size: 12px; color: var(--text-3); margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .row-actions { display: flex; align-items: center; gap: 6px; flex: none; }
+  .bar-wrap { display: flex; align-items: center; gap: 8px; margin-top: 7px; font-size: 11px; color: var(--text-3); }
+  .bar-wrap .bar { flex: 1; margin-top: 0; }
+  .bar { height: 4px; border-radius: 999px; background: var(--surface-3); overflow: hidden; margin-top: 7px; max-width: 160px; }
+  .bar i { display: block; height: 100%; border-radius: 999px; background: var(--up); }
+  .bar.neg i { background: var(--down); }
+
+  /* ---- Alerts --------------------------------------------------------- */
+  .alerts-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0 20px; }
+  .alerts-side { min-width: 0; }
+  .alerts-feed { min-width: 0; }
+  details.rules > summary {
+    list-style: none; cursor: pointer; display: flex; align-items: center; gap: 10px;
+    font-size: 15px; font-weight: 800;
+  }
+  details.rules > summary::-webkit-details-marker { display: none; }
+  details.rules > summary .sum { font-size: 12px; font-weight: 600; color: var(--text-3); margin-left: auto; text-align: right; }
+  details.rules > summary .chev { transition: transform .2s var(--ease); color: var(--text-3); }
+  details.rules[open] > summary .chev { transform: rotate(180deg); }
+  details.rules[open] > summary { margin-bottom: 14px; }
+  .field-label { font-size: 12px; color: var(--text-2); font-weight: 700; margin-bottom: 8px; display: flex; gap: 6px; align-items: baseline; }
+  .field-label b { color: var(--text); }
+  .hint { font-size: 12px; color: var(--text-3); line-height: 1.45; margin-top: 7px; }
+  .rule + .rule { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+  .inline-form { display: flex; align-items: center; gap: 8px; }
+
+  .alert {
+    background: var(--surface); border-radius: var(--r-lg); padding: 14px 16px; margin-bottom: 10px;
+    position: relative;
+  }
+  .alert.alert-new { animation: cardIn .4s var(--ease); }
+  @keyframes cardIn { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
+  .alert-head { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .alert-head .row-main { min-width: 0; }
+  .alert-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
+  .alert-text {
+    font-size: 13px; color: var(--text-2); margin: 10px 0 0; line-height: 1.5;
+    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer;
+  }
+  .alert-text.open { -webkit-line-clamp: unset; display: block; }
+  .trade {
+    display: flex; align-items: flex-start; gap: 8px; margin-top: 12px; padding: 10px 12px;
+    border-radius: var(--r-sm); background: var(--surface-2); font-size: 12.5px; color: var(--text-2);
+  }
+  .trade svg.i { width: 16px; height: 16px; margin-top: 1px; }
+  .trade b { color: var(--text); font-weight: 700; }
+  .alert-link {
+    display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 12.5px; color: var(--text-2);
+    min-width: 0;
+  }
+  .alert-link span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .alert-link svg.i { width: 14px; height: 14px; }
+  .alert-link:hover { color: var(--text); }
+  .exit-grid { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-top: 12px; flex-wrap: wrap; }
+  .exit-grid .px { font-size: 13px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+  .exit-grid .px b { color: var(--text); font-size: 15px; }
+  .exit-grid .big { font-size: 22px; font-weight: 800; letter-spacing: -.02em; font-variant-numeric: tabular-nums; text-align: right; }
+  .exit-grid .big small { display: block; font-size: 11px; color: var(--text-3); font-weight: 600; letter-spacing: 0; }
+
+  /* ---- Forms ---------------------------------------------------------- */
+  input, select {
+    font-family: inherit; font-size: 16px; /* 16px stops iOS zooming on focus */
+    color: var(--text); background: var(--surface-2); border: 1px solid transparent; border-radius: 12px;
+    height: 44px; padding: 0 14px; width: 100%; min-width: 0;
+    transition: border-color .15s var(--ease), background .15s var(--ease);
+  }
+  input::placeholder { color: var(--text-3); }
+  input:focus, select:focus { outline: none; border-color: var(--line-2); background: var(--surface-3); }
+  input[type="date"] { color-scheme: dark; }
+  select {
+    appearance: none; -webkit-appearance: none; padding-right: 36px; cursor: pointer;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23A0A8B3' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 12px center; background-size: 16px;
+  }
+  input.narrow { width: 110px; }
+  .form-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .field { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+  .field > label { font-size: 12px; color: var(--text-2); font-weight: 700; }
+  .field .hint { margin-top: 0; }
+  .field.full { grid-column: 1 / -1; }
+  .check-row {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; cursor: pointer;
+    font-size: 13px; color: var(--text); line-height: 1.45;
+  }
+  .check-row .txt small { display: block; color: var(--text-3); font-size: 12px; margin-top: 2px; }
+  .form-grid .check-row + .check-row { padding-top: 14px; border-top: 1px solid var(--line); }
+  details.add > summary {
+    list-style: none; cursor: pointer; display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 14.5px;
+  }
+  details.add > summary::-webkit-details-marker { display: none; }
+  details.add > summary .plus {
+    width: 30px; height: 30px; border-radius: 50%; background: var(--surface-3); display: grid; place-items: center;
+    transition: transform .2s var(--ease);
+  }
+  details.add > summary .plus svg.i { width: 16px; height: 16px; }
+  details.add[open] > summary .plus { transform: rotate(45deg); }
+  details.add[open] > summary { margin-bottom: 14px; }
+  .add-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .add-grid .wide { grid-column: 1 / -1; }
+  .engine-choice { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .engine-choice label {
+    display: flex; gap: 12px; align-items: flex-start; padding: 14px; border-radius: var(--r); cursor: pointer;
+    background: var(--surface-2); border: 1.5px solid transparent; font-size: 12.5px; color: var(--text-3);
+    transition: border-color .15s var(--ease), background .15s var(--ease);
+  }
+  .engine-choice label:has(input:checked) { border-color: var(--text); background: var(--surface-3); }
+  .engine-choice input { width: 18px; height: 18px; margin: 1px 0 0; accent-color: var(--text); flex: none; }
+  .engine-choice b { display: block; font-size: 14px; color: var(--text); margin-bottom: 2px; }
+  .settings-bar {
+    position: sticky; bottom: calc(var(--nav-h) + var(--safe-b) + 10px); z-index: 5;
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 10px; border-radius: 999px; background: rgba(28, 32, 38, .92);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, .45);
+  }
+  .settings-bar .status-msg { flex: 1; min-width: 0; padding: 0 6px; }
+  .status-msg { font-size: 12.5px; color: var(--text-2); }
+  .status-msg.err { color: var(--down); }
+  .status-msg.ok { color: var(--up); }
+
+  /* ---- Logs ----------------------------------------------------------- */
   #view-logs { position: relative; }
+  .toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+  .toolbar .spacer { flex: 1; }
+  .pill-check { position: relative; display: inline-flex; cursor: pointer; }
+  .pill-check input { position: absolute; opacity: 0; width: 0; height: 0; }
+  .pill-check span {
+    display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 13px; border-radius: 999px;
+    background: var(--surface); color: var(--text-2); font-size: 12px; font-weight: 700; user-select: none;
+    transition: background .15s var(--ease), color .15s var(--ease);
+  }
+  .pill-check input:checked + span { background: var(--text); color: #0B0D10; }
+  .pill-check input:focus-visible + span { outline: 2px solid var(--text-2); outline-offset: 2px; }
   #logbox {
-    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
-    padding: 10px 12px; height: 60vh; overflow-y: auto;
-    font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 11.5px;
-    white-space: pre-wrap; word-break: break-word; color: var(--text-dim);
+    background: var(--surface); border-radius: var(--r-lg); padding: 10px 14px;
+    height: calc(100dvh - var(--top-h) - var(--nav-h) - var(--safe-b) - 96px); min-height: 280px;
+    overflow-y: auto; overscroll-behavior: contain;
+    font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 11.5px; line-height: 1.5;
+    white-space: pre-wrap; word-break: break-word; color: var(--text-2);
   }
   #logbox::-webkit-scrollbar { width: 8px; }
-  #logbox::-webkit-scrollbar-track { background: transparent; }
-  #logbox::-webkit-scrollbar-thumb { background: var(--line-hi); border-radius: 8px; }
-  .logline { border-bottom: 1px solid var(--line); padding: 3px 0; }
-  .logline .t { color: var(--text-mute); margin-right: 6px; }
-  .logline.lvl-error { color: var(--danger); }
+  #logbox::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 8px; }
+  .logline { border-bottom: 1px solid var(--line); padding: 4px 0; }
+  .logline .t { color: var(--text-3); margin-right: 8px; }
+  .logline.lvl-error { color: var(--down); }
   .logline.lvl-warn { color: var(--warn); }
-  .logline.lvl-alert { color: var(--accent); }
-
+  .logline.lvl-alert { color: var(--info); }
+  body:not(.show-ai) .logline.ai { display: none; }
+  .logline.ai { color: #4B5361; }
   .jump-btn {
-    position: absolute; bottom: 14px; left: 50%;
-    transform: translateX(-50%) translateY(10px);
-    background: var(--accent); color: #fff; border: none; border-radius: 999px;
-    padding: 8px 16px; font-size: 12px; font-weight: 700; cursor: pointer;
-    box-shadow: var(--shadow); opacity: 0; pointer-events: none;
+    position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%) translateY(10px);
+    opacity: 0; pointer-events: none; box-shadow: 0 8px 24px rgba(0, 0, 0, .5);
     transition: opacity .2s var(--ease), transform .2s var(--ease);
   }
   .jump-btn.show { opacity: 1; pointer-events: auto; transform: translateX(-50%) translateY(0); }
 
-  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); }
-  th { color: var(--text-mute); font-size: 10px; text-transform: uppercase; }
-  tbody tr { transition: background .12s var(--ease); }
-  tbody tr:hover { background: var(--panel-hi); }
+  /* ---- Keywords ------------------------------------------------------- */
+  .kw-cols { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0 12px; }
+  .kw-item { display: flex; align-items: center; gap: 10px; padding: 9px 16px; font-size: 13.5px; }
+  .kw-item + .kw-item { border-top: 1px solid var(--line); }
+  .kw-item .w { margin-left: auto; }
+  .inactive-note { margin-bottom: 12px; }
 
-  .add-form { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
-  .add-form input, .add-form select {
-    background: var(--panel); border: 1px solid var(--line); color: var(--text);
-    border-radius: 8px; padding: 8px 10px; font-size: 12.5px; font-family: inherit;
-    transition: border-color .15s var(--ease), box-shadow .15s var(--ease);
-  }
-  .add-form input:focus, .add-form select:focus {
-    outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft);
-  }
-  .add-form input { flex: 1; min-width: 120px; }
-  .empty { color: var(--text-mute); font-size: 12.5px; padding: 20px 0; text-align: center; }
-  .kw-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  @media (max-width: 560px) { .kw-cols { grid-template-columns: 1fr; } }
-  .kw-item { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
+  /* ---- Charts --------------------------------------------------------- */
+  .chart { width: 100%; display: block; }
+  #pf-chart { height: 150px; margin-top: 14px; }
+  #pp-chart { height: 150px; }
 
-  /* Master mute for phone alerts, in the header next to the test button. */
-  .toggle { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; user-select: none; }
-  .toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
-  .toggle .track {
-    width: 34px; height: 18px; border-radius: 999px; background: var(--line-hi);
-    position: relative; transition: background .18s var(--ease); flex: none;
-  }
-  .toggle .knob {
-    position: absolute; top: 2px; left: 2px; width: 14px; height: 14px;
-    border-radius: 50%; background: var(--text-dim);
-    transition: transform .18s var(--ease), background .18s var(--ease);
-  }
-  .toggle input:checked + .track { background: rgba(61,220,132,.35); }
-  .toggle input:checked + .track .knob { transform: translateX(16px); background: var(--success); }
-  .toggle input:focus-visible + .track { box-shadow: 0 0 0 3px var(--accent-soft); }
-  .toggle-label { font-size: 12px; color: var(--text-dim); }
-  .toggle.muted .toggle-label { color: var(--text-mute); }
-  .toggle.no-topic .toggle-label { color: var(--warn); }
-
-  /* Alert-sensitivity slider at the top of the Alerts view. */
-  .sens-card { margin-bottom: 12px; }
-  .sens-now { color: var(--accent); font-weight: 800; font-size: 12px; letter-spacing: 0; }
-  .sens-card input[type="range"] {
-    -webkit-appearance: none; appearance: none; width: 100%;
-    height: 4px; border-radius: 999px; background: var(--line-hi);
-    outline: none; margin: 10px 0 4px;
-  }
-  .sens-card input[type="range"]::-webkit-slider-thumb {
-    -webkit-appearance: none; appearance: none; width: 15px; height: 15px;
-    border-radius: 50%; background: var(--accent); cursor: pointer;
-    border: 2px solid var(--panel); box-shadow: 0 0 0 1px var(--accent);
-  }
-  .sens-card input[type="range"]::-moz-range-thumb {
-    width: 15px; height: 15px; border-radius: 50%; background: var(--accent);
-    cursor: pointer; border: 2px solid var(--panel); box-shadow: 0 0 0 1px var(--accent);
-  }
-  .sens-card input[type="range"]:focus-visible { box-shadow: 0 0 0 3px var(--accent-soft); }
-  .sens-ticks { display: flex; justify-content: space-between; font-size: 9.5px;
-                color: var(--text-mute); text-transform: uppercase; letter-spacing: .04em; }
-  .sens-ticks span { cursor: pointer; }
-  .sens-ticks span.on { color: var(--accent); font-weight: 700; }
-
-  /* Paper-trading block in the Portfolio view. */
-  .section-head {
-    font-size: 15px; margin: 0 0 12px; padding-top: 20px;
-    border-top: 1px solid var(--line); display: flex; align-items: baseline;
-    gap: 10px; flex-wrap: wrap;
-  }
-  .section-sub { font-size: 11px; color: var(--text-mute); font-weight: 400; }
-  .card-title {
-    font-size: 11px; color: var(--text-mute); text-transform: uppercase;
-    letter-spacing: .05em; margin-bottom: 8px; display: flex;
-    align-items: baseline; gap: 8px; flex-wrap: wrap;
-  }
-  .card-title .section-sub { text-transform: none; letter-spacing: 0; }
-  .note {
-    background: var(--accent-soft); border: 1px solid var(--line-hi);
-    border-left: 3px solid var(--warn); border-radius: 8px;
-    padding: 10px 12px; font-size: 12px; color: var(--text-dim);
-    margin-bottom: 14px;
-  }
-  .up { color: var(--success); }
-  .down { color: var(--danger); }
-  .num { font-variant-numeric: tabular-nums; }
-  .pill {
-    font-size: 10px; padding: 2px 7px; border-radius: 999px;
-    text-transform: uppercase; letter-spacing: .04em; font-weight: 700;
-  }
-  .pill.long { background: rgba(61,220,132,.14); color: var(--success); }
-  .pill.short { background: rgba(255,92,108,.14); color: var(--danger); }
-  /* Toolbars above the alert list and the log box. */
-  .toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
-  .toolbar .spacer { flex: 1; }
-  .check { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-dim); cursor: pointer; user-select: none; }
-  .check input { accent-color: var(--accent); }
-  body:not(.show-ai) .logline.ai { display: none; }
-  .logline.ai { color: #4A5468; }
-
-  /* Settings view. */
-  .form-grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
-  .field { display: flex; flex-direction: column; gap: 4px; }
-  .field label { font-size: 11px; color: var(--text-mute); text-transform: uppercase; letter-spacing: .04em; }
-  .field input, .field select {
-    background: var(--bg); border: 1px solid var(--line); color: var(--text);
-    border-radius: 8px; padding: 9px 10px; font-size: 13px; font-family: inherit;
-    transition: border-color .15s var(--ease), box-shadow .15s var(--ease);
-  }
-  .field input:focus, .field select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-  .field .hint { font-size: 11px; color: var(--text-mute); line-height: 1.4; }
-  .engine-choice { display: flex; gap: 6px; flex-wrap: wrap; }
-  .engine-choice label {
-    flex: 1; min-width: 120px; padding: 10px; border-radius: 8px; cursor: pointer;
-    background: var(--bg); border: 1px solid var(--line); font-size: 12px; color: var(--text-dim);
-    display: flex; gap: 8px; align-items: flex-start;
-  }
-  .engine-choice label:has(input:checked) { border-color: var(--accent); color: var(--text); background: var(--accent-soft); }
-  .engine-choice input { margin-top: 2px; accent-color: var(--accent); }
-  .engine-choice b { display: block; font-size: 12.5px; color: var(--text); }
-  .settings-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
-  .status-msg { font-size: 12px; color: var(--text-dim); }
-  .status-msg.err { color: var(--danger); }
-  .status-msg.ok { color: var(--success); }
-  .inactive-note {
-    background: #2A1D05; border: 1px solid var(--warn); color: var(--warn);
-    border-radius: 8px; padding: 10px 12px; font-size: 12px; margin-bottom: 12px;
+  /* ---- Tablet --------------------------------------------------------- */
+  @media (min-width: 640px) {
+    main { padding-left: 24px; padding-right: 24px; }
+    .topbar { padding: 0 24px; }
+    .stats.four { grid-template-columns: repeat(4, 1fr); }
+    .form-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .add-grid { grid-template-columns: repeat(4, minmax(0, 1fr)) auto; align-items: end; }
+    .add-grid .wide { grid-column: auto; }
+    .add-grid.src { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) 140px auto; }
+    .add-grid.kw { grid-template-columns: minmax(0, 2fr) 130px 150px auto; }
+    .engine-choice { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .kw-cols { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .bell-label { display: inline; font-size: 12px; font-weight: 700; }
+    .bell.pill { width: auto; padding: 0 12px 0 10px; border-radius: 999px; gap: 6px; display: inline-flex; align-items: center; }
+    .hero-value { font-size: 38px; }
+    .stat .n { font-size: 24px; }
+    #pf-chart { height: 190px; }
+    #pp-chart { height: 180px; }
   }
 
-  /* Progress toward the exit target, drawn behind the percentage. */
-  .prog { position: relative; min-width: 74px; }
-  .prog i {
-    position: absolute; left: 0; top: 50%; transform: translateY(-50%);
-    height: 14px; border-radius: 3px; background: var(--accent-soft);
+  /* ---- Desktop: sidebar ---------------------------------------------- */
+  @media (min-width: 1024px) {
+    .app { display: grid; grid-template-columns: 236px minmax(0, 1fr); }
+    .sidebar {
+      position: sticky; top: 0; bottom: auto; height: 100vh; border-top: 0; border-right: 1px solid var(--line);
+      background: var(--bg); padding: 20px 14px; display: flex; flex-direction: column; gap: 22px;
+      backdrop-filter: none; -webkit-backdrop-filter: none;
+    }
+    .sidebar .brand { display: flex; padding: 4px 10px; }
+    .sidebar .side-foot { display: block; margin-top: auto; padding: 12px 10px 0; border-top: 1px solid var(--line);
+                          font-size: 11.5px; color: var(--text-3); line-height: 1.45; word-break: break-word; }
+    .nav { flex-direction: column; height: auto; gap: 2px; }
+    .nav button {
+      flex: none; flex-direction: row; justify-content: flex-start; gap: 12px; height: 44px; padding: 0 12px;
+      border-radius: 12px; font-size: 14px; color: var(--text-2);
+    }
+    .nav button:hover { background: var(--surface); color: var(--text); }
+    .nav button.active { background: var(--surface-2); }
+    .nav button.active::before { top: 50%; left: 0; width: 3px; height: 20px; transform: translateY(-50%); border-radius: 0 3px 3px 0; }
+    .nav .badge-dot { position: static; margin-left: auto; }
+    .topbar { padding: 0 32px; }
+    .topbar .brand { display: none; }
+    .topbar .page-title { display: block; }
+    main { padding: 8px 32px 48px; }
+    .alerts-layout { grid-template-columns: minmax(0, 1fr) 360px; grid-template-areas: "feed side"; }
+    .alerts-feed { grid-area: feed; }
+    .alerts-side { grid-area: side; position: sticky; top: calc(var(--top-h) + 8px); align-self: start;
+                   max-height: calc(100vh - var(--top-h) - 16px); overflow-y: auto; scrollbar-width: thin; }
+    .alerts-feed .section-head:first-child { margin-top: 0; }
+    #logbox { height: calc(100vh - var(--top-h) - 110px); }
+    .settings-bar { bottom: 16px; }
+    .pf-layout { display: grid; grid-template-columns: minmax(0, 1fr); }
   }
-  .prog span { position: relative; }
+  @media (min-width: 1280px) {
+    .form-grid.two { gap: 16px 20px; }
+  }
+  @media (max-width: 400px) {
+    .topbar { gap: 8px; padding: 0 12px; }
+    .topbar .brand-name { display: none; }
+    .btn { padding: 0 14px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
 </style>
 </head>
 <body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-pulse" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></symbol>
+    <symbol id="i-wallet" viewBox="0 0 24 24"><rect x="2.5" y="6.5" width="19" height="14" rx="3"/><path d="M16 6.5V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v1.5"/><path d="M2.5 12.5h19"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><path d="M4 17l6-6-6-6"/><path d="M12 19h8"/></symbol>
+    <symbol id="i-rss" viewBox="0 0 24 24"><path d="M4 11a9 9 0 0 1 9 9"/><path d="M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1.2"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></symbol>
+    <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></symbol>
+    <symbol id="i-bell-off" viewBox="0 0 24 24"><path d="M8.7 3A6 6 0 0 1 18 8a21.3 21.3 0 0 0 .6 5"/><path d="M17 17H3s3-2 3-9a4.7 4.7 0 0 1 .3-1.7"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/><path d="M2 2l20 20"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l12-7.5z" fill="currentColor"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2.5" fill="currentColor"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/></symbol>
+    <symbol id="i-chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
+    <symbol id="i-ext" viewBox="0 0 24 24"><path d="M7 17L17 7M8 7h9v9"/></symbol>
+    <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4z"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9.5"/><path d="M2.5 12h19M12 2.5a14.5 14.5 0 0 1 0 19 14.5 14.5 0 0 1 0-19"/></symbol>
+    <symbol id="i-at" viewBox="0 0 24 24"><path d="M4 4l16 16M20 4L4 20"/></symbol>
+  </defs>
+</svg>
 
-<header>
-  <div class="top-row">
-    <h1>📈 Stocks AI</h1>
-    <div style="display:flex; align-items:center; gap:8px;">
-      <span class="pill"><span class="dot" id="dot"></span><span id="running-text">Offline</span></span>
-      <button class="primary" id="btn-start">Start</button>
-      <button class="danger-btn" id="btn-stop">Stop</button>
-      <label class="toggle" id="notify-toggle" title="Mute or unmute phone alerts">
-        <input type="checkbox" id="notify-switch">
-        <span class="track"><span class="knob"></span></span>
-        <span class="toggle-label" id="notify-label">Alerts</span>
-      </label>
-      <button id="btn-test-notify">Send Test Notification</button>
-      <span class="meta" id="test-notify-result"></span>
-    </div>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand"><span class="logo"><svg viewBox="0 0 24 24"><path d="M4 16l5-5 4 4 7-7"/></svg></span>Stocks AI</div>
+    <nav class="nav" id="nav" aria-label="Sections">
+      <button data-view="alerts" class="active"><svg class="i"><use href="#i-pulse"/></svg><span>Alerts</span></button>
+      <button data-view="portfolio"><svg class="i"><use href="#i-wallet"/></svg><span>Portfolio</span></button>
+      <button data-view="logs"><svg class="i"><use href="#i-terminal"/></svg><span>Logs</span></button>
+      <button data-view="sources"><svg class="i"><use href="#i-rss"/></svg><span>Sources</span></button>
+      <button data-view="settings"><svg class="i"><use href="#i-gear"/></svg><span>Settings</span></button>
+    </nav>
+    <div class="side-foot">Engine<br><span id="engine" style="color:var(--text-2)"></span></div>
+  </aside>
+
+  <div class="content">
+    <header class="topbar" id="topbar">
+      <div class="brand"><span class="logo"><svg viewBox="0 0 24 24"><path d="M4 16l5-5 4 4 7-7"/></svg></span><span class="brand-name">Stocks AI</span></div>
+      <h1 class="page-title" id="page-title">Alerts</h1>
+      <span class="spacer"></span>
+      <span class="status" title="Scanner status"><span class="dot" id="dot"></span><span id="running-text">Offline</span></span>
+      <button class="icon-btn bell pill" id="notify-btn" aria-pressed="true" title="Phone alerts">
+        <svg class="i ic-on"><use href="#i-bell"/></svg><svg class="i ic-off"><use href="#i-bell-off"/></svg>
+        <span class="bell-label" id="notify-label">Alerts</span>
+      </button>
+      <button class="btn" id="btn-run" disabled><svg class="i"><use href="#i-play"/></svg><span>Start</span></button>
+    </header>
+
+    <main>
+      <!-- ============ Alerts ============ -->
+      <section id="view-alerts" class="view active">
+        <div class="card hero">
+          <div class="stats">
+            <div class="stat"><div class="n" id="stat-scanned">0</div><div class="l">Scanned</div></div>
+            <div class="stat"><div class="n" id="stat-alerts">0</div><div class="l">Alerts</div></div>
+            <div class="stat"><div class="n" id="stat-skipped">0</div><div class="l">Skipped</div></div>
+          </div>
+          <div class="activity"><span class="dot" id="activity-dot"></span><span id="activity">Idle</span></div>
+        </div>
+
+        <div class="alerts-layout">
+          <div class="alerts-side">
+            <details class="card rules" id="rules">
+              <summary>Alert rules
+                <span class="sum"><span id="sens-now">HIGH+</span> · stop <span id="sl-now">—</span></span>
+                <svg class="i chev"><use href="#i-chev"/></svg>
+              </summary>
+              <div class="rule">
+                <div class="field-label">Alert on impact</div>
+                <div class="seg" id="sens-seg" role="radiogroup" aria-label="Minimum impact to alert on"></div>
+                <div class="hint" id="sens-hint"></div>
+              </div>
+              <div class="rule">
+                <div class="field-label">Stop-loss cap</div>
+                <div class="inline-form">
+                  <input type="number" id="sl-input" class="narrow" min="0" step="0.5" placeholder="0" inputmode="decimal" aria-label="Stop-loss percent">
+                  <span class="muted">%</span>
+                  <button class="btn sm" id="sl-save">Save</button>
+                </div>
+                <div class="hint">The most any one position may lose. Each stop is sized to the stock's normal daily range and capped here; it rises to break-even and trails the price as the trade works. 0 = default.</div>
+              </div>
+            </details>
+
+            <div class="card flush" id="watches-card" style="display:none;">
+              <div class="card-title">Watching <span class="sub">open positions awaiting an exit</span></div>
+              <div class="rows" id="watches-body"></div>
+            </div>
+          </div>
+
+          <div class="alerts-feed">
+            <div class="section-head">
+              <h2>Alerts</h2><span class="sub" id="alerts-count"></span>
+              <span class="spacer"></span>
+              <button class="btn ghost sm" id="alerts-clear">Clear</button>
+            </div>
+            <div id="alerts-list"><div class="card empty">No alerts yet.</div></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ Portfolio ============ -->
+      <section id="view-portfolio" class="view">
+        <div class="seg top" id="pf-seg">
+          <button data-pane="holdings" class="on">My holdings</button>
+          <button data-pane="paper" id="seg-paper-btn" hidden>Paper trading</button>
+        </div>
+
+        <div id="pane-holdings">
+          <div class="card hero">
+            <div class="hero-label">Portfolio value</div>
+            <div class="hero-value num" id="pf-stat-value">$0.00</div>
+            <div class="hero-row">
+              <span class="pl-chip" id="pf-stat-profit">$0.00</span>
+              <span class="pl-chip" id="pf-stat-pct">0.00%</span>
+              <span class="muted">total return</span>
+            </div>
+            <div id="pf-chart-card" style="display:none;"><canvas id="pf-chart" class="chart"></canvas></div>
+          </div>
+
+          <details class="card add">
+            <summary><span class="plus"><svg class="i"><use href="#i-plus"/></svg></span>Add holding</summary>
+            <div class="add-grid">
+              <input id="pf-ticker" class="wide" placeholder="Ticker (e.g. AAPL)" autocapitalize="characters" autocomplete="off" spellcheck="false">
+              <input id="pf-shares" placeholder="Shares" type="number" step="0.0001" inputmode="decimal">
+              <input id="pf-price" placeholder="Buy price" type="number" step="0.01" inputmode="decimal">
+              <input id="pf-date" class="wide" type="date" aria-label="Buy date">
+              <button class="btn primary wide" id="pf-add" style="height:44px">Add</button>
+            </div>
+            <div class="hint">Buy price is optional; shares and date drive the value graph.</div>
+          </details>
+
+          <div class="card flush">
+            <div class="card-title">Holdings
+              <span class="end" style="display:flex; gap:6px; align-items:center;">
+                <button class="icon-btn sm" id="pf-refresh" title="Refresh prices" aria-label="Refresh prices"><svg class="i"><use href="#i-refresh"/></svg></button>
+                <button class="btn danger sm" id="pf-clear">Clear all</button>
+              </span>
+            </div>
+            <div class="rows" id="pf-body"></div>
+          </div>
+        </div>
+
+        <!-- Paper trading: the app's own track record. Deliberately apart from
+             the holdings - these are simulated positions opened from its
+             alerts, not stock the user owns. -->
+        <div id="paper-section" hidden>
+          <div class="note info">The app's own track record — simulated trades opened from its alerts, not holdings you own.</div>
+          <div class="stats four plain" style="margin-bottom:12px;">
+            <div class="stat"><div class="n" id="pp-stat-exp">—</div><div class="l">Expectancy / trade</div></div>
+            <div class="stat"><div class="n" id="pp-stat-win">—</div><div class="l">Win rate</div></div>
+            <div class="stat"><div class="n" id="pp-stat-alpha">—</div><div class="l">Alpha vs market</div></div>
+            <div class="stat"><div class="n" id="pp-stat-open">—</div><div class="l">Open positions</div></div>
+          </div>
+          <div class="note" id="pp-warn" style="display:none;"></div>
+          <div class="card" id="pp-chart-card" style="display:none;">
+            <div class="card-title">Equity curve <span id="pp-chart-sub" class="sub"></span></div>
+            <canvas id="pp-chart" class="chart"></canvas>
+          </div>
+          <div class="card flush">
+            <div class="card-title">Open positions <span class="sub">marked to live prices, not yet in the record</span></div>
+            <div class="rows" id="pp-open-body"></div>
+          </div>
+          <div class="card flush">
+            <div class="card-title">Closed trades <span class="sub">the record, after <span id="pp-cost">0.20%</span> costs</span></div>
+            <div class="rows" id="pp-closed-body"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ Logs ============ -->
+      <section id="view-logs" class="view">
+        <div class="toolbar">
+          <label class="pill-check" title="Show the full prompt sent to the model and its raw reply"><input type="checkbox" id="log-ai"><span>AI traffic</span></label>
+          <label class="pill-check"><input type="checkbox" id="log-autoscroll" checked><span>Auto-scroll</span></label>
+          <span class="spacer"></span>
+          <button class="btn ghost sm" id="log-clear">Clear</button>
+        </div>
+        <div id="logbox"></div>
+        <button class="btn primary sm jump-btn" id="jump-latest">↓ Jump to latest</button>
+      </section>
+
+      <!-- ============ Sources ============ -->
+      <section id="view-sources" class="view">
+        <div class="seg top">
+          <button data-view="sources" class="on">News sources</button>
+          <button data-view="keywords">Keywords</button>
+        </div>
+        <details class="card add">
+          <summary><span class="plus"><svg class="i"><use href="#i-plus"/></svg></span>Add source</summary>
+          <div class="add-grid src">
+            <input id="src-name" class="wide" placeholder="Name" autocomplete="off">
+            <input id="src-url" class="wide" placeholder="URL (RSS, page, or Twitter/X link)" inputmode="url" autocomplete="off" spellcheck="false">
+            <select id="src-type" aria-label="Source type">
+              <option value="webpage">Webpage</option>
+              <option value="rss">RSS</option>
+              <option value="twitter">Twitter</option>
+            </select>
+            <button class="btn primary" id="src-add" style="height:44px">Add</button>
+          </div>
+          <div class="hint">Twitter/X profile links are converted to a Nitter mirror automatically.</div>
+        </details>
+        <div class="card flush">
+          <div class="card-title">Sources <span class="sub" id="src-count"></span>
+            <span class="end"><button class="btn ghost sm" id="src-reset">Reset to defaults</button></span>
+          </div>
+          <div class="rows" id="src-list"></div>
+        </div>
+      </section>
+
+      <!-- ============ Keywords (a tab of Sources) ============ -->
+      <section id="view-keywords" class="view">
+        <div class="seg top">
+          <button data-view="sources">News sources</button>
+          <button data-view="keywords" class="on">Keywords</button>
+        </div>
+        <div class="note inactive-note" id="kw-inactive" style="display:none;">
+          Inactive — an AI engine is doing the analysis. These keywords only drive scoring when the engine in Settings is "Keyword scoring".
+        </div>
+        <details class="card add">
+          <summary><span class="plus"><svg class="i"><use href="#i-plus"/></svg></span>Add keyword</summary>
+          <div class="add-grid kw">
+            <input id="kw-word" class="wide" placeholder="Keyword or phrase" autocomplete="off">
+            <input id="kw-weight" placeholder="Weight (1-10)" type="number" min="1" max="10" inputmode="numeric">
+            <select id="kw-type" aria-label="Keyword type"><option value="positive">Positive</option><option value="negative">Negative</option></select>
+            <button class="btn primary wide" id="kw-add" style="height:44px">Add</button>
+          </div>
+        </details>
+        <div class="kw-cols">
+          <div class="card flush"><div class="card-title"><span class="up">Positive</span></div><div id="kw-pos"></div></div>
+          <div class="card flush"><div class="card-title"><span class="down">Negative</span></div><div id="kw-neg"></div></div>
+        </div>
+        <div style="text-align:center;"><button class="btn ghost sm" id="kw-reset">Reset to defaults</button></div>
+      </section>
+
+      <!-- ============ Settings ============ -->
+      <section id="view-settings" class="view">
+        <div class="note info">Changes apply to the running backend immediately — no restart, no SSH. They are saved to <code>data/settings.json</code> on the server.</div>
+
+        <div class="card">
+          <div class="card-title">Phone notifications</div>
+          <div class="form-grid">
+            <div class="field">
+              <label for="st-topic">ntfy topic</label>
+              <input id="st-topic" placeholder="e.g. stockwatch-7f3a91c2b8e4" autocomplete="off" spellcheck="false">
+              <div class="hint">Public channel on ntfy.sh — anyone who knows the name can read it, so make it long and random. Subscribe to the same name in the ntfy app.</div>
+            </div>
+            <label class="check-row"><span class="txt">Mark alerts about stocks I hold with [OWNED]<small>Discloses holdings on the public topic.</small></span>
+              <span class="switch"><input type="checkbox" id="st-ownership"><span class="track"></span></span></label>
+            <div class="inline-form" style="flex-wrap:wrap;">
+              <button class="btn sm" id="btn-test-notify"><svg class="i"><use href="#i-send"/></svg>Send test notification</button>
+              <span class="sub" id="test-notify-result"></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Analysis engine <span class="sub" id="st-engine-now"></span></div>
+          <div class="engine-choice" id="st-engine">
+            <label><input type="radio" name="engine" value="cloud"><span><b>Cloud AI</b>Hosted model via API key. Light enough for a small VM.</span></label>
+            <label><input type="radio" name="engine" value="local"><span><b>Local AI (Ollama)</b>Needs Ollama and a pulled model on the backend machine.</span></label>
+            <label><input type="radio" name="engine" value="keywords"><span><b>Keyword scoring</b>Offline, instant, cruder. Uses the Keywords list.</span></label>
+          </div>
+          <div class="form-grid two" id="st-cloud-fields" style="margin-top:16px;">
+            <div class="field">
+              <label for="st-provider">Provider</label>
+              <select id="st-provider"></select>
+              <div class="hint">"openai" plus a base URL also reaches any OpenAI-compatible host; "openrouter" and "routera" route one key to many models (model names like <code>anthropic/claude-opus-5</code>).</div>
+            </div>
+            <div class="field"><label for="st-cloud-model">Model</label><input id="st-cloud-model" autocomplete="off" spellcheck="false"></div>
+            <div class="field">
+              <label for="st-cloud-key">API key</label>
+              <input id="st-cloud-key" type="password" autocomplete="new-password" placeholder="">
+              <div class="hint" id="st-key-hint"></div>
+              <label class="check-row"><span class="txt">Remove the stored key</span>
+                <span class="switch"><input type="checkbox" id="st-clear-key"><span class="track"></span></span></label>
+            </div>
+            <div class="field"><label for="st-cloud-url">Base URL (optional)</label><input id="st-cloud-url" placeholder="https://..." autocomplete="off" spellcheck="false" inputmode="url"></div>
+          </div>
+          <div class="form-grid two" id="st-local-fields" style="margin-top:16px;">
+            <div class="field"><label for="st-local-model">Ollama model</label><input id="st-local-model" placeholder="gemma3:12b" autocomplete="off" spellcheck="false"><div class="hint">Must already be pulled on the backend: <code>ollama pull &lt;name&gt;</code></div></div>
+            <div class="field"><label for="st-threads">Threads</label><input id="st-threads" type="number" min="1" step="1" inputmode="numeric"></div>
+            <div class="field full"><label for="st-ollama-url">Ollama URL</label><input id="st-ollama-url" placeholder="http://localhost:11434/api/generate" autocomplete="off" spellcheck="false"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Trading strategy</div>
+          <div class="form-grid">
+            <label class="check-row"><span class="txt">AI trade check<small>Before opening a position, ask the AI again with the live price action, so news the market has already priced in is skipped.</small></span>
+              <span class="switch"><input type="checkbox" id="st-confirm"><span class="track"></span></span></label>
+            <label class="check-row"><span class="txt">Let winners run<small>At the target, trail the stop close behind the price instead of selling.</small></span>
+              <span class="switch"><input type="checkbox" id="st-let-run"><span class="track"></span></span></label>
+          </div>
+          <div class="form-grid two" style="margin-top:16px;">
+            <div class="field">
+              <label for="st-min-conf">Minimum AI confidence (0-100)</label>
+              <input id="st-min-conf" type="number" min="0" max="100" step="5" inputmode="numeric">
+              <div class="hint">Alerts the AI is less sure of than this are dropped. 50 is a coin flip.</div>
+            </div>
+            <div class="field">
+              <label for="st-atr-mult">Stop distance (× normal daily range)</label>
+              <input id="st-atr-mult" type="number" min="0" max="10" step="0.1" inputmode="decimal">
+              <div class="hint">1.5 puts the stop one and a half ordinary trading days away, so normal noise doesn't trigger it. Capped by the stop-loss % on the Alerts tab.</div>
+            </div>
+            <div class="field">
+              <label for="st-max-pos">Maximum open positions</label>
+              <input id="st-max-pos" type="number" min="1" max="50" step="1" inputmode="numeric">
+              <div class="hint">Every open position is priced every 5 minutes — keep this modest on a small VM.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Short selling</div>
+          <div class="form-grid">
+            <label class="check-row"><span class="txt">Open short positions on negative news<small>Paper trading. Following one for real needs CFDs or a margin account.</small></span>
+              <span class="switch"><input type="checkbox" id="st-allow-shorts"><span class="track"></span></span></label>
+            <label class="check-row"><span class="txt">Notify me about shorts<small>Phone notifications for short setups and their buy-back signals.</small></span>
+              <span class="switch"><input type="checkbox" id="st-notify-shorts"><span class="track"></span></span></label>
+            <div class="field">
+              <label for="st-short-impact">Minimum impact for a short</label>
+              <select id="st-short-impact">
+                <option value="LOW">LOW</option><option value="MEDIUM">MEDIUM</option>
+                <option value="HIGH">HIGH</option><option value="CRITICAL">CRITICAL</option>
+              </select>
+              <div class="hint">Negative news about a stock you hold is always sent as a warning, whatever these say.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Paper trading</div>
+          <div class="field">
+            <label for="st-cost">Round-trip cost %</label>
+            <input id="st-cost" type="number" min="0" max="99" step="0.01" inputmode="decimal" style="max-width:180px;">
+            <div class="hint">Spread on both sides plus commission and financing. Subtracted from every paper trade; set it to your broker's real figure before reading the record.</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Dashboard login</div>
+          <div class="form-grid two">
+            <div class="field"><label for="st-user">Username</label><input id="st-user" autocomplete="username" autocapitalize="none" spellcheck="false"></div>
+            <div class="field">
+              <label for="st-pass">New password</label>
+              <input id="st-pass" type="password" autocomplete="new-password" placeholder="">
+              <div class="hint" id="st-pass-hint">Leave blank to keep the current one. After changing it the browser will ask you to sign in again.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-bar">
+          <button class="btn primary" id="st-save">Save and apply</button>
+          <button class="btn ghost" id="st-reload" title="Re-read every JSON file in data/ (for edits made by hand on the server)">Reload from disk</button>
+          <span class="status-msg" id="st-msg"></span>
+        </div>
+      </section>
+    </main>
   </div>
-  <div class="stats-row">
-    <div class="stat"><div class="n" id="stat-scanned">0</div><div class="l">🔍 Scanned</div></div>
-    <div class="stat"><div class="n" id="stat-alerts">0</div><div class="l">🔔 Alerts</div></div>
-    <div class="stat"><div class="n" id="stat-skipped">0</div><div class="l">⏭ Skipped</div></div>
-  </div>
-  <div class="activity" id="activity">Idle</div>
-  <div class="engine" id="engine"></div>
-</header>
-
-<nav class="tabs">
-  <button data-view="alerts" class="active">🔔 Alerts</button>
-  <button data-view="logs">📜 Logs</button>
-  <button data-view="portfolio">💼 Portfolio</button>
-  <button data-view="sources">📡 Sources</button>
-  <button data-view="keywords">🔑 Keywords</button>
-  <button data-view="settings">⚙️ Settings</button>
-</nav>
-
-<main>
-  <section id="view-alerts" class="view active">
-    <div class="card sens-card">
-      <div class="card-title">Alert on
-        <span class="sens-now" id="sens-now">HIGH+</span>
-        <span class="section-sub" id="sens-hint"></span>
-      </div>
-      <input type="range" id="sens-range" min="0" max="3" step="1" value="2"
-             aria-label="Minimum impact to alert on">
-      <div class="sens-ticks" id="sens-ticks"></div>
-    </div>
-    <div class="card sens-card">
-      <div class="card-title">Stop-loss
-        <span class="sens-now" id="sl-now">Off</span>
-        <span class="section-sub">the most any one position may lose. Each stop is sized to the stock's normal daily range and capped here; it rises to break-even and trails the price as the trade works. 0 = default</span>
-      </div>
-      <div style="display:flex; align-items:center; gap:8px; margin-top:8px;">
-        <input type="number" id="sl-input" min="0" step="0.5" style="width:90px;" placeholder="0">
-        <span class="meta" style="margin:0;">%</span>
-        <button id="sl-save">Save</button>
-      </div>
-    </div>
-    <div class="card" id="watches-card" style="display:none;">
-      <h3 style="margin:0 0 8px;">Watching <span class="meta" style="margin:0;">(open positions, pending exit signals)</span></h3>
-      <table><thead><tr><th>Ticker</th><th>Side</th><th>Entry</th><th>Target</th><th>Stop</th><th>Expires</th><th></th></tr></thead>
-        <tbody id="watches-body"></tbody></table>
-    </div>
-    <div class="toolbar">
-      <span class="meta" style="margin:0;" id="alerts-count"></span>
-      <span class="spacer"></span>
-      <button class="danger-btn" id="alerts-clear">Clear alerts</button>
-    </div>
-    <div id="alerts-list"><div class="empty">No alerts yet.</div></div>
-  </section>
-
-  <section id="view-logs" class="view">
-    <div class="toolbar">
-      <label class="check" title="Show the full prompt sent to the model and its raw reply"><input type="checkbox" id="log-ai"> AI traffic</label>
-      <label class="check"><input type="checkbox" id="log-autoscroll" checked> Auto-scroll</label>
-      <span class="spacer"></span>
-      <button id="log-clear">Clear</button>
-    </div>
-    <div id="logbox"></div>
-    <button class="jump-btn" id="jump-latest">↓ Jump to latest</button>
-  </section>
-
-  <section id="view-portfolio" class="view">
-    <div class="stats-row" style="margin-bottom:14px;">
-      <div class="stat"><div class="n" id="pf-stat-value">$0.00</div><div class="l">Portfolio Value</div></div>
-      <div class="stat"><div class="n" id="pf-stat-profit">$0.00</div><div class="l">Total Profit</div></div>
-      <div class="stat"><div class="n" id="pf-stat-pct">0.00%</div><div class="l">Return</div></div>
-    </div>
-    <div class="card" id="pf-chart-card" style="display:none;">
-      <canvas id="pf-chart" style="width:100%; height:160px; display:block;"></canvas>
-    </div>
-    <div class="add-form">
-      <input id="pf-ticker" placeholder="Ticker (e.g. AAPL)">
-      <input id="pf-price" placeholder="Buy price" type="number" step="0.01">
-      <input id="pf-shares" placeholder="Shares" type="number" step="0.0001">
-      <input id="pf-date" type="date">
-      <button class="primary" id="pf-add">Add</button>
-    </div>
-    <div class="toolbar">
-      <span class="meta" style="margin:0;">Holdings you own. Buy price optional; shares and date drive the value graph.</span>
-      <span class="spacer"></span>
-      <button id="pf-refresh">Refresh prices</button>
-      <button class="danger-btn" id="pf-clear">Clear all</button>
-    </div>
-    <div class="card" style="overflow-x:auto;"><table><thead><tr><th>Ticker</th><th>Shares</th><th>Buy price</th><th>Live</th><th>P/L %</th><th>Gain / share</th><th></th></tr></thead>
-      <tbody id="pf-body"></tbody></table></div>
-
-    <!-- Paper trading: the app's own track record. Deliberately a separate
-         block from the holdings above - these are simulated positions opened
-         from its alerts, not stock the user owns. -->
-    <div id="paper-section" style="display:none; margin-top:26px;">
-      <h2 class="section-head">📒 Paper Trading <span class="section-sub">the app's track record — simulated, not holdings you own</span></h2>
-
-      <div class="stats-row" style="margin-bottom:14px;">
-        <div class="stat"><div class="n" id="pp-stat-exp">—</div><div class="l">Expectancy / trade</div></div>
-        <div class="stat"><div class="n" id="pp-stat-win">—</div><div class="l">Win rate</div></div>
-        <div class="stat"><div class="n" id="pp-stat-alpha">—</div><div class="l">Alpha vs market</div></div>
-        <div class="stat"><div class="n" id="pp-stat-open">—</div><div class="l">Open positions</div></div>
-      </div>
-
-      <div class="note" id="pp-warn" style="display:none;"></div>
-
-      <div class="card" id="pp-chart-card" style="display:none;">
-        <div class="card-title">Equity curve <span id="pp-chart-sub" class="section-sub"></span></div>
-        <canvas id="pp-chart" style="width:100%; height:150px; display:block;"></canvas>
-      </div>
-
-      <div class="card">
-        <div class="card-title">Open positions <span class="section-sub">marked to live prices — not yet counted in the record</span></div>
-        <table><thead><tr><th>Ticker</th><th>Side</th><th>Entry</th><th>Now</th><th>P/L</th><th>To target</th><th>Opened</th></tr></thead>
-          <tbody id="pp-open-body"></tbody></table>
-      </div>
-
-      <div class="card">
-        <div class="card-title">Closed trades <span class="section-sub">the actual record, after <span id="pp-cost">0.20%</span> costs</span></div>
-        <table><thead><tr><th>Closed</th><th>Ticker</th><th>Side</th><th>Entry</th><th>Exit</th><th>P/L</th><th>Why</th></tr></thead>
-          <tbody id="pp-closed-body"></tbody></table>
-      </div>
-    </div>
-  </section>
-
-  <section id="view-sources" class="view">
-    <div class="add-form">
-      <input id="src-name" placeholder="Name">
-      <input id="src-url" placeholder="URL (RSS, page, or Twitter/X link)">
-      <select id="src-type">
-        <option value="webpage">Webpage</option>
-        <option value="rss">RSS</option>
-        <option value="twitter">Twitter</option>
-      </select>
-      <button class="primary" id="src-add">Add</button>
-    </div>
-    <div class="toolbar">
-      <span class="meta" style="margin:0;">Twitter/X profile links are converted to a Nitter mirror automatically.</span>
-      <span class="spacer"></span>
-      <button class="danger-btn" id="src-reset">Reset to defaults</button>
-    </div>
-    <div id="src-list"></div>
-  </section>
-
-  <section id="view-keywords" class="view">
-    <div class="inactive-note" id="kw-inactive" style="display:none;">
-      ⚠ Inactive - an AI engine is doing the analysis. These keywords only drive scoring when the engine in Settings is "Keyword scoring".
-    </div>
-    <div class="add-form">
-      <input id="kw-word" placeholder="Keyword or phrase">
-      <input id="kw-weight" placeholder="Weight (1-10)" type="number" min="1" max="10">
-      <select id="kw-type"><option value="positive">Positive</option><option value="negative">Negative</option></select>
-      <button class="primary" id="kw-add">Add</button>
-    </div>
-    <div class="toolbar">
-      <span class="spacer"></span>
-      <button class="danger-btn" id="kw-reset">Reset to defaults</button>
-    </div>
-    <div class="kw-cols">
-      <div><h3 style="color:var(--success)">Positive</h3><div id="kw-pos"></div></div>
-      <div><h3 style="color:var(--danger)">Negative</h3><div id="kw-neg"></div></div>
-    </div>
-  </section>
-
-  <section id="view-settings" class="view">
-    <div class="note">Changes apply to the running backend immediately - no restart, no SSH. They are saved to <code>data/settings.json</code> on the server.</div>
-
-    <div class="card">
-      <div class="card-title">Phone notifications</div>
-      <div class="form-grid">
-        <div class="field">
-          <label for="st-topic">ntfy topic</label>
-          <input id="st-topic" placeholder="e.g. stockwatch-7f3a91c2b8e4" autocomplete="off">
-          <div class="hint">Public channel on ntfy.sh - anyone who knows the name can read it, so make it long and random. Subscribe to the same name in the ntfy app.</div>
-        </div>
-        <label class="check"><input type="checkbox" id="st-ownership"> Mark alerts about stocks I hold with [OWNED] in the notification (discloses holdings on the public topic)</label>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-title">Analysis engine <span class="section-sub" id="st-engine-now"></span></div>
-      <div class="engine-choice" id="st-engine">
-        <label><input type="radio" name="engine" value="cloud"><span><b>Cloud AI</b>Hosted model via API key. Light enough for a small VM.</span></label>
-        <label><input type="radio" name="engine" value="local"><span><b>Local AI (Ollama)</b>Needs Ollama and a pulled model on the backend machine.</span></label>
-        <label><input type="radio" name="engine" value="keywords"><span><b>Keyword scoring</b>Offline, instant, cruder. Uses the Keywords tab.</span></label>
-      </div>
-      <div class="form-grid" id="st-cloud-fields" style="margin-top:12px;">
-        <div class="field">
-          <label for="st-provider">Provider</label>
-          <select id="st-provider"></select>
-          <div class="hint">"openai" plus a base URL also reaches any OpenAI-compatible host; "openrouter" and "routera" route one key to many models (model names like <code>anthropic/claude-opus-5</code>).</div>
-        </div>
-        <div class="field"><label for="st-cloud-model">Model</label><input id="st-cloud-model" autocomplete="off"></div>
-        <div class="field">
-          <label for="st-cloud-key">API key</label>
-          <input id="st-cloud-key" type="password" autocomplete="new-password" placeholder="">
-          <div class="hint" id="st-key-hint"></div>
-          <label class="check"><input type="checkbox" id="st-clear-key"> Remove the stored key</label>
-        </div>
-        <div class="field"><label for="st-cloud-url">Base URL (optional)</label><input id="st-cloud-url" placeholder="https://..." autocomplete="off"></div>
-      </div>
-      <div class="form-grid" id="st-local-fields" style="margin-top:12px;">
-        <div class="field"><label for="st-local-model">Ollama model</label><input id="st-local-model" placeholder="gemma3:12b" autocomplete="off"><div class="hint">Must already be pulled on the backend: <code>ollama pull &lt;name&gt;</code></div></div>
-        <div class="field"><label for="st-threads">Threads</label><input id="st-threads" type="number" min="1" step="1"></div>
-        <div class="field"><label for="st-ollama-url">Ollama URL</label><input id="st-ollama-url" placeholder="http://localhost:11434/api/generate" autocomplete="off"></div>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-title">Paper trading</div>
-      <div class="field">
-        <label for="st-cost">Round-trip cost %</label>
-        <input id="st-cost" type="number" min="0" max="99" step="0.01" style="max-width:140px;">
-        <div class="hint">Spread on both sides plus commission and financing. Subtracted from every paper trade; set it to your broker's real figure before reading the record.</div>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-title">Trading strategy</div>
-      <div class="form-grid">
-        <div class="field">
-          <label for="st-min-conf">Minimum AI confidence (0-100)</label>
-          <input id="st-min-conf" type="number" min="0" max="100" step="5" style="max-width:140px;">
-          <div class="hint">Alerts the AI is less sure of than this are dropped. 50 is a coin flip.</div>
-        </div>
-        <label class="check"><input type="checkbox" id="st-confirm"> AI trade check - before opening a position, ask the AI again with the live price action, so news the market has already priced in is skipped</label>
-        <label class="check"><input type="checkbox" id="st-let-run"> Let winners run - at the target, trail the stop close behind the price instead of selling</label>
-        <div class="field">
-          <label for="st-atr-mult">Stop distance (× the stock's normal daily range)</label>
-          <input id="st-atr-mult" type="number" min="0" max="10" step="0.1" style="max-width:140px;">
-          <div class="hint">1.5 puts the stop one and a half ordinary trading days away, so normal noise doesn't trigger it. Capped by the stop-loss % on the Alerts tab.</div>
-        </div>
-        <div class="field">
-          <label for="st-max-pos">Maximum open positions</label>
-          <input id="st-max-pos" type="number" min="1" max="50" step="1" style="max-width:140px;">
-          <div class="hint">Every open position is priced every 5 minutes - keep this modest on a small VM.</div>
-        </div>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-title">Short selling</div>
-      <div class="form-grid">
-        <label class="check"><input type="checkbox" id="st-allow-shorts"> Open short positions on negative news (paper trading) - following one for real needs CFDs or a margin account</label>
-        <label class="check"><input type="checkbox" id="st-notify-shorts"> Send phone notifications for short setups and their buy-back signals</label>
-        <div class="field">
-          <label for="st-short-impact">Minimum impact for a short</label>
-          <select id="st-short-impact" style="max-width:200px;">
-            <option value="LOW">LOW</option><option value="MEDIUM">MEDIUM</option>
-            <option value="HIGH">HIGH</option><option value="CRITICAL">CRITICAL</option>
-          </select>
-          <div class="hint">Negative news about a stock you hold is always sent as a warning, whatever these say.</div>
-        </div>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-title">Dashboard login</div>
-      <div class="form-grid">
-        <div class="field"><label for="st-user">Username</label><input id="st-user" autocomplete="username"></div>
-        <div class="field">
-          <label for="st-pass">New password</label>
-          <input id="st-pass" type="password" autocomplete="new-password" placeholder="">
-          <div class="hint" id="st-pass-hint">Leave blank to keep the current one. After changing it the browser will ask you to sign in again.</div>
-        </div>
-      </div>
-    </div>
-
-    <div class="settings-actions">
-      <button class="primary" id="st-save">Save and apply</button>
-      <button id="st-reload" title="Re-read every JSON file in data/ (for edits made by hand on the server)">Reload files from disk</button>
-      <span class="status-msg" id="st-msg"></span>
-    </div>
-  </section>
-</main>
+</div>
 
 <script>
 const $ = (sel) => document.querySelector(sel);
@@ -643,19 +926,87 @@ function fmtPrice(n) {
   return n.toFixed(decimals);
 }
 
-// --- Tabs -------------------------------------------------------------
-document.querySelectorAll('nav.tabs button').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('nav.tabs button').forEach(b => b.classList.remove('active'));
-    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-    btn.classList.add('active');
-    $('#view-' + btn.dataset.view).classList.add('active');
-    if (btn.dataset.view === 'portfolio') loadPortfolio();
-    if (btn.dataset.view === 'sources') loadSources();
-    if (btn.dataset.view === 'keywords') loadKeywords();
-    if (btn.dataset.view === 'settings') loadSettings();
-  });
-});
+const cap = (s) => { s = String(s ?? '').toLowerCase(); return s.charAt(0).toUpperCase() + s.slice(1); };
+const icon = (name) => `<svg class="i"><use href="#i-${name}"/></svg>`;
+const fmtCount = (n) => Number(n || 0).toLocaleString('en-US');
+function fmtMoney(n) {
+  return '$' + Number(n || 0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+function signed(n, digits) {
+  n = Number(n) || 0;
+  return (n >= 0 ? '+' : '') + n.toFixed(digits === undefined ? 2 : digits) + '%';
+}
+// "14:29" for today, "Sep 9, 14:29" otherwise. Backend times are local ISO.
+function fmtTime(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d)) return String(iso).replace('T', ' ').slice(0, 16);
+  const hm = d.toLocaleTimeString('en-GB', {hour: '2-digit', minute: '2-digit'});
+  return d.toDateString() === new Date().toDateString() ? hm : fmtDay(iso) + ', ' + hm;
+}
+function fmtDay(iso) {
+  const d = new Date(iso);
+  return isNaN(d) ? String(iso || '').slice(0, 10) : d.toLocaleDateString('en-US', {month: 'short', day: 'numeric'});
+}
+// Round ticker badge, the broker-app stand-in for a company logo. The hue
+// comes from the symbol, so a stock keeps its colour everywhere.
+function avatar(ticker, fallback) {
+  const t = String(ticker || fallback || '?').replace(/[^A-Za-z0-9]/g, '').slice(0, 4).toUpperCase() || '?';
+  let h = 0;
+  for (const c of t) h = (h * 37 + c.charCodeAt(0)) % 360;
+  return `<span class="avatar" style="background:hsl(${h} 42% 30%);${t.length > 3 ? 'font-size:10.5px;' : ''}">${esc(t)}</span>`;
+}
+
+// --- Views --------------------------------------------------------------
+// Five sections in the tab bar (phones) / sidebar (desktop); Keywords is a
+// second tab inside Sources. The URL hash keeps the view across reloads.
+const VIEWS = ['alerts', 'portfolio', 'logs', 'sources', 'keywords', 'settings'];
+const VIEW_TITLES = {alerts: 'Alerts', portfolio: 'Portfolio', logs: 'Logs', sources: 'Sources', keywords: 'Sources', settings: 'Settings'};
+const NAV_FOR = {keywords: 'sources'};
+
+function showView(view) {
+  if (!VIEWS.includes(view)) view = 'alerts';
+  document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + view));
+  document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('active', b.dataset.view === (NAV_FOR[view] || view)));
+  $('#page-title').textContent = VIEW_TITLES[view];
+  document.title = VIEW_TITLES[view] + ' · Stocks AI';
+  if (location.hash.slice(1) !== view) history.replaceState(null, '', '#' + view);
+  window.scrollTo(0, 0);
+  if (view === 'portfolio') loadPortfolio();
+  if (view === 'sources') loadSources();
+  if (view === 'keywords') loadKeywords();
+  if (view === 'settings') loadSettings();
+  if (view === 'logs' && autoscroll) { const box = $('#logbox'); box.scrollTop = box.scrollHeight; }
+}
+document.querySelectorAll('#nav button, .seg button[data-view]').forEach(btn =>
+  btn.addEventListener('click', () => showView(btn.dataset.view)));
+window.addEventListener('hashchange', () => showView(location.hash.slice(1)));
+
+// Portfolio: your holdings vs the app's paper-trading record.
+let pfPane = 'holdings';
+function showPane(pane) {
+  pfPane = pane;
+  $('#pf-seg').querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.pane === pane));
+  $('#pane-holdings').hidden = pane !== 'holdings';
+  $('#paper-section').hidden = pane !== 'paper';
+  redrawCharts();   // a canvas drawn while hidden has no width
+}
+$('#pf-seg').querySelectorAll('button').forEach(b => b.addEventListener('click', () => showPane(b.dataset.pane)));
+
+window.addEventListener('scroll', () => $('#topbar').classList.toggle('scrolled', window.scrollY > 4), {passive: true});
+
+// Charts are sized to their box, so redraw them when the box changes
+// (rotating a phone, resizing a window).
+let lastPfHistory = null, lastPaperCurve = null;
+function redrawCharts() {
+  if (lastPfHistory && !$('#pane-holdings').hidden) drawPortfolioChart(lastPfHistory);
+  if (lastPaperCurve && !$('#paper-section').hidden) drawPaperChart(lastPaperCurve);
+}
+let resizeTimer;
+window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(redrawCharts, 120); });
+
+// The rules card starts open where there is room for it, folded on phones.
+if (window.matchMedia('(min-width: 1024px)').matches) $('#rules').open = true;
 
 function isAiTraffic(text) {
   return /SENT TO|<-- RESPONSE|AI RESPONSE/.test(text);
@@ -669,10 +1020,12 @@ async function pollState() {
 
     $('#dot').classList.toggle('on', data.running);
     $('#running-text').textContent = data.running ? 'Watching' : 'Offline';
+    $('#activity-dot').classList.toggle('on', data.running);
+    renderRunButton(data.running);
     $('#activity').textContent = data.activity || 'Idle';
-    $('#stat-scanned').textContent = data.stats.scanned ?? 0;
-    $('#stat-alerts').textContent = data.stats.alerts ?? 0;
-    $('#stat-skipped').textContent = data.stats.skipped ?? 0;
+    $('#stat-scanned').textContent = fmtCount(data.stats.scanned);
+    $('#stat-alerts').textContent = fmtCount(data.stats.alerts);
+    $('#stat-skipped').textContent = fmtCount(data.stats.skipped);
 
     if (data.logs.length) {
       const box = $('#logbox');
@@ -722,10 +1075,29 @@ function tradeLine(a) {
   if (!t) return '';
   if (t.opened) {
     const verb = t.direction === 'SHORT' ? 'Shorted' : 'Bought';
-    return `<div class="meta">📒 ${verb} at $${fmtPrice(t.entry_price)} &middot; target $${fmtPrice(t.target_price)} &middot; stop $${fmtPrice(t.stop_price)}</div>`;
+    return `<div class="trade">${icon('book')}<span><b>${verb} at $${fmtPrice(t.entry_price)}</b> · target $${fmtPrice(t.target_price)} · stop $${fmtPrice(t.stop_price)}</span></div>`;
   }
-  return `<div class="meta">No trade: ${esc(t.reason || '')}</div>`;
+  return `<div class="trade">${icon('book')}<span>No trade: ${esc(t.reason || '')}</span></div>`;
 }
+
+function sourceLink(a, fallback) {
+  return a.url
+    ? `<a class="alert-link" href="${esc(a.url)}" target="_blank" rel="noopener">${icon('ext')}<span>${esc(a.headline || fallback)}</span></a>`
+    : '';
+}
+
+function alertHead(a, chip, extra) {
+  return `<div class="alert-head">
+      ${avatar(a.ticker, a.company)}
+      <div class="row-main">
+        <div class="row-title"><span class="name">${esc(a.ticker || a.company)}</span>${extra || ''}</div>
+        <div class="row-sub">${a.ticker && a.company ? esc(a.company) + ' · ' : ''}${esc(fmtTime(a.time))}</div>
+      </div>
+      ${chip}
+    </div>`;
+}
+
+const expandedAlerts = new Set();
 
 function renderAlerts(alerts) {
   const list = $('#alerts-list');
@@ -736,10 +1108,14 @@ function renderAlerts(alerts) {
   if (sig === lastAlertSig) return;
   lastAlertSig = sig;
   $('#alerts-count').textContent = alerts.length ? `${alerts.length} this session` : '';
-  if (!alerts.length) { list.innerHTML = '<div class="empty">No alerts yet.</div>'; seenAlertKeys = new Set(); return; }
+  if (!alerts.length) {
+    list.innerHTML = '<div class="card empty">No alerts yet. They appear here as news is analysed.</div>';
+    seenAlertKeys = new Set();
+    return;
+  }
   list.innerHTML = alerts.map(a => {
-    const isNew = !seenAlertKeys.has(alertKey(a));
-    const newCls = isNew ? ' alert-new' : '';
+    const key = alertKey(a);
+    const newCls = seenAlertKeys.has(key) ? '' : ' alert-new';
     if (a.kind === 'sell_signal') {
       const pct = a.entry_price ? ((a.current_price - a.entry_price) / a.entry_price * 100) : 0;
       const isShort = a.direction === 'SHORT';
@@ -747,40 +1123,43 @@ function renderAlerts(alerts) {
       const posPct = isShort ? -pct : pct;
       const reasonText = EXIT_REASONS[a.reason] || a.reason || '';
       const action = isShort ? 'Buy back to close the short CFD' : 'Sell to close the long CFD';
-      return `<div class="card ${isShort ? 'alert-cover' : 'alert-sell'}${newCls}">
-        <div class="row">
-          <h3>${esc(a.company)}${a.ticker ? ' · ' + esc(a.ticker) : ''}</h3>
-          <span class="badge ${isShort ? 'cover' : 'sell'}">${isShort ? 'COVER SHORT' : 'SELL SIGNAL'}</span>
+      return `<article class="alert${newCls}">
+        ${alertHead(a, `<span class="chip ${isShort ? 'cover' : 'sell'}">${isShort ? 'Cover short' : 'Sell signal'}</span>`)}
+        <div class="exit-grid">
+          <div class="px">Entry <b>$${fmtPrice(a.entry_price)}</b> → Now <b>$${fmtPrice(a.current_price)}</b><br>
+            <span class="muted">Price ${signed(pct, 1)}</span></div>
+          <div class="big ${posPct >= 0 ? 'up' : 'down'}">${signed(posPct, 1)}<small>on the position</small></div>
         </div>
-        <div class="meta">
-          ${esc(action)} &middot; ${esc(reasonText)}
-        </div>
-        <div class="meta">
-          Entry $${fmtPrice(a.entry_price)} &rarr; Now $${fmtPrice(a.current_price)} (${pct >= 0 ? '+' : ''}${pct.toFixed(1)}% price, ${posPct >= 0 ? '+' : ''}${posPct.toFixed(1)}% on the position)
-          &middot; ${esc((a.time || '').replace('T', ' ').slice(0, 19))}
-        </div>
-        ${a.url ? `<div class="meta"><a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.headline || 'Original alert article')}</a></div>` : ''}
-      </div>`;
+        <div class="trade">${icon('book')}<span><b>${esc(action)}</b> · ${esc(reasonText)}</span></div>
+        ${sourceLink(a, 'Original alert article')}
+      </article>`;
     }
-    const sentimentClass = a.sentiment === 'POSITIVE' ? 'pos' : a.sentiment === 'NEGATIVE' ? 'neg' : 'neu';
-    return `<div class="card alert-${sentimentClass}${newCls}">
-      <div class="row">
-        <h3>${esc(a.company)}${a.ticker ? ' · ' + esc(a.ticker) : ''}</h3>
-        <span class="badge ${sentimentClass}">${esc(a.sentiment)}</span>
-      </div>
-      <div class="meta">
-        ${esc(a.impact)} impact &middot; ${esc(a.prediction)}
-        ${a.confidence != null ? '&middot; confidence ' + esc(a.confidence) : ''}
-        ${a.is_owned ? '<span class="badge owned">OWNED</span>' : ''}
-        &middot; ${esc((a.time || '').replace('T', ' ').slice(0, 19))}
-      </div>
-      <div class="explanation">${esc(a.explanation)}</div>
+    const tone = a.sentiment === 'POSITIVE' ? 'pos' : a.sentiment === 'NEGATIVE' ? 'neg' : 'neu';
+    const tags = [
+      a.impact ? `${cap(a.impact)} impact` : '',
+      a.prediction ? cap(a.prediction) : '',
+      a.confidence != null ? `${a.confidence}% confidence` : '',
+    ].filter(Boolean).map(t => `<span class="tag">${esc(t)}</span>`).join('');
+    return `<article class="alert${newCls}">
+      ${alertHead(a, `<span class="chip ${tone}">${esc(cap(a.sentiment || 'neutral'))}</span>`,
+                  a.is_owned ? '<span class="chip sm owned">Owned</span>' : '')}
+      ${tags ? `<div class="alert-tags">${tags}</div>` : ''}
+      ${a.explanation ? `<p class="alert-text${expandedAlerts.has(key) ? ' open' : ''}" data-key="${esc(key)}" title="Tap to expand">${esc(a.explanation)}</p>` : ''}
       ${tradeLine(a)}
-      ${a.url ? `<div class="meta"><a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.headline || 'Source article')}</a></div>` : ''}
-    </div>`;
+      ${sourceLink(a, 'Source article')}
+    </article>`;
   }).join('');
   seenAlertKeys = new Set(alerts.map(alertKey));
 }
+
+// Explanations are clamped to three lines; tap one to read the rest.
+$('#alerts-list').addEventListener('click', (e) => {
+  const p = e.target.closest('.alert-text');
+  if (!p) return;
+  p.classList.toggle('open');
+  if (p.classList.contains('open')) expandedAlerts.add(p.dataset.key);
+  else expandedAlerts.delete(p.dataset.key);
+});
 
 // --- Watches (open positions awaiting an exit signal) --------------------
 async function loadWatches() {
@@ -790,16 +1169,21 @@ async function loadWatches() {
     const card = $('#watches-card');
     if (!open.length) { card.style.display = 'none'; return; }
     card.style.display = 'block';
-    $('#watches-body').innerHTML = open.map(w => `
-      <tr>
-        <td>${esc(w.ticker)}</td>
-        <td><span class="badge ${w.direction === 'SHORT' ? 'side-short' : 'side-long'}">${w.direction === 'SHORT' ? 'Short' : 'Long'}</span></td>
-        <td>$${fmtPrice(w.entry_price)}</td>
-        <td>$${fmtPrice(w.target_price)}</td>
-        <td>${w.stop_loss_price ? '$' + fmtPrice(w.stop_loss_price) : '—'}${w.trailing ? ' <span class="meta" style="margin:0;" title="Target reached - the stop now trails the price">🎯 trailing</span>' : ''}</td>
-        <td>${esc((w.expires_at || '').replace('T', ' ').slice(0, 16))}</td>
-        <td><button class="danger-btn" data-del="${esc(w.id)}">Remove</button></td>
-      </tr>`).join('');
+    $('#watches-body').innerHTML = open.map(w => {
+      const isShort = w.direction === 'SHORT';
+      return `<div class="row-item">
+        ${avatar(w.ticker)}
+        <div class="row-main">
+          <div class="row-title"><span class="name">${esc(w.ticker)}</span><span class="chip sm ${isShort ? 'short' : 'long'}">${isShort ? 'Short' : 'Long'}</span></div>
+          <div class="row-sub">Entry $${fmtPrice(w.entry_price)} · stop ${w.stop_loss_price ? '$' + fmtPrice(w.stop_loss_price) : '—'}${w.trailing ? ' · trailing' : ''}</div>
+        </div>
+        <div class="row-end">
+          <div class="v">$${fmtPrice(w.target_price)}</div>
+          <div class="s" title="Expires ${esc(fmtTime(w.expires_at))}">target · ${esc(fmtDay(w.expires_at))}</div>
+        </div>
+        <button class="icon-btn sm plain del" data-del="${esc(w.id)}" title="Stop watching" aria-label="Stop watching ${esc(w.ticker)}">${icon('x')}</button>
+      </div>`;
+    }).join('');
     $('#watches-body').querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', async () => {
       await fetch('/api/watches/' + encodeURIComponent(b.dataset.del), {method: 'DELETE'});
       loadWatches();
@@ -815,12 +1199,29 @@ pollState();
 loadEngine();
 
 // --- Controls -----------------------------------------------------------
-$('#btn-start').addEventListener('click', () => fetch('/api/control', {
-  method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'start'})
-}).then(pollState));
-$('#btn-stop').addEventListener('click', () => fetch('/api/control', {
-  method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action: 'stop'})
-}).then(pollState));
+// One button: Start while stopped, Stop while running.
+let isRunning = false;
+function renderRunButton(running) {
+  isRunning = !!running;
+  const btn = $('#btn-run');
+  if (btn.dataset.state === String(isRunning)) return;
+  btn.dataset.state = String(isRunning);
+  btn.disabled = false;   // markup starts disabled until the first poll
+  btn.className = 'btn ' + (isRunning ? 'danger' : 'primary');
+  btn.innerHTML = `${icon(isRunning ? 'stop' : 'play')}<span>${isRunning ? 'Stop' : 'Start'}</span>`;
+}
+$('#btn-run').addEventListener('click', async () => {
+  const btn = $('#btn-run');
+  btn.disabled = true;
+  try {
+    await fetch('/api/control', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({action: isRunning ? 'stop' : 'start'}),
+    });
+    await pollState();
+  } catch (e) { /* the next poll shows the truth */ }
+  btn.disabled = false;
+});
 
 // --- Alert sensitivity ----------------------------------------------------
 // Weakest impact rating that raises an alert. Discrete stops, because the
@@ -835,15 +1236,12 @@ let sensLevels = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
 
 function renderSensitivity(level) {
   const i = Math.max(0, sensLevels.indexOf(level));
-  const range = $('#sens-range');
-  range.max = String(sensLevels.length - 1);
-  range.value = String(i);
   $('#sens-now').textContent = level + '+';
   $('#sens-hint').textContent = SENS_HINTS[level] || '';
-  // Tick labels double as click targets - easier than dragging on a phone.
-  $('#sens-ticks').innerHTML = sensLevels.map((l, n) =>
-    `<span class="${n === i ? 'on' : ''}" data-level="${l}">${l}</span>`).join('');
-  $('#sens-ticks').querySelectorAll('[data-level]').forEach(el =>
+  // Segmented stops rather than a slider - one tap on a phone.
+  $('#sens-seg').innerHTML = sensLevels.map((l, n) =>
+    `<button type="button" role="radio" aria-checked="${n === i}" class="${n === i ? 'on' : ''}" data-level="${l}">${cap(l)}</button>`).join('');
+  $('#sens-seg').querySelectorAll('[data-level]').forEach(el =>
     el.addEventListener('click', () => setSensitivity(el.dataset.level)));
 }
 
@@ -868,15 +1266,6 @@ async function setSensitivity(level) {
     loadSensitivity();   // never leave a value the server did not accept
   }
 }
-
-// Label follows the drag; only the release is saved.
-$('#sens-range').addEventListener('input', (e) => {
-  const level = sensLevels[Number(e.target.value)];
-  $('#sens-now').textContent = level + '+';
-  $('#sens-hint').textContent = SENS_HINTS[level] || '';
-});
-$('#sens-range').addEventListener('change', (e) =>
-  setSensitivity(sensLevels[Number(e.target.value)]));
 
 loadSensitivity();
 
@@ -909,20 +1298,20 @@ loadStopLoss();
 // Master switch for phone alerts. Muting stops only the push to ntfy.sh:
 // scanning, analysis, watches and the paper record all carry on.
 function renderNotifyToggle(state) {
-  const wrap = $('#notify-toggle');
-  const box = $('#notify-switch');
-  const label = $('#notify-label');
-  box.checked = !!state.enabled;
-  wrap.classList.toggle('muted', !state.enabled);
+  const btn = $('#notify-btn');
+  btn.dataset.enabled = state.enabled ? '1' : '';
+  btn.setAttribute('aria-pressed', String(!!state.enabled));
+  btn.classList.toggle('muted', !state.enabled);
   // A configured-but-topicless app looks "on" while delivering nothing;
   // say so rather than letting it read as working.
   const noTopic = state.enabled && !state.has_topic;
-  wrap.classList.toggle('no-topic', noTopic);
-  label.textContent = !state.enabled ? 'Muted' : (noTopic ? 'No topic' : 'Alerts');
-  wrap.title = !state.enabled
-    ? 'Phone alerts are muted. Scanning and the paper record continue.'
+  btn.classList.toggle('no-topic', noTopic);
+  $('#notify-label').textContent = !state.enabled ? 'Muted' : (noTopic ? 'No topic' : 'Alerts on');
+  btn.title = !state.enabled
+    ? 'Phone alerts are muted. Scanning and the paper record continue. Tap to unmute.'
     : (noTopic ? 'No ntfy topic is set, so nothing can be delivered.'
-               : 'Phone alerts are on.');
+               : 'Phone alerts are on. Tap to mute.');
+  btn.setAttribute('aria-label', btn.title);
 }
 
 async function loadNotifyState() {
@@ -931,18 +1320,18 @@ async function loadNotifyState() {
   } catch (e) { /* dashboard poll - try again next tick */ }
 }
 
-$('#notify-switch').addEventListener('change', async (e) => {
-  const wanted = e.target.checked;
+$('#notify-btn').addEventListener('click', async () => {
+  const btn = $('#notify-btn');
+  const wanted = !btn.dataset.enabled;
+  btn.disabled = true;
   try {
     const res = await fetch('/api/notifications', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({enabled: wanted}),
     });
     renderNotifyToggle(await res.json());
-  } catch (err) {
-    // Never leave the switch showing a state the server did not accept.
-    e.target.checked = !wanted;
-  }
+  } catch (err) { /* keep showing what the server last confirmed */ }
+  btn.disabled = false;
 });
 
 loadNotifyState();
@@ -1012,22 +1401,28 @@ $('#pf-date').value = new Date().toISOString().slice(0, 10);
 
 function renderHoldingsRows(rows, pending) {
   const body = $('#pf-body');
-  if (!rows.length) { body.innerHTML = '<tr><td colspan="7" class="empty">No holdings yet.</td></tr>'; return; }
+  if (!rows.length) { body.innerHTML = '<div class="empty">No holdings yet. Add one above.</div>'; return; }
   body.innerHTML = rows.map(h => {
-    const live = h.price ? '$' + fmtPrice(h.price) : (pending ? '…' : '<span class="down">ERR</span>');
-    const pl = h.pl_pct === null || h.pl_pct === undefined ? (h.buy_price > 0 ? '—' : '<span class="meta" style="margin:0">no buy price</span>')
-      : `<span class="${h.pl_pct >= 0 ? 'up' : 'down'}">${h.pl_pct >= 0 ? '+' : ''}${h.pl_pct.toFixed(2)}%</span>`;
-    const gain = h.gain_per_share === null || h.gain_per_share === undefined ? '—'
-      : `<span class="${h.gain_per_share >= 0 ? 'up' : 'down'}">${h.gain_per_share >= 0 ? '+' : '-'}$${fmtPrice(Math.abs(h.gain_per_share))}</span>`;
-    return `<tr>
-      <td><strong>${esc(h.ticker)}</strong></td>
-      <td class="num">${Number(h.shares || 0) || '—'}</td>
-      <td class="num">${h.buy_price > 0 ? '$' + fmtPrice(h.buy_price) : '—'}</td>
-      <td class="num">${live}</td>
-      <td class="num">${pl}</td>
-      <td class="num">${gain}</td>
-      <td><button class="danger-btn" data-del="${esc(h.ticker)}">Remove</button></td>
-    </tr>`;
+    const shares = Number(h.shares || 0);
+    const live = h.price ? '$' + fmtPrice(h.price) : (pending ? '…' : '<span class="down">No price</span>');
+    const hasPl = h.pl_pct !== null && h.pl_pct !== undefined;
+    const pl = hasPl ? `<span class="pl-chip ${h.pl_pct >= 0 ? 'up' : 'down'}">${signed(h.pl_pct)}</span>`
+      : `<span class="s">${h.buy_price > 0 ? '—' : 'no buy price'}</span>`;
+    const gain = h.gain_per_share === null || h.gain_per_share === undefined ? ''
+      : ` · <span class="${h.gain_per_share >= 0 ? 'up' : 'down'}">${h.gain_per_share >= 0 ? '+' : '-'}$${fmtPrice(Math.abs(h.gain_per_share))}/sh</span>`;
+    const sub = [shares ? `${shares} shares` : '', h.buy_price > 0 ? `avg $${fmtPrice(h.buy_price)}` : ''].filter(Boolean).join(' · ') || 'No position size';
+    return `<div class="row-item">
+      ${avatar(h.ticker)}
+      <div class="row-main">
+        <div class="row-title"><span class="name">${esc(h.ticker)}</span></div>
+        <div class="row-sub">${esc(sub)}${gain}</div>
+      </div>
+      <div class="row-end">
+        <div class="v">${live}</div>
+        <div style="margin-top:3px;">${pl}</div>
+      </div>
+      <button class="icon-btn sm plain del" data-del="${esc(h.ticker)}" title="Remove" aria-label="Remove ${esc(h.ticker)}">${icon('x')}</button>
+    </div>`;
   }).join('');
   body.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', async () => {
     await fetch('/api/portfolio/' + encodeURIComponent(b.dataset.del), {method: 'DELETE'});
@@ -1077,9 +1472,11 @@ async function loadPaper() {
     d = await (await fetch('/api/paper')).json();
   } catch (e) { return; }
 
-  const sec = $('#paper-section');
-  if (!d || d.enabled === false) { sec.style.display = 'none'; return; }
-  sec.style.display = 'block';
+  // Paper trading switched off: no tab for it, and back to the holdings.
+  const enabled = !!d && d.enabled !== false;
+  $('#seg-paper-btn').hidden = !enabled;
+  $('#pf-seg').hidden = !enabled;
+  if (!enabled) { if (pfPane === 'paper') showPane('holdings'); return; }
   $('#pp-cost').textContent = ((d.cost_pct || 0) * 100).toFixed(2) + '%';
 
   const s = d.stats;
@@ -1120,33 +1517,43 @@ async function loadPaper() {
   // Open positions.
   const ob = $('#pp-open-body');
   ob.innerHTML = (d.positions && d.positions.length) ? d.positions.map(p => {
-    const prog = p.progress === null || p.progress === undefined
-      ? '—'
-      : `<div class="prog"><i style="width:${Math.max(0, Math.min(1, p.progress)) * 100}%"></i><span class="num">${(p.progress * 100).toFixed(0)}%</span></div>`;
-    return `<tr>
-      <td><strong>${esc(p.ticker)}</strong></td>
-      <td><span class="pill ${p.direction === 'SHORT' ? 'short' : 'long'}">${p.direction === 'SHORT' ? 'Short' : 'Long'}</span></td>
-      <td class="num">${fmtPrice(p.entry_price)}</td>
-      <td class="num">${p.current_price ? fmtPrice(p.current_price) : '—'}</td>
-      <td class="num ${pctClass(p.unrealised_pct)}">${pctText(p.unrealised_pct)}</td>
-      <td>${prog}</td>
-      <td class="num" style="color:var(--text-mute)">${esc((p.opened_at || '').slice(5, 16).replace('T', ' '))}</td>
-    </tr>`;
-  }).join('') : '<tr><td colspan="7" class="empty">No open positions.</td></tr>';
+    const isShort = p.direction === 'SHORT';
+    const hasProg = p.progress !== null && p.progress !== undefined;
+    const prog = hasProg
+      ? `<div class="bar-wrap"><div class="bar${p.progress < 0 ? ' neg' : ''}"><i style="width:${Math.min(1, Math.abs(p.progress)) * 100}%"></i></div><span>${(p.progress * 100).toFixed(0)}% to target</span></div>`
+      : '';
+    return `<div class="row-item">
+      ${avatar(p.ticker)}
+      <div class="row-main">
+        <div class="row-title"><span class="name">${esc(p.ticker)}</span><span class="chip sm ${isShort ? 'short' : 'long'}">${isShort ? 'Short' : 'Long'}</span></div>
+        <div class="row-sub">Entry ${fmtPrice(p.entry_price)} · ${esc(fmtTime(p.opened_at))}</div>
+        ${prog}
+      </div>
+      <div class="row-end">
+        <div class="v ${pctClass(p.unrealised_pct)}">${pctText(p.unrealised_pct)}</div>
+        <div class="s">${p.current_price ? 'now ' + fmtPrice(p.current_price) : '—'}</div>
+      </div>
+    </div>`;
+  }).join('') : '<div class="empty">No open positions.</div>';
 
   // Closed trades.
+  const REASONS = {target_hit: 'Target hit', stop_loss: 'Stop-loss', trailing_stop: 'Trailing stop', news_reversal: 'News reversal', horizon_expired: 'Time stop', max_age: 'Age limit', max_postponed: 'Postpone limit'};
   const cb = $('#pp-closed-body');
   const closed = d.closed_recent || [];
-  cb.innerHTML = closed.length ? closed.map(t => `
-    <tr>
-      <td class="num" style="color:var(--text-mute)">${esc((t.closed_at || '').slice(5, 16).replace('T', ' '))}</td>
-      <td><strong>${esc(t.ticker)}</strong></td>
-      <td><span class="pill ${t.direction === 'SHORT' ? 'short' : 'long'}">${t.direction === 'SHORT' ? 'Short' : 'Long'}</span></td>
-      <td class="num">${fmtPrice(t.entry_price)}</td>
-      <td class="num">${t.exit_price !== null ? fmtPrice(t.exit_price) : '—'}</td>
-      <td class="num ${pctClass(t.net_pct)}"><strong>${pctText(t.net_pct)}</strong></td>
-      <td style="color:var(--text-mute)">${({target_hit: 'target hit', stop_loss: 'stop-loss', trailing_stop: 'trailing stop', news_reversal: 'news reversal', horizon_expired: 'time stop', max_age: 'age limit', max_postponed: 'postpone limit'})[t.reason] || esc(t.reason || '')}</td>
-    </tr>`).join('') : '<tr><td colspan="7" class="empty">No closed trades yet.</td></tr>';
+  cb.innerHTML = closed.length ? closed.map(t => {
+    const isShort = t.direction === 'SHORT';
+    return `<div class="row-item">
+      ${avatar(t.ticker)}
+      <div class="row-main">
+        <div class="row-title"><span class="name">${esc(t.ticker)}</span><span class="chip sm ${isShort ? 'short' : 'long'}">${isShort ? 'Short' : 'Long'}</span></div>
+        <div class="row-sub">${esc(REASONS[t.reason] || t.reason || '')} · ${esc(fmtTime(t.closed_at))}</div>
+      </div>
+      <div class="row-end">
+        <div class="v ${pctClass(t.net_pct)}">${pctText(t.net_pct)}</div>
+        <div class="s">${fmtPrice(t.entry_price)} → ${t.exit_price !== null && t.exit_price !== undefined ? fmtPrice(t.exit_price) : '—'}</div>
+      </div>
+    </div>`;
+  }).join('') : '<div class="empty">No closed trades yet.</div>';
 
   // Equity curve.
   const card = $('#pp-chart-card');
@@ -1154,6 +1561,7 @@ async function loadPaper() {
     card.style.display = 'block';
     $('#pp-chart-sub').textContent =
       `${s.trades} trades · max drawdown -${(s.max_drawdown * 100).toFixed(1)}%`;
+    lastPaperCurve = s.equity_curve;
     drawPaperChart(s.equity_curve);
   } else {
     card.style.display = 'none';
@@ -1184,15 +1592,15 @@ function drawPaperChart(curve) {
   const y = v => pt + (1 - (v - min) / (max - min)) * (h - pt - pb);
 
   // Break-even line.
-  ctx.strokeStyle = '#2C3444';
+  ctx.strokeStyle = '#30363F';
   ctx.setLineDash([3, 4]);
   ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(pl, y(start)); ctx.lineTo(w - pr, y(start)); ctx.stroke();
   ctx.setLineDash([]);
 
   const up = last >= start;
-  const line = up ? '#3DDC84' : '#FF5C6C';
-  const fill = up ? 'rgba(61,220,132,0.12)' : 'rgba(255,92,108,0.12)';
+  const line = up ? '#1FC07F' : '#F5475A';
+  const fill = up ? 'rgba(31,192,127,0.14)' : 'rgba(245,71,90,0.14)';
 
   ctx.beginPath();
   ctx.moveTo(x(0), y(vals[0]));
@@ -1216,15 +1624,15 @@ async function loadPortfolioSummary() {
   try {
     const s = await (await fetch('/api/portfolio/summary')).json();
     if (Array.isArray(s.holdings)) renderHoldingsRows(s.holdings, false);
-    $('#pf-stat-value').textContent = '$' + Number(s.total_value || 0).toFixed(2);
+    $('#pf-stat-value').textContent = fmtMoney(s.total_value);
     const profit = Number(s.total_profit || 0);
     const profitEl = $('#pf-stat-profit');
-    profitEl.textContent = (profit >= 0 ? '+$' : '-$') + Math.abs(profit).toFixed(2);
-    profitEl.style.color = profit >= 0 ? 'var(--success)' : 'var(--danger)';
+    profitEl.textContent = (profit >= 0 ? '+' : '-') + fmtMoney(Math.abs(profit));
+    profitEl.className = 'pl-chip ' + (profit >= 0 ? 'up' : 'down');
     const pct = Number(s.profit_pct || 0);
     const pctEl = $('#pf-stat-pct');
-    pctEl.textContent = (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
-    pctEl.style.color = pct >= 0 ? 'var(--success)' : 'var(--danger)';
+    pctEl.textContent = signed(pct);
+    pctEl.className = 'pl-chip ' + (pct >= 0 ? 'up' : 'down');
   } catch (e) { /* dashboard poll - try again next tick */ }
 }
 
@@ -1234,6 +1642,7 @@ async function loadPortfolioHistory() {
     const card = $('#pf-chart-card');
     if (!h.dates || !h.dates.length) { card.style.display = 'none'; return; }
     card.style.display = 'block';
+    lastPfHistory = h;
     drawPortfolioChart(h);
   } catch (e) { /* dashboard poll - try again next tick */ }
 }
@@ -1259,8 +1668,8 @@ function drawPortfolioChart(h) {
   const y = v => marginT + plotH - ((v - yMin) / (yMax - yMin)) * plotH;
 
   const profitable = values[n - 1] >= costs[n - 1];
-  const lineColor = profitable ? '#3DDC84' : '#FF5C6C';
-  const fillColor = profitable ? 'rgba(61,220,132,0.12)' : 'rgba(255,92,108,0.12)';
+  const lineColor = profitable ? '#1FC07F' : '#F5475A';
+  const fillColor = profitable ? 'rgba(31,192,127,0.14)' : 'rgba(245,71,90,0.14)';
 
   // Shaded area between the value line and the cost-basis line.
   ctx.beginPath();
@@ -1274,7 +1683,7 @@ function drawPortfolioChart(h) {
   // Cost-basis reference line (dashed).
   ctx.beginPath();
   ctx.setLineDash([4, 4]);
-  ctx.strokeStyle = '#5B6474';
+  ctx.strokeStyle = '#6A727E';
   ctx.lineWidth = 1;
   costs.forEach((v, i) => i === 0 ? ctx.moveTo(x(i), y(v)) : ctx.lineTo(x(i), y(v)));
   ctx.stroke();
@@ -1287,8 +1696,8 @@ function drawPortfolioChart(h) {
   values.forEach((v, i) => i === 0 ? ctx.moveTo(x(i), y(v)) : ctx.lineTo(x(i), y(v)));
   ctx.stroke();
 
-  ctx.fillStyle = '#5B6474';
-  ctx.font = '10px -apple-system, sans-serif';
+  ctx.fillStyle = '#6A727E';
+  ctx.font = '11px system-ui, sans-serif';
   ctx.textAlign = 'left';
   ctx.fillText(h.dates[0], marginL, hgt - 4);
   ctx.textAlign = 'right';
@@ -1308,22 +1717,26 @@ $('#pf-add').addEventListener('click', async () => {
 });
 
 // --- Sources --------------------------------------------------------------
+const SRC_ICON = {rss: 'rss', twitter: 'at', webpage: 'globe'};
 async function loadSources() {
   const sources = await (await fetch('/api/sources')).json();
   const list = $('#src-list');
+  const on = sources.filter(s => s.enabled).length;
+  $('#src-count').textContent = sources.length ? `${on} of ${sources.length} on` : '';
   list.innerHTML = sources.length ? sources.map(s => `
-    <div class="card row">
-      <div>
-        <h3>${esc(s.name)} <span class="badge ${s.enabled ? 'pos' : 'neu'}">${s.enabled ? 'ON' : 'OFF'}</span></h3>
-        <div class="meta">${esc(s.type)} &middot; ${esc(s.url)}</div>
+    <div class="row-item">
+      <span class="avatar">${icon(SRC_ICON[s.type] || 'globe')}</span>
+      <div class="row-main">
+        <div class="row-title"><span class="name">${esc(s.name)}</span></div>
+        <div class="row-sub">${esc(s.type)} · ${esc(s.url)}</div>
       </div>
-      <div style="display:flex; gap:6px;">
-        <button data-toggle="${esc(s.id)}">${s.enabled ? 'Disable' : 'Enable'}</button>
-        <button class="danger-btn" data-del="${esc(s.id)}">Remove</button>
+      <div class="row-actions">
+        <label class="switch" title="${s.enabled ? 'On' : 'Off'}"><input type="checkbox" data-toggle="${esc(s.id)}" ${s.enabled ? 'checked' : ''} aria-label="Use ${esc(s.name)}"><span class="track"></span></label>
+        <button class="icon-btn sm plain del" data-del="${esc(s.id)}" title="Remove" aria-label="Remove ${esc(s.name)}">${icon('x')}</button>
       </div>
     </div>
   `).join('') : '<div class="empty">No custom sources yet.</div>';
-  list.querySelectorAll('[data-toggle]').forEach(b => b.addEventListener('click', async () => {
+  list.querySelectorAll('[data-toggle]').forEach(b => b.addEventListener('change', async () => {
     await fetch('/api/sources/' + b.dataset.toggle + '/toggle', {method: 'POST'});
     loadSources();
   }));
@@ -1362,8 +1775,8 @@ async function loadKeywords() {
   loadEngine();
   const data = await (await fetch('/api/keywords')).json();
   const render = (obj, type) => Object.entries(obj).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).map(([k, w]) => `
-    <div class="kw-item"><span>${esc(k)} <span class="meta">${w}</span></span>
-    <button class="danger-btn" data-del="${esc(k)}" data-type="${type}">×</button></div>
+    <div class="kw-item"><span>${esc(k)}</span><span class="pl-chip w ${type === 'positive' ? 'up' : 'down'}">${esc(w)}</span>
+    <button class="icon-btn sm plain del" data-del="${esc(k)}" data-type="${type}" title="Remove" aria-label="Remove ${esc(k)}">${icon('x')}</button></div>
   `).join('') || '<div class="empty">None yet.</div>';
   $('#kw-pos').innerHTML = render(data.positive_keywords || {}, 'positive');
   $('#kw-neg').innerHTML = render(data.negative_keywords || {}, 'negative');
@@ -1521,6 +1934,7 @@ $('#st-reload').addEventListener('click', async () => {
     loadSensitivity(); loadStopLoss(); loadNotifyState();
   } catch (e) { setSettingsMsg('Reload failed.', 'err'); }
 });
+showView(location.hash.slice(1) || 'alerts');
 </script>
 </body>
 </html>
