@@ -40,6 +40,7 @@ from portfolio_manager import PortfolioManager
 from portfolio_history import compute_history
 from price_lookup import fetch_prices
 from source_manager import SourceManager
+import reddit_source
 from keyword_manager import KeywordManager
 
 MAX_LOG_LINES = 2000
@@ -180,6 +181,7 @@ _SETTINGS_PUBLIC = (
     "ALLOW_SHORTS", "NOTIFY_SHORTS", "SHORT_MIN_IMPACT",
     "MIN_CONFIDENCE", "AI_TRADE_CONFIRM", "LET_WINNERS_RUN",
     "MAX_OPEN_POSITIONS", "STOP_ATR_MULT",
+    "REDDIT_COMMENTS_PER_POST", "REDDIT_COMMENT_DELAY_MIN", "REDDIT_CAN_TRADE",
 )
 _SETTINGS_SECRET = ("CLOUD_AI_API_KEY", "DASHBOARD_PASSWORD")
 
@@ -232,6 +234,10 @@ def api_settings():
                 return jsonify({"error": "STOP_ATR_MULT must be between 0 and 10"}), 400
             if "SHORT_MIN_IMPACT" in updates and str(updates["SHORT_MIN_IMPACT"]).upper() not in config.IMPACT_LEVELS:
                 return jsonify({"error": f"SHORT_MIN_IMPACT must be one of {config.IMPACT_LEVELS}"}), 400
+            if "REDDIT_COMMENTS_PER_POST" in updates and not (0 <= int(updates["REDDIT_COMMENTS_PER_POST"]) <= 25):
+                return jsonify({"error": "REDDIT_COMMENTS_PER_POST must be between 0 and 25"}), 400
+            if "REDDIT_COMMENT_DELAY_MIN" in updates and not (0 <= int(updates["REDDIT_COMMENT_DELAY_MIN"]) <= 240):
+                return jsonify({"error": "REDDIT_COMMENT_DELAY_MIN must be between 0 and 240"}), 400
             config.save_settings(updates)
         except (KeyError, TypeError, ValueError) as e:
             return jsonify({"error": f"invalid setting: {e}"}), 400
@@ -471,6 +477,20 @@ def api_watches_delete(watch_id):
     return jsonify(backend.watch_mgr.get_all())
 
 
+def _sources_payload():
+    """The sources, each Reddit one with how many of its posts are waiting
+    for their comments before being analysed."""
+    waiting = backend.collector.reddit.pending_counts()
+    out = []
+    for source in source_mgr.get_sources():
+        source = dict(source)
+        if source.get("type") == "reddit":
+            subreddit = reddit_source.parse_subreddit(source.get("url"), bare_ok=True) or ""
+            source["waiting"] = waiting.get(subreddit.lower(), 0)
+        out.append(source)
+    return out
+
+
 @app.route("/api/sources", methods=["GET", "POST"])
 def api_sources():
     if request.method == "POST":
@@ -479,7 +499,7 @@ def api_sources():
             source_mgr.add_source(body.get("name", ""), body.get("url", ""), body.get("type", "webpage"))
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
-    return jsonify(source_mgr.get_sources())
+    return jsonify(_sources_payload())
 
 
 @app.route("/api/sources/reset", methods=["POST"])

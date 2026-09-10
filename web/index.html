@@ -545,6 +545,7 @@
     <symbol id="i-send" viewBox="0 0 24 24"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4z"/></symbol>
     <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9.5"/><path d="M2.5 12h19M12 2.5a14.5 14.5 0 0 1 0 19 14.5 14.5 0 0 1 0-19"/></symbol>
     <symbol id="i-at" viewBox="0 0 24 24"><path d="M4 4l16 16M20 4L4 20"/></symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 11.5a8.4 8.4 0 0 1-12.2 7.5L3 20.5l1.5-5.2A8.4 8.4 0 1 1 21 11.5z"/><path d="M8.5 11.5h.01M12 11.5h.01M15.5 11.5h.01"/></symbol>
   </defs>
 </svg>
 
@@ -717,15 +718,16 @@
           <summary><span class="plus"><svg class="i"><use href="#i-plus"/></svg></span>Add source</summary>
           <div class="add-grid src">
             <input id="src-name" class="wide" placeholder="Name" autocomplete="off">
-            <input id="src-url" class="wide" placeholder="URL (RSS, page, or Twitter/X link)" inputmode="url" autocomplete="off" spellcheck="false">
+            <input id="src-url" class="wide" placeholder="URL (RSS, page, Twitter/X link, or r/subreddit)" inputmode="url" autocomplete="off" spellcheck="false">
             <select id="src-type" aria-label="Source type">
               <option value="webpage">Webpage</option>
               <option value="rss">RSS</option>
               <option value="twitter">Twitter</option>
+              <option value="reddit">Reddit</option>
             </select>
             <button class="btn primary" id="src-add" style="height:44px">Add</button>
           </div>
-          <div class="hint">Twitter/X profile links are converted to a Nitter mirror automatically.</div>
+          <div class="hint">Twitter/X profile links are converted to a Nitter mirror automatically. For Reddit, add a subreddit (<code>r/stocks</code>): each post is analysed together with its top comments once they've had time to arrive — 30 minutes by default, see Settings.</div>
         </details>
         <div class="card flush">
           <div class="card-title">Sources <span class="sub" id="src-count"></span>
@@ -852,6 +854,26 @@
                 <option value="HIGH">HIGH</option><option value="CRITICAL">CRITICAL</option>
               </select>
               <div class="hint">Negative news about a stock you hold is always sent as a warning, whatever these say.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Reddit sources</div>
+          <div class="form-grid">
+            <label class="check-row"><span class="txt">Let Reddit posts open trades<small>Paper trading. Off: Reddit posts send alerts but never open or close a position — they're retail opinion, not reporting.</small></span>
+              <span class="switch"><input type="checkbox" id="st-reddit-trade"><span class="track"></span></span></label>
+          </div>
+          <div class="form-grid two" style="margin-top:16px;">
+            <div class="field">
+              <label for="st-reddit-comments">Comments per post</label>
+              <input id="st-reddit-comments" type="number" min="0" max="25" step="1" inputmode="numeric">
+              <div class="hint">Top comments analysed with each post. 0 analyses the post alone, as soon as it's seen.</div>
+            </div>
+            <div class="field">
+              <label for="st-reddit-delay">Minutes to wait for comments</label>
+              <input id="st-reddit-delay" type="number" min="0" max="240" step="5" inputmode="numeric">
+              <div class="hint">Reddit allows about one request a minute, so each post's comments cost a minute of it.</div>
             </div>
           </div>
         </div>
@@ -1717,7 +1739,7 @@ $('#pf-add').addEventListener('click', async () => {
 });
 
 // --- Sources --------------------------------------------------------------
-const SRC_ICON = {rss: 'rss', twitter: 'at', webpage: 'globe'};
+const SRC_ICON = {rss: 'rss', twitter: 'at', webpage: 'globe', reddit: 'chat'};
 async function loadSources() {
   const sources = await (await fetch('/api/sources')).json();
   const list = $('#src-list');
@@ -1728,7 +1750,7 @@ async function loadSources() {
       <span class="avatar">${icon(SRC_ICON[s.type] || 'globe')}</span>
       <div class="row-main">
         <div class="row-title"><span class="name">${esc(s.name)}</span></div>
-        <div class="row-sub">${esc(s.type)} · ${esc(s.url)}</div>
+        <div class="row-sub">${esc(s.type)}${s.waiting ? ` · ${s.waiting} waiting for comments` : ''} · ${esc(s.url)}</div>
       </div>
       <div class="row-actions">
         <label class="switch" title="${s.enabled ? 'On' : 'Off'}"><input type="checkbox" data-toggle="${esc(s.id)}" ${s.enabled ? 'checked' : ''} aria-label="Use ${esc(s.name)}"><span class="track"></span></label>
@@ -1856,6 +1878,9 @@ function renderSettings(s) {
   $('#st-allow-shorts').checked = !!s.ALLOW_SHORTS;
   $('#st-notify-shorts').checked = !!s.NOTIFY_SHORTS;
   $('#st-short-impact').value = s.SHORT_MIN_IMPACT || 'CRITICAL';
+  $('#st-reddit-trade').checked = !!s.REDDIT_CAN_TRADE;
+  $('#st-reddit-comments').value = s.REDDIT_COMMENTS_PER_POST ?? 10;
+  $('#st-reddit-delay').value = s.REDDIT_COMMENT_DELAY_MIN ?? 30;
 
   $('#st-user').value = s.DASHBOARD_USERNAME || '';
   $('#st-pass').value = '';
@@ -1883,6 +1908,10 @@ $('#st-save').addEventListener('click', async () => {
   if (!isFinite(maxPos) || maxPos < 1 || maxPos > 50) { setSettingsMsg('Maximum open positions must be between 1 and 50.', 'err'); return; }
   const atrMult = Number($('#st-atr-mult').value);
   if (!isFinite(atrMult) || atrMult < 0 || atrMult > 10) { setSettingsMsg('Stop distance must be between 0 and 10.', 'err'); return; }
+  const redditComments = parseInt($('#st-reddit-comments').value, 10);
+  if (!isFinite(redditComments) || redditComments < 0 || redditComments > 25) { setSettingsMsg('Reddit comments per post must be between 0 and 25.', 'err'); return; }
+  const redditDelay = parseInt($('#st-reddit-delay').value, 10);
+  if (!isFinite(redditDelay) || redditDelay < 0 || redditDelay > 240) { setSettingsMsg('Minutes to wait for Reddit comments must be between 0 and 240.', 'err'); return; }
   const body = {
     NTFY_TOPIC: $('#st-topic').value.trim(),
     NOTIFY_OWNERSHIP: $('#st-ownership').checked,
@@ -1905,6 +1934,9 @@ $('#st-save').addEventListener('click', async () => {
     ALLOW_SHORTS: $('#st-allow-shorts').checked,
     NOTIFY_SHORTS: $('#st-notify-shorts').checked,
     SHORT_MIN_IMPACT: $('#st-short-impact').value,
+    REDDIT_CAN_TRADE: $('#st-reddit-trade').checked,
+    REDDIT_COMMENTS_PER_POST: redditComments,
+    REDDIT_COMMENT_DELAY_MIN: redditDelay,
     DASHBOARD_USERNAME: $('#st-user').value.trim(),
     DASHBOARD_PASSWORD: $('#st-pass').value,
   };
