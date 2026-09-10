@@ -671,6 +671,8 @@ const EXIT_REASONS = {
   target_hit: 'Target price reached',
   stop_loss: 'Stop-loss reached',
   horizon_expired: 'Time window expired without the move',
+  max_age: 'Closed at the age limit',
+  max_postponed: 'Postponed as long as allowed, still at a loss',
 };
 
 function renderAlerts(alerts) {
@@ -1088,7 +1090,7 @@ async function loadPaper() {
       <td class="num">${fmtPrice(t.entry_price)}</td>
       <td class="num">${t.exit_price !== null ? fmtPrice(t.exit_price) : '—'}</td>
       <td class="num ${pctClass(t.net_pct)}"><strong>${pctText(t.net_pct)}</strong></td>
-      <td style="color:var(--text-mute)">${({target_hit: 'target hit', stop_loss: 'stop-loss', horizon_expired: 'time stop'})[t.reason] || esc(t.reason || '')}</td>
+      <td style="color:var(--text-mute)">${({target_hit: 'target hit', stop_loss: 'stop-loss', horizon_expired: 'time stop', max_age: 'age limit', max_postponed: 'postpone limit'})[t.reason] || esc(t.reason || '')}</td>
     </tr>`).join('') : '<tr><td colspan="7" class="empty">No closed trades yet.</td></tr>';
 
   // Equity curve.

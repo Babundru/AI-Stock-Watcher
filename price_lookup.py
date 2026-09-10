@@ -32,6 +32,27 @@ _EXCHANGE_PREFIX = re.compile(r'^(?:NASDAQ|NYSE|AMEX|OTC|TSX|LSE)\s*:\s*', re.IG
 # be left alone.
 _CLASS_SHARE = re.compile(r'^([A-Z0-9]+)\.([A-Z])$')
 
+# Most tickers to put in a single yfinance call.
+#
+# The 1-minute chart returns ~960 rows x 6 columns per ticker, and yfinance
+# builds every ticker's frame before concatenating them, so one call's peak
+# cost scales with the number of symbols in it. On a 1GB VM an unbounded
+# batch is what turns a slowly growing watch list into a machine that stops
+# answering: the box never OOM-kills anything, it just enters permanent
+# reclaim. Chunking caps the peak regardless of how many watches are open,
+# at the price of one extra HTTP round trip per chunk.
+MAX_BATCH = 25
+
+# Cap on how many symbols the (much more expensive) per-ticker fallback will
+# try. Without it, one empty batch download promotes every open watch into
+# its own sequential request.
+MAX_FALLBACK = 25
+
+
+def _chunked(items, size):
+    for i in range(0, len(items), size):
+        yield items[i:i + size]
+
 
 def normalize_ticker(ticker):
     """Turn whatever the analyser returned into a symbol Yahoo will price,
@@ -82,7 +103,8 @@ def fetch_prices(tickers):
     # off the caller's list either way.
     unique = list(dict.fromkeys(prices))
 
-    prices.update(_intraday_prices(unique))
+    for batch in _chunked(unique, MAX_BATCH):
+        prices.update(_intraday_prices(batch))
 
     missing = [t for t in unique if prices[t] is None]
     if missing:
@@ -90,7 +112,9 @@ def fetch_prices(tickers):
         # tried first because the same shape is also an exchange suffix.
         alternates = {t: t.replace('.', '-') for t in missing if _CLASS_SHARE.match(t)}
         if alternates:
-            alt_prices = _intraday_prices(list(alternates.values()))
+            alt_prices = {}
+            for batch in _chunked(list(alternates.values()), MAX_BATCH):
+                alt_prices.update(_intraday_prices(batch))
             for ticker, alt in alternates.items():
                 if alt_prices.get(alt):
                     prices[ticker] = alt_prices[alt]
@@ -137,23 +161,38 @@ def _intraday_prices(tickers):
 
 def _regular_session_prices(tickers):
     """Last regular-session close for tickers the intraday chart couldn't
-    price. Stale by design - it's this or nothing for those."""
+    price. Stale by design - it's this or nothing for those.
+
+    One request per ticker, so this is the expensive path. Two limits keep it
+    from running away when the batch download comes back empty (which is what
+    Yahoo does when it rate-limits a large request - and then *every* symbol
+    lands here at once):
+
+      * At most MAX_FALLBACK symbols are attempted; the rest come back None,
+        which callers already handle as "couldn't price it".
+      * fast_info only. The .info dict this used to fall back on is the
+        heaviest call in yfinance - a full quote-summary fetch per symbol -
+        and asking for it once per open watch, every WATCH_CHECK_INTERVAL,
+        is what turned a slow price check into a stalled scan loop.
+    """
     import yfinance as yf
 
     prices = {t: None for t in tickers}
+    attempt = tickers[:MAX_FALLBACK]
+    if len(tickers) > MAX_FALLBACK:
+        print(f"Fallback price fetch: {len(tickers)} tickers needed it, "
+              f"trying the first {MAX_FALLBACK} only.")
+    if not attempt:
+        return prices
     try:
-        data = yf.Tickers(" ".join(tickers))
+        data = yf.Tickers(" ".join(attempt))
     except Exception as e:
         print(f"Fallback price fetch failed: {e}")
         return prices
 
-    for ticker in tickers:
-        price = None
+    for ticker in attempt:
         try:
             price = data.tickers[ticker].fast_info.get('lastPrice')
-            if not price:
-                info = data.tickers[ticker].info
-                price = info.get('currentPrice') or info.get('regularMarketPrice')
         except Exception:
             price = None
         prices[ticker] = float(price) if price else None

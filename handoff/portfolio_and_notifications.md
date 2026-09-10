@@ -33,9 +33,16 @@ Records written before shorting existed have no `direction`; `_load()`
 defaults them to `LONG`, so old `data/watches.json` files keep working.
 
 - **Target price**: `entry_price * (1 +/- target_pct)` - above entry for a
-  long, below it for a short - where `target_pct` is 10% for CRITICAL
-  impact, 5% for HIGH (or DEFAULT 5% for anything else), `TARGET_PCT` in
-  `watch_manager.py`.
+  long, below it for a short - where `target_pct` comes from `TARGET_PCT`
+  in `watch_manager.py`: 10% CRITICAL, 5% HIGH, 3% MEDIUM, 2% LOW (5% for
+  anything unrecognised). MEDIUM/LOW only matter when the sensitivity
+  slider (`MIN_IMPACT`) lets them through.
+- **Stop-loss** (optional, `config.STOP_LOSS_PCT`, 0 = off): captured per
+  watch at open time as `stop_loss_price`, on the opposite side of entry
+  from the target. When set, it also turns on "don't sell at a loss on
+  schedule": a watch whose horizon passes while it's losing is
+  **postponed** by `POSTPONE_DAYS` (1) instead of closed, and keeps being
+  checked until it recovers, hits target, or hits the stop.
 - **Expiry**: `HORIZON_DAYS` maps the LLM/keyword-analyzer's `horizon`
   field (INTRADAY/DAYS/WEEKS) to 1/5/21 calendar days. Defaults to DAYS if
   the analyzer didn't provide one.
@@ -48,14 +55,34 @@ defaults them to `LONG`, so old `data/watches.json` files keep working.
   scan on purpose - price doesn't need per-minute polling, and it's one
   batched `price_lookup.fetch_prices` call per check) by `main.py:
   _check_watches`, called from inside `_run_loop`.
-- **Closes** when either the current price reaches `target_price`
-  (`reason="target_hit"`, direction-aware: `>=` target for a long, `<=`
-  for a short, via `WatchManager.target_reached`) or `now >= expires_at`
-  with no target hit (`reason="horizon_expired"`) - fires
-  `notifier.notify_sell(...)` either way. A closed watch stays in `data/watches.json` (status `CLOSED`) for
-  the dashboard's history; only the oldest *closed* ones get trimmed once
-  total storage exceeds `MAX_STORED_WATCHES=200` - open watches are never
-  dropped.
+- **Closes** for one of five reasons, checked in this order in
+  `main.py: _check_watches`, and fires `notifier.notify_sell(...)` for all
+  of them:
+  1. `max_age` - open longer than `MAX_OPEN_DAYS` (30). Outranks
+     everything.
+  2. `stop_loss` - price crossed `stop_loss_price`.
+  3. `target_hit` - direction-aware (`>=` target for a long, `<=` for a
+     short, via `WatchManager.target_reached`).
+  4. `horizon_expired` - `now >= expires_at`, target never hit (and not
+     postponed, see above).
+  5. `max_postponed` - the horizon passed at a loss again after the watch
+     had already been postponed `MAX_POSTPONEMENTS` (14) times;
+     `postpone_watch` returns `None` and the caller closes instead.
+
+  A closed watch stays in `data/watches.json` (status `CLOSED`) for the
+  dashboard's history; only the oldest *closed* ones get trimmed once
+  total storage exceeds `MAX_STORED_WATCHES=200`. `_trim()` never drops an
+  **open** watch.
+
+- **Why the two ceilings exist (Sep 2026 VM incident)**: before them, the
+  open set could only grow - `_trim()` skips open watches, WEEKS horizons
+  run 21 days, and a postponed loser sitting between entry and its stop
+  was re-postponed forever. Every open watch is priced on every check, so
+  the price call's cost grew with uptime, and on the 1GB VM that is the
+  most likely cause of the whole machine freezing (see `incidents.md`).
+  Positions closed by a ceiling still get a real exit price, so the paper
+  ledger records an honest result rather than dropping them. If you raise
+  either limit, watch the per-cycle `Memory in use` log line afterwards.
 
 Dashboard surface: `GET /api/watches` (`server.py`) backs the "Watching"
 card on the Alerts tab (open watches only) - see `ui.md`.
@@ -63,13 +90,30 @@ card on the Alerts tab (open watches only) - see `ui.md`.
 ## Live prices (`price_lookup.py`)
 
 Single shared helper, `fetch_prices(tickers) -> {ticker: price|None}`,
-used by both watch-checking and the portfolio summary endpoint. Batches
-all tickers into one `yfinance.Tickers(...)` call rather than one request
-per ticker. Tries the lightweight `fast_info` first, falls back to the
-slower full `.info` only if that has nothing. Returns `None` for a ticker
-it couldn't price - callers must handle that (watch-checking just skips
-that watch for the cycle; a new watch simply isn't opened if the entry
-price can't be resolved).
+used by watch-checking, entry pricing, the paper ledger (`/api/paper`) and
+the portfolio summary endpoint. Three stages:
+
+1. **`_intraday_prices`** - `yf.download(period="1d", interval="1m",
+   prepost=True)`, newest 1-minute close. Includes extended hours, which
+   is the point: `fast_info`/`regularMarketPrice` report the last
+   regular-session close and were visibly stale outside 09:30-16:00 ET.
+   **Chunked to `MAX_BATCH` (25) tickers per call** - each ticker is ~960
+   rows x 6 columns and yfinance builds them all before concatenating, so
+   an unchunked call's peak memory scaled with the number of open
+   watches.
+2. Class-share retry - `BRK.B` is retried as `BRK-B` (same chunking).
+3. **`_regular_session_prices`** fallback for whatever is still missing -
+   `fast_info['lastPrice']` only, **at most `MAX_FALLBACK` (25) tickers**.
+   It used to fall back further to `.info` (a full quote-summary fetch per
+   symbol) with no cap; when Yahoo rate-limits a big download it returns
+   empty, so every ticker landed here at once and the scan thread stalled
+   on hundreds of sequential heavy requests. Don't reintroduce `.info`
+   here.
+
+Returns `None` for a ticker it couldn't price - callers must handle that
+(watch-checking skips that watch for the cycle; a new watch simply isn't
+opened if the entry price can't be resolved). yfinance/pandas are imported
+lazily inside these functions (>100MB resident) - keep it that way.
 
 ## Portfolio value/profit history (`portfolio_history.py`, server-only)
 
@@ -108,7 +152,10 @@ Three call sites, three message shapes:
   public - see `api_keys_and_secrets.md`); the dashboard's Alerts tab
   shows ownership regardless, since that stays local.
 - `notify_sell(ticker, company, reason, entry_price, current_price,
-  target_price, article_url, direction)` - exit-signal closes. Titled
+  target_price, article_url, direction)` - exit-signal closes. Each of the
+  five close reasons (`target_hit`, `stop_loss`, `horizon_expired`,
+  `max_age`, `max_postponed`) has its own emoji and explanation line;
+  an unknown reason falls through to the horizon wording. Titled
   "SELL SIGNAL" for a long and "COVER SHORT SIGNAL" for a short, and the
   body reports both the raw price move and the P/L *from the position's
   side* (a short earns when the price falls, so its percentage is

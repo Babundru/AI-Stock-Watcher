@@ -38,9 +38,16 @@ class BaseCloudProvider:
         self.log_callback = log_callback
 
     def _log(self, msg):
-        print(msg)
+        # Only print when nobody else is collecting this. Under server.py the
+        # callback is the dashboard's own log buffer, and printing as well
+        # sent every prompt preview and response to stdout -> journald ->
+        # disk, on a box whose disk has ~45 write IOPS to spare. The desktop
+        # GUI passes a callback too; a bare script with none still gets the
+        # output on stdout.
         if self.log_callback:
             self.log_callback(msg)
+        else:
+            print(msg)
 
     def complete(self, prompt, system=None):
         """Send `prompt` (with an optional `system` instruction) and return

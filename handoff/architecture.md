@@ -31,18 +31,31 @@ Runs in a daemon thread, started by `.start()`. Every `CHECK_INTERVAL`
    impact + not FLAT prediction -> open an exit-signal watch (LONG for
    POSITIVE, SHORT for NEGATIVE)
 5. Every `WATCH_CHECK_INTERVAL` (5 min): `_check_watches` prices every
-   open watch and closes+notifies any that hit their target or expired
-   (see `portfolio_and_notifications.md`)
-6. Sleeps in 1-second increments (so `.stop()` is responsive) until the
+   open watch and closes+notifies any that resolved (target, stop-loss,
+   horizon, or the age/postponement ceilings - see
+   `portfolio_and_notifications.md`), then calls `_release_memory()`
+6. `_release_memory()` (`gc.collect()` + glibc `malloc_trim(0)`), then
+   logs `💾 Memory in use: N MB` (RSS from `/proc/self/statm`,
+   silently skipped off Linux). **This line is the first thing to check if
+   the VM misbehaves** - flat at a few hundred MB is healthy; a steady
+   climb across hours is the failure mode from `incidents.md`.
+7. Sleeps in 1-second increments (so `.stop()` is responsive) until the
    next cycle
 
 **Log routing gotcha**: `self.log(...)` calls in `main.py` go through
 whatever `log_callback` the entry point supplied - `server.py` routes
 these to the dashboard's in-memory buffer only, **not** to stdout/journal.
 Only raw `print()` calls (scattered in `news_collector.py`,
-`cloud_providers.py`, etc.) reach `journalctl` on the VM. If you're
-debugging via SSH logs and something looks quiet, check the dashboard's
-Logs tab before assuming the loop is stuck.
+`price_lookup.py`, `watch_manager.py`, etc.) reach `journalctl` on the VM.
+If you're debugging via SSH logs and something looks quiet, check the
+dashboard's Logs tab before assuming the loop is stuck. That includes the
+per-cycle `Memory in use` line - it's dashboard-only.
+
+`cloud_providers.py: _log` used to do both (print *and* callback), which
+put every AI prompt preview and response into the journal as well as the
+dashboard. It now prints only when there is no callback. Don't add new
+unconditional `print()`s on a per-article path: on the VM they are journal
+writes against a disk with ~45 write IOPS.
 
 ## Module map
 
@@ -112,3 +125,20 @@ Two requirements files on purpose:
   pressure. Keep this file's comment block up to date if you add a new
   dependency - it explains *why* each exclusion/inclusion exists, which
   matters more than the list itself when memory gets tight again.
+
+## Memory budget on the VM
+
+It already got tight once - see `incidents.md`. Rules that came out of it:
+
+- **Anything whose cost scales with the number of open watches, holdings
+  or tickers must be chunked or capped.** That was the bug: one unbounded
+  `yf.download` over a set that only ever grew.
+- Everything else in the process is deliberately bounded - `DashboardState`
+  deques (`MAX_LOG_LINES=2000`, `MAX_ALERTS=500`), 120 processed URLs, the
+  3MB download cap and `SoupStrainer('p')` + `decompose()` in
+  `news_collector.py`, lazy yfinance/pandas imports. Keep new state the
+  same way.
+- The systemd unit must carry `MemoryMax` (see `DEPLOY.md` section 6).
+  Without it, this process outgrowing the box doesn't get *it* killed -
+  the kernel can go into permanent reclaim and take sshd/tailscaled down
+  with it.

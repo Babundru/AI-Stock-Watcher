@@ -39,6 +39,21 @@ MAX_STORED_WATCHES = 200
 # about, long enough not to spam postponements every WATCH_CHECK_INTERVAL.
 POSTPONE_DAYS = 1
 
+# Hard ceiling on how long a watch may stay OPEN, and how many times its
+# expiry may be pushed out, whatever the price is doing.
+#
+# Without these the open set only ever grows: _trim() never drops an OPEN
+# watch, a WEEKS horizon already runs 21 days, and a postponed loser sitting
+# between entry and its stop-loss is re-postponed indefinitely. Every open
+# watch is priced on every check, so an unbounded set makes the price call
+# cost grow with uptime - which on a small VM eventually stops the whole
+# machine rather than just this app. A watch closed by either limit is
+# recorded with its real exit price, so the paper ledger still gets a
+# truthful result for it (reason 'max_age' / 'max_postponed') instead of the
+# position being silently dropped.
+MAX_OPEN_DAYS = 30
+MAX_POSTPONEMENTS = 14
+
 # A watch is either a long (bought the stock / a long CFD, exit by selling)
 # or a short (sold a CFD short, exit by buying it back). The direction only
 # changes which way the target price sits from the entry, and therefore
@@ -202,14 +217,44 @@ class WatchManager:
         horizon passed while it was at a loss and a stop-loss is set (see
         config.STOP_LOSS_PCT). Leaves it OPEN and otherwise untouched, so the
         normal watch check keeps re-examining it for a profit, its target, or
-        the stop-loss."""
+        the stop-loss.
+
+        Returns None once the watch has used up its postponement budget
+        (MAX_POSTPONEMENTS) - the caller then closes it on schedule rather
+        than carrying it forever.
+        """
         for w in self.watches:
             if w['id'] == watch_id and w['status'] == 'OPEN':
+                if w.get('postponed_count', 0) >= MAX_POSTPONEMENTS:
+                    return None
                 w['expires_at'] = (now_local() + datetime.timedelta(days=days)).isoformat()
                 w['postponed_count'] = w.get('postponed_count', 0) + 1
                 self.save()
                 return w
         return None
+
+    @staticmethod
+    def over_age_limit(watch, now=None):
+        """Whether this watch has been open past MAX_OPEN_DAYS."""
+        opened = watch.get('opened_at')
+        if not opened:
+            return False
+        try:
+            opened_at = datetime.datetime.fromisoformat(opened)
+        except (TypeError, ValueError):
+            return False
+        now = now or now_local()
+        # now_local() is tz-aware, so a normally-written record compares
+        # fine. A naive opened_at (a hand-edited file, or one written before
+        # local_time existed) would raise TypeError here - and this runs
+        # inside the watch check, where an exception costs the whole pass.
+        # Assume such a stamp is already in local time.
+        if (opened_at.tzinfo is None) != (now.tzinfo is None):
+            if opened_at.tzinfo is None:
+                opened_at = opened_at.replace(tzinfo=now.tzinfo)
+            else:
+                now = now.replace(tzinfo=opened_at.tzinfo)
+        return (now - opened_at) >= datetime.timedelta(days=MAX_OPEN_DAYS)
 
     def remove_watch(self, watch_id):
         """Delete a watch outright, regardless of status. Used when the user
