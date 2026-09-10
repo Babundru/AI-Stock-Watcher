@@ -27,12 +27,15 @@ Runs in a daemon thread, started by `.start()`. Every `CHECK_INTERVAL`
 4. Every article goes through `_process_article`: dedup check (last 120
    processed URLs, `data/processed_urls.json`) -> analyze
    (`self.analyzer.analyze_article`, one of three interchangeable engines,
-   see `ai_engines.md`) -> notify if POSITIVE/NEGATIVE + HIGH/CRITICAL
-   impact + not FLAT prediction -> open an exit-signal watch (LONG for
-   POSITIVE, SHORT for NEGATIVE)
+   see `ai_engines.md`) -> alert if POSITIVE/NEGATIVE + impact at least
+   `MIN_IMPACT` + not FLAT + confidence at least `MIN_CONFIDENCE` + new,
+   company-specific news -> close any open position the news contradicts
+   -> `_decide_trade` (short settings, price context, priced-in and
+   reward/risk rules, AI trade confirmation) opens a watch (LONG for
+   POSITIVE, SHORT for NEGATIVE) or records why not -> notify
 5. Every `WATCH_CHECK_INTERVAL` (5 min): `_check_watches` prices every
-   open watch and closes+notifies any that resolved (target, stop-loss,
-   horizon, or the age/postponement ceilings - see
+   open watch, ratchets its stop and closes+notifies any whose stop,
+   target or time exit fired (see `strategy.py` and
    `portfolio_and_notifications.md`), then calls `_release_memory()`
 6. `_release_memory()` (`gc.collect()` + glibc `malloc_trim(0)`), then
    logs `💾 Memory in use: N MB` (RSS from `/proc/self/statm`,

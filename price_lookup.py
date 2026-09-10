@@ -159,6 +159,108 @@ def _intraday_prices(tickers):
     return prices
 
 
+def fetch_context(ticker, published_at=None):
+    """Price context for deciding whether a news move is still ahead of us
+    or has already happened. Returns a dict with whichever of these could be
+    worked out ({} if none):
+
+      price                     last trade, extended hours included
+      ref_close                 last regular-session close before the news
+      change_since_close_pct    price vs ref_close (fraction)
+      price_at_publish          last trade at/before `published_at`
+      change_since_publish_pct  price vs price_at_publish
+      change_5d_pct             ref_close vs the close five sessions earlier
+      atr_pct                   14-day average true range / ref_close
+
+    Only called for would-be trades - a handful a day - never per article.
+    Two single-ticker requests: a month of daily bars (~21 rows) and five
+    days of 1-minute bars (a few thousand rows, a few hundred KB). Only the
+    columns needed are kept and the frames are dropped before returning, so
+    this adds nothing lasting on top of the yfinance import itself.
+
+    `published_at` is an aware datetime or ISO string; naive means UTC.
+    """
+    ctx = _context_for(ticker, published_at)
+    if not ctx and _CLASS_SHARE.match(ticker or ''):
+        ctx = _context_for(ticker.replace('.', '-'), published_at)
+    return ctx
+
+
+def _context_for(ticker, published_at):
+    import yfinance as yf
+    import pandas as pd
+
+    ctx = {}
+    try:
+        t = yf.Ticker(ticker)
+        daily = t.history(period="1mo", interval="1d", auto_adjust=False)
+        minute = t.history(period="5d", interval="1m", prepost=True, auto_adjust=False)
+    except Exception as e:
+        print(f"Price context fetch failed for {ticker}: {e}")
+        return ctx
+
+    try:
+        closes = None
+        if minute is not None and not minute.empty:
+            closes = minute["Close"].dropna()
+        minute = None
+        if closes is not None and not closes.empty:
+            ctx['price'] = float(closes.iloc[-1])
+
+        if daily is None or daily.empty:
+            return ctx
+        daily = daily[["High", "Low", "Close"]].dropna()
+        tz = daily.index.tz
+
+        pub = None
+        if published_at:
+            pub = pd.Timestamp(published_at)
+            if pub.tzinfo is None:
+                pub = pub.tz_localize("UTC")
+        ref_time = pub if pub is not None else pd.Timestamp.now(tz="UTC")
+        if tz is not None:
+            ref_time = ref_time.tz_convert(tz)
+
+        # The close the news is measured against: that day's if the news
+        # came after the 16:00 close (after-hours earnings), otherwise the
+        # previous session's. The daily bar for a session still in progress
+        # is partial, so it is excluded either way before 16:00.
+        ref_date = ref_time.date()
+        dates = daily.index.date
+        done = daily[dates <= ref_date] if ref_time.hour >= 16 else daily[dates < ref_date]
+        if done.empty:
+            return ctx
+
+        ref_close = float(done["Close"].iloc[-1])
+        price = ctx.get('price') or float(daily["Close"].iloc[-1])
+        ctx['price'] = price
+        ctx['ref_close'] = ref_close
+        ctx['change_since_close_pct'] = (price - ref_close) / ref_close
+        if len(done) >= 6:
+            earlier = float(done["Close"].iloc[-6])
+            ctx['change_5d_pct'] = (ref_close - earlier) / earlier
+
+        prev = done["Close"].shift(1)
+        true_range = pd.concat([done["High"] - done["Low"],
+                                (done["High"] - prev).abs(),
+                                (done["Low"] - prev).abs()], axis=1).max(axis=1)
+        atr = float(true_range.tail(14).mean())
+        if atr > 0:
+            ctx['atr_pct'] = atr / ref_close
+
+        if pub is not None and closes is not None and not closes.empty:
+            if closes.index.tz is not None:
+                pub = pub.tz_convert(closes.index.tz)
+            before = closes[closes.index <= pub]
+            if not before.empty:
+                at_pub = float(before.iloc[-1])
+                ctx['price_at_publish'] = at_pub
+                ctx['change_since_publish_pct'] = (price - at_pub) / at_pub
+    except Exception as e:
+        print(f"Price context for {ticker} incomplete: {e}")
+    return ctx
+
+
 def _regular_session_prices(tickers):
     """Last regular-session close for tickers the intraday chart couldn't
     price. Stale by design - it's this or nothing for those.

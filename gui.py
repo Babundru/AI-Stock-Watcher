@@ -469,7 +469,10 @@ class StockAppGUI(ctk.CTk):
     EXIT_REASONS = {
         'target_hit': "Target price reached - the alerted-on move played out.",
         'stop_loss': "Stop-loss reached - closing to cap the loss.",
-        'horizon_expired': "Time window passed without the move - reassess.",
+        'trailing_stop': "Trailing stop reached - closing to keep the gain.",
+        'news_reversal': "New news points the other way - closing.",
+        'horizon_expired': "Time window passed - closing on schedule.",
+        'max_age': "Held the maximum time - closing.",
     }
 
     def _build_exit_card(self, alert):
@@ -650,15 +653,39 @@ class StockAppGUI(ctk.CTk):
         ctk.CTkLabel(scroll, text="Risk management", font=UI(16, "bold"),
                     text_color=COLOR_ACCENT).pack(pady=(10, 10))
 
-        e_stop_loss = add_input("Stop-loss %", round(current_stop_loss_pct * 100, 4))
+        e_stop_loss = add_input("Max stop-loss %", round(current_stop_loss_pct * 100, 4))
 
         ctk.CTkLabel(scroll,
-                    text="ℹ️ 0 = disabled: watches close on schedule as before.\n"
-                         "Above 0: a watch whose exit window expires while it's\n"
-                         "at a loss is postponed instead of sold, and only closes\n"
-                         "early if the price falls this far past entry (caps the\n"
-                         "downside) - so the app only sells for a profit, unless\n"
-                         "the stop-loss forces it.",
+                    text="ℹ️ Every position gets a stop sized to the stock's normal\n"
+                         "daily range, capped at this %. It moves up to break-even\n"
+                         "and trails the price as the trade works. 0 = default (8%).",
+                    text_color=COLOR_TEXT_MUTE, font=UI(9), justify="left").pack(anchor="w", padx=20, pady=(5, 10))
+
+        def add_check(text, value):
+            var = ctk.BooleanVar(value=bool(value))
+            ctk.CTkCheckBox(scroll, text=text, variable=var, onvalue=True, offvalue=False,
+                            checkbox_width=18, checkbox_height=18,
+                            fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER,
+                            text_color=COLOR_TEXT, font=UI(11),
+                            border_color=COLOR_TEXT_MUTE).pack(anchor="w", padx=20, pady=(8, 0))
+            return var
+
+        e_min_conf = add_input("Minimum AI confidence (0-100)", getattr(config, 'MIN_CONFIDENCE', 60))
+        e_max_pos = add_input("Maximum open positions", getattr(config, 'MAX_OPEN_POSITIONS', 20))
+        let_run_var = add_check("Let winners run (trail the stop at the target)",
+                                getattr(config, 'LET_WINNERS_RUN', True))
+        confirm_var = add_check("AI trade check with live price action",
+                                getattr(config, 'AI_TRADE_CONFIRM', True))
+
+        ctk.CTkLabel(scroll, text="Short selling", font=UI(16, "bold"),
+                    text_color=COLOR_ACCENT).pack(pady=(20, 0))
+        allow_shorts_var = add_check("Open short positions on negative news (paper trading)",
+                                     getattr(config, 'ALLOW_SHORTS', True))
+        notify_shorts_var = add_check("Notify me about short setups and buy-back signals",
+                                      getattr(config, 'NOTIFY_SHORTS', True))
+        ctk.CTkLabel(scroll,
+                    text="ℹ️ Turn both off if you don't use CFDs or shorting. Negative\n"
+                         "news about a stock you hold is always sent as a warning.",
                     text_color=COLOR_TEXT_MUTE, font=UI(9), justify="left").pack(anchor="w", padx=20, pady=(5, 20))
 
         ctk.CTkLabel(scroll, text="Local AI model", font=UI(16, "bold"),
@@ -721,6 +748,16 @@ class StockAppGUI(ctk.CTk):
                     messagebox.showerror("Error", "Threads must be a whole number.")
                     return
 
+                try:
+                    min_conf = int(e_min_conf.get().strip() or config.MIN_CONFIDENCE)
+                    max_pos = int(e_max_pos.get().strip() or config.MAX_OPEN_POSITIONS)
+                except ValueError:
+                    messagebox.showerror("Error", "Confidence and positions must be whole numbers.")
+                    return
+                if not (0 <= min_conf <= 100) or not (1 <= max_pos <= 50):
+                    messagebox.showerror("Error", "Confidence must be 0-100 and positions 1-50.")
+                    return
+
                 # save_settings merges into the file (so settings this dialog
                 # does not expose survive) and updates the config module, so
                 # a running watcher can apply the change immediately.
@@ -734,6 +771,12 @@ class StockAppGUI(ctk.CTk):
                     "CLOUD_AI_API_KEY": e_cloud_key.get().strip(),
                     "CLOUD_AI_BASE_URL": e_cloud_base_url.get().strip(),
                     "STOP_LOSS_PCT": stop_loss_pct,
+                    "MIN_CONFIDENCE": min_conf,
+                    "MAX_OPEN_POSITIONS": max_pos,
+                    "LET_WINNERS_RUN": let_run_var.get(),
+                    "AI_TRADE_CONFIRM": confirm_var.get(),
+                    "ALLOW_SHORTS": allow_shorts_var.get(),
+                    "NOTIFY_SHORTS": notify_shorts_var.get(),
                 })
                 if self.backend:
                     self.backend.apply_settings()
@@ -1230,7 +1273,9 @@ class StockAppGUI(ctk.CTk):
                     t['ticker'], t['direction'], t['entry_price'], t['exit_price'],
                     t['net_pct'], (t.get('closed_at') or '')[5:16].replace('T', ' '),
                     note={'target_hit': "target hit", 'stop_loss': "stop-loss",
-                          'horizon_expired': "time stop"}.get(t.get('reason'), t.get('reason') or ''))
+                          'trailing_stop': "trailing stop", 'news_reversal': "news reversal",
+                          'horizon_expired': "time stop", 'max_age': "age limit"
+                          }.get(t.get('reason'), t.get('reason') or ''))
         else:
             ctk.CTkLabel(self.paper_scroll, text="No closed trades yet", font=UI(12),
                          text_color=COLOR_TEXT_MUTE).pack(pady=14)

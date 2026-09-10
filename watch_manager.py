@@ -3,75 +3,39 @@ import os
 import uuid
 import datetime
 
-import config
+import strategy
 from local_time import now_local
-
-# How big a move counts as the alerted-on prediction having "played out".
-#
-# One entry per impact rating, because config.MIN_IMPACT (the sensitivity
-# slider) lets MEDIUM and LOW reach the notify filter in main.py. They need
-# their own, smaller targets: the analyser rates MEDIUM as a 2-5% move, so
-# holding one out for the 5% a HIGH is given would time-stop nearly every
-# time and report the strategy as worse than it is.
-TARGET_PCT = {
-    "CRITICAL": 0.10,
-    "HIGH": 0.05,
-    "MEDIUM": 0.03,
-    "LOW": 0.02,
-}
-DEFAULT_TARGET_PCT = 0.05
-
-# How long the alerted-on news is expected to keep moving the price, per the
-# LLM/keyword-analyzer's "horizon" field. A watch that never hits its target
-# within this window is closed as a time-stop instead.
-HORIZON_DAYS = {
-    "INTRADAY": 1,
-    "DAYS": 5,
-    "WEEKS": 21,
-}
-DEFAULT_HORIZON = "DAYS"
 
 MAX_STORED_WATCHES = 200
 
-# How far out to push a watch's expiry when its horizon passes while it's
-# sitting at a loss and STOP_LOSS_PCT is set (see config.py). Short enough
-# that it's re-examined at the next natural check rather than forgotten
-# about, long enough not to spam postponements every WATCH_CHECK_INTERVAL.
-POSTPONE_DAYS = 1
-
-# Hard ceiling on how long a watch may stay OPEN, and how many times its
-# expiry may be pushed out, whatever the price is doing.
+# Hard ceiling on how long a watch may stay OPEN, whatever the price is
+# doing. Every horizon's time exit falls well inside it (WEEKS is 15 trading
+# days), so this only catches a watch whose time exit could not fire - one
+# that never got a price, say.
 #
-# Without these the open set only ever grows: _trim() never drops an OPEN
-# watch, a WEEKS horizon already runs 21 days, and a postponed loser sitting
-# between entry and its stop-loss is re-postponed indefinitely. Every open
-# watch is priced on every check, so an unbounded set makes the price call
-# cost grow with uptime - which on a small VM eventually stops the whole
-# machine rather than just this app. A watch closed by either limit is
-# recorded with its real exit price, so the paper ledger still gets a
-# truthful result for it (reason 'max_age' / 'max_postponed') instead of the
-# position being silently dropped.
+# Without it the open set could only grow: _trim() never drops an OPEN
+# watch, and every open watch is priced on every check, so an unbounded set
+# makes the price call cost grow with uptime - which on a small VM
+# eventually stops the whole machine rather than just this app. A watch
+# closed by the limit is recorded with its real exit price, so the paper
+# ledger still gets a truthful result for it (reason 'max_age').
 MAX_OPEN_DAYS = 30
-MAX_POSTPONEMENTS = 14
 
 # A watch is either a long (bought the stock / a long CFD, exit by selling)
 # or a short (sold a CFD short, exit by buying it back). The direction only
-# changes which way the target price sits from the entry, and therefore
-# which comparison counts as the alerted-on move having played out.
-LONG = "LONG"
-SHORT = "SHORT"
+# changes which way the target and stop sit from the entry.
+LONG = strategy.LONG
+SHORT = strategy.SHORT
 DIRECTIONS = (LONG, SHORT)
 
 
 class WatchManager:
-    """Tracks stocks that had a HIGH/CRITICAL alert fire, so the app can
-    later tell the user when to close the position: either the predicted
-    move happened (target hit) or the expected window passed without it
-    (horizon expired).
+    """The positions opened from alerts, and the state their exits need.
 
     POSITIVE alerts open a LONG watch (buy now, sell on the signal);
     NEGATIVE alerts open a SHORT watch (sell a CFD short now, buy it back
-    on the signal).
+    on the signal). The exit rules themselves live in strategy.py; this
+    class stores each position's stop, peak and time exit between checks.
 
     Mirrors PortfolioManager's plain-JSON-file pattern (data/watches.json).
     """
@@ -88,15 +52,9 @@ class WatchManager:
                 data = json.load(f)
             if not isinstance(data, list):
                 return []
-            # Watches written before shorting existed have no direction;
-            # they were all longs.
+            data = [w for w in data if isinstance(w, dict)]
             for w in data:
-                if isinstance(w, dict):
-                    w.setdefault('direction', LONG)
-                    # Watches written before stop-loss existed have none -
-                    # None means "no stop-loss", same as STOP_LOSS_PCT = 0.
-                    w.setdefault('stop_loss_price', None)
-                    w.setdefault('postponed_count', 0)
+                _upgrade(w)
             return data
         except (json.JSONDecodeError, OSError) as e:
             print(f"Warning: could not read {self.filename} ({e}); starting with no watches")
@@ -113,12 +71,20 @@ class WatchManager:
         ticker = (ticker or '').upper().strip()
         return any(w['ticker'] == ticker and w['status'] == 'OPEN' for w in self.watches)
 
+    def open_count(self):
+        return sum(1 for w in self.watches if w['status'] == 'OPEN')
+
     def add_watch(self, ticker, company, entry_price, impact, horizon, prediction,
-                  article_url=None, article_headline=None, direction=LONG):
+                  article_url=None, article_headline=None, direction=LONG,
+                  target_pct=None, stop_pct=None, extra=None):
         """Open a new watch for `ticker`. Returns the created record, or None
         if there's no usable entry price or an open watch already exists for
-        this ticker (avoids stacking duplicate exit notifications, and stops
-        a later opposite-sentiment article opening a contradictory position).
+        this ticker (avoids stacking duplicate exit notifications).
+
+        `target_pct`/`stop_pct` come from strategy.plan_trade; without them
+        the impact-bucket target and the maximum stop are used. `extra` is
+        recorded as-is (the confidence and price context the trade was
+        opened on), so the ledger can later tell which of them mattered.
         """
         if not ticker or not entry_price:
             return None
@@ -133,49 +99,48 @@ class WatchManager:
 
         impact = (impact or '').upper()
         horizon = (horizon or '').upper()
-        if horizon not in HORIZON_DAYS:
-            horizon = DEFAULT_HORIZON
+        if horizon not in strategy.HORIZON_TRADING_DAYS:
+            horizon = strategy.DEFAULT_HORIZON
 
-        target_pct = TARGET_PCT.get(impact, DEFAULT_TARGET_PCT)
-        # A short profits on the way down, so its target sits below entry.
-        sign = -1 if direction == SHORT else 1
-        target_price = round(entry_price * (1 + sign * target_pct), 4)
-
-        # Stop-loss sits on the opposite side of entry from the target -
-        # below entry for a LONG, above entry for a SHORT. None (0%) means
-        # disabled: captured at open time so a later change to the setting
-        # doesn't retroactively alter a position already being watched.
-        stop_loss_pct = float(getattr(config, 'STOP_LOSS_PCT', 0.0) or 0.0)
-        stop_loss_price = None
-        if stop_loss_pct > 0:
-            stop_loss_price = round(entry_price * (1 - sign * stop_loss_pct), 4)
+        target_pct = target_pct or strategy.TARGET_PCT.get(impact, strategy.DEFAULT_TARGET_PCT)
+        stop_pct = stop_pct or strategy.max_stop_pct()
 
         opened_at = now_local()
-        expires_at = opened_at + datetime.timedelta(days=HORIZON_DAYS[horizon])
-
         watch = {
             "id": uuid.uuid4().hex[:12],
             "ticker": ticker,
             "company": company or ticker,
             "direction": direction,
+            "strategy": strategy.STRATEGY_VERSION,
             "entry_price": entry_price,
-            "target_price": target_price,
-            "target_pct": target_pct,
-            "stop_loss_price": stop_loss_price,
-            "stop_loss_pct": stop_loss_pct if stop_loss_price else None,
-            "postponed_count": 0,
+            "target_price": round(strategy.price_at_gain(direction, entry_price, target_pct), 4),
+            "target_pct": round(target_pct, 6),
+            # Distance of the initial stop, and the stop's current level as
+            # a gain on the position (negative = below break-even). The
+            # level only ever ratchets up - see strategy.update_exit.
+            "stop_pct": round(stop_pct, 6),
+            "stop_gain": round(-stop_pct, 6),
+            "stop_loss_price": round(strategy.price_at_gain(direction, entry_price, -stop_pct), 4),
+            "initial_stop_price": round(strategy.price_at_gain(direction, entry_price, -stop_pct), 4),
+            "peak_gain": 0.0,
+            # Captured at open, like the stop, so changing the setting
+            # later doesn't rewrite how an existing position is managed.
+            "let_run": bool(strategy.config.LET_WINNERS_RUN),
+            "trailing": False,
             "impact": impact,
             "horizon": horizon,
             "prediction": prediction,
             "article_url": article_url,
             "article_headline": article_headline,
             "opened_at": opened_at.isoformat(),
-            "expires_at": expires_at.isoformat(),
+            "expires_at": strategy.time_exit_at(opened_at, horizon).isoformat(),
             "status": "OPEN",
             "reason": None,
             "exit_price": None,
             "closed_at": None,
         }
+        for key, value in (extra or {}).items():
+            watch.setdefault(key, value)
         self.watches.append(watch)
         self._trim()
         self.save()
@@ -185,53 +150,11 @@ class WatchManager:
         return [w for w in self.watches if w['status'] == 'OPEN']
 
     @staticmethod
-    def target_reached(watch, price):
-        """Has the alerted-on move played out at `price`? A long needs the
-        price at or above its target, a short at or below."""
-        if watch.get('direction') == SHORT:
-            return price <= watch['target_price']
-        return price >= watch['target_price']
-
-    @staticmethod
-    def is_profitable(watch, price):
-        """Would closing right now book a profit (or breakeven), from the
-        position's point of view - a long needs price at or above entry, a
-        short at or below."""
-        if watch.get('direction') == SHORT:
-            return price <= watch['entry_price']
-        return price >= watch['entry_price']
-
-    @staticmethod
-    def stop_loss_hit(watch, price):
-        """Has price crossed this watch's stop-loss level? Always False when
-        none was set (STOP_LOSS_PCT was 0 when the watch opened)."""
-        stop_price = watch.get('stop_loss_price')
-        if not stop_price:
-            return False
-        if watch.get('direction') == SHORT:
-            return price >= stop_price
-        return price <= stop_price
-
-    def postpone_watch(self, watch_id, days=POSTPONE_DAYS):
-        """Push a watch's expiry out instead of closing it - used when its
-        horizon passed while it was at a loss and a stop-loss is set (see
-        config.STOP_LOSS_PCT). Leaves it OPEN and otherwise untouched, so the
-        normal watch check keeps re-examining it for a profit, its target, or
-        the stop-loss.
-
-        Returns None once the watch has used up its postponement budget
-        (MAX_POSTPONEMENTS) - the caller then closes it on schedule rather
-        than carrying it forever.
-        """
-        for w in self.watches:
-            if w['id'] == watch_id and w['status'] == 'OPEN':
-                if w.get('postponed_count', 0) >= MAX_POSTPONEMENTS:
-                    return None
-                w['expires_at'] = (now_local() + datetime.timedelta(days=days)).isoformat()
-                w['postponed_count'] = w.get('postponed_count', 0) + 1
-                self.save()
-                return w
-        return None
+    def update_exit(watch, price, cost_pct=0.0):
+        """Ratchet the stop from `price` and return (reason, target_just_reached);
+        see strategy.update_exit. Changes the record in memory only - call
+        save() once after a pass over every open watch."""
+        return strategy.update_exit(watch, price, cost_pct)
 
     @staticmethod
     def over_age_limit(watch, now=None):
@@ -295,3 +218,30 @@ class WatchManager:
         closed_watches = [w for w in self.watches if w['status'] == 'CLOSED']
         keep_closed = max(0, MAX_STORED_WATCHES - len(open_watches))
         self.watches = open_watches + closed_watches[-keep_closed:]
+
+
+def _upgrade(w):
+    """Bring a record written by an older version up to the current shape.
+
+    Watches from before shorting have no direction (they were all longs).
+    Watches from before this strategy version have no ratcheting stop: an
+    open one gets the stop it was opened with, or the maximum stop if it had
+    none - so a loser the old rules were carrying with no floor is closed
+    at the next check once it is past that - and keeps closing at its
+    target, as it was opened to.
+    """
+    w.setdefault('direction', LONG)
+    w.setdefault('strategy', strategy.LEGACY_STRATEGY)
+    if w.get('status') != 'OPEN' or 'stop_gain' in w:
+        return
+    entry = w.get('entry_price')
+    if not entry:
+        return
+    stop_pct = w.get('stop_loss_pct') or strategy.max_stop_pct()
+    w['stop_pct'] = round(stop_pct, 6)
+    w['stop_gain'] = round(-stop_pct, 6)
+    w['stop_loss_price'] = round(strategy.price_at_gain(w['direction'], entry, -stop_pct), 4)
+    w.setdefault('initial_stop_price', w['stop_loss_price'])
+    w.setdefault('peak_gain', 0.0)
+    w.setdefault('let_run', False)
+    w.setdefault('trailing', False)

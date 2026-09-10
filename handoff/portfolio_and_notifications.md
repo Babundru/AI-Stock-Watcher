@@ -32,57 +32,79 @@ price it):
 Records written before shorting existed have no `direction`; `_load()`
 defaults them to `LONG`, so old `data/watches.json` files keep working.
 
-- **Target price**: `entry_price * (1 +/- target_pct)` - above entry for a
-  long, below it for a short - where `target_pct` comes from `TARGET_PCT`
-  in `watch_manager.py`: 10% CRITICAL, 5% HIGH, 3% MEDIUM, 2% LOW (5% for
-  anything unrecognised). MEDIUM/LOW only matter when the sensitivity
-  slider (`MIN_IMPACT`) lets them through.
-- **Stop-loss** (optional, `config.STOP_LOSS_PCT`, 0 = off): captured per
-  watch at open time as `stop_loss_price`, on the opposite side of entry
-  from the target. When set, it also turns on "don't sell at a loss on
-  schedule": a watch whose horizon passes while it's losing is
-  **postponed** by `POSTPONE_DAYS` (1) instead of closed, and keeps being
-  checked until it recovers, hits target, or hits the stop.
-- **Expiry**: `HORIZON_DAYS` maps the LLM/keyword-analyzer's `horizon`
-  field (INTRADAY/DAYS/WEEKS) to 1/5/21 calendar days. Defaults to DAYS if
-  the analyzer didn't provide one.
+The rules live in `strategy.py` (pure functions); `watch_manager.py`
+stores each position's state between checks. Strategy `v2` (Sep 2026)
+replaced rules that closed winners at a fixed +5/10% but gave losers no
+floor, or postponed their time exit until they recovered - so the closed
+record hovered near zero while losers piled up in the open book. Every
+watch and paper trade records `strategy` so the two can be compared.
+
+**Entry** (`main.py:_decide_trade`, cheapest checks first):
+- Short gates: `ALLOW_SHORTS` / `NOTIFY_SHORTS` (both off = negative news
+  on an unowned stock is skipped outright) and `SHORT_MIN_IMPACT`
+  (default CRITICAL). `ALLOW_SHORTS` off with `NOTIFY_SHORTS` on sends the
+  setup marked "not tracked" and opens no watch.
+- One position per ticker; at most `MAX_OPEN_POSITIONS` (20) open.
+- `price_lookup.fetch_context` (two small single-ticker requests), then
+  `strategy.plan_trade`: skip if already moved `PRICED_IN_FRACTION` (50%)
+  of the expected move since the previous close or since publication;
+  stop = `STOP_ATR_MULT` (1.5) x 14-day ATR clamped to [`STOP_MIN_PCT`,
+  `STOP_LOSS_PCT`]; target = expected move still ahead, clamped to
+  1.5-20%; skip if target < `MIN_REWARD_RISK` (1.2) x stop.
+- The AI trade confirmation (see `ai_engines.md`), then entry pricing.
+- An alert whose direction contradicts an open position in the same
+  ticker closes it first (`news_reversal`).
+
+**Exit** (`strategy.update_exit` from `main.py:_check_watches`):
+- **Stop** always on, stored as `stop_gain` (the stop's level as a gain on
+  the position) and mirrored to `stop_loss_price` for the UI. It only
+  ratchets up: it trails the best price by the initial distance, jumps to
+  break-even once `BREAKEVEN_AT` (50%) of the target is gained, and - for
+  a watch opened with `LET_WINNERS_RUN` (`let_run`) - tightens to
+  `TRAIL_AFTER_TARGET_MULT` (0.5) x the distance once the target is hit
+  (`trailing: true`, one "TARGET REACHED" notification). Fires as
+  `stop_loss` below break-even, `trailing_stop` at or above it.
+- **Target** closes the watch only when `let_run` is false.
+- **Time exit**: `expires_at` = 15:45 ET on the Nth trading day after the
+  opening session (INTRADAY 0, DAYS 3, WEEKS 15; a position opened after
+  12:00 ET or at a weekend counts from the next session). Time exits,
+  like `max_age`, only fire while the US regular session is open, so they
+  close on a live price. Nothing is ever postponed.
+- Watches from before v2 are upgraded on load (`_upgrade`): an open one
+  gets its original stop or the maximum stop, and keeps closing at its
+  target.
 - **Only one open watch per ticker at a time, in either direction**
   (`has_open_watch` guards `add_watch`) - prevents stacking duplicate exit
   notifications if the same stock gets re-alerted while already being
-  watched, and stops a later opposite-sentiment article opening a
-  contradictory position on top of the first.
+  watched. Opposite-direction news closes the open one (`news_reversal`)
+  before a new one can be considered.
 - **Checked every `WATCH_CHECK_INTERVAL`** (5 min, coarser than the news
   scan on purpose - price doesn't need per-minute polling, and it's one
   batched `price_lookup.fetch_prices` call per check) by `main.py:
-  _check_watches`, called from inside `_run_loop`.
-- **Closes** for one of five reasons, checked in this order in
-  `main.py: _check_watches`, and fires `notifier.notify_sell(...)` for all
-  of them:
-  1. `max_age` - open longer than `MAX_OPEN_DAYS` (30). Outranks
-     everything.
-  2. `stop_loss` - price crossed `stop_loss_price`.
-  3. `target_hit` - direction-aware (`>=` target for a long, `<=` for a
-     short, via `WatchManager.target_reached`).
-  4. `horizon_expired` - `now >= expires_at`, target never hit (and not
-     postponed, see above).
-  5. `max_postponed` - the horizon passed at a loss again after the watch
-     had already been postponed `MAX_POSTPONEMENTS` (14) times;
-     `postpone_watch` returns `None` and the caller closes instead.
+  _check_watches`, called from inside `_run_loop`. Ratcheted stops are
+  saved once per pass.
+- **Close reasons**, all sent through `notifier.notify_sell(...)` (a short's
+  are muted when `NOTIFY_SHORTS` is off): `stop_loss`, `trailing_stop`,
+  `target_hit` (only for watches without `let_run`), `news_reversal`,
+  `horizon_expired`, and `max_age` - open longer than `MAX_OPEN_DAYS` (30),
+  a safety net a working time exit never reaches. `max_postponed` only
+  appears on records from before v2.
 
   A closed watch stays in `data/watches.json` (status `CLOSED`) for the
   dashboard's history; only the oldest *closed* ones get trimmed once
   total storage exceeds `MAX_STORED_WATCHES=200`. `_trim()` never drops an
   **open** watch.
 
-- **Why the two ceilings exist (Sep 2026 VM incident)**: before them, the
-  open set could only grow - `_trim()` skips open watches, WEEKS horizons
-  run 21 days, and a postponed loser sitting between entry and its stop
-  was re-postponed forever. Every open watch is priced on every check, so
-  the price call's cost grew with uptime, and on the 1GB VM that is the
-  most likely cause of the whole machine freezing (see `incidents.md`).
-  Positions closed by a ceiling still get a real exit price, so the paper
-  ledger records an honest result rather than dropping them. If you raise
-  either limit, watch the per-cycle `Memory in use` log line afterwards.
+- **Why the open set is bounded (Sep 2026 VM incident)**: it once could
+  only grow - `_trim()` skips open watches, and a postponed loser was
+  re-postponed forever. Every open watch is priced on every check, so the
+  price call's cost grew with uptime, and on the 1GB VM that is the most
+  likely cause of the whole machine freezing (see `incidents.md`). Now
+  every position has a stop and a time exit, postponing is gone, and
+  `MAX_OPEN_POSITIONS` (20, max 50 via the dashboard) caps the set -
+  measured peak ~140MB RSS for a 20-position check plus the price-context
+  fetches. If you raise the cap, watch the per-cycle `Memory in use` log
+  line afterwards.
 
 Dashboard surface: `GET /api/watches` (`server.py`) backs the "Watching"
 card on the Alerts tab (open watches only) - see `ui.md`.

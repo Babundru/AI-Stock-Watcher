@@ -375,7 +375,18 @@ Edit `config.py`:
 | `PAPER_TRADING` | `True` | Record every alert's profit/loss to `data/paper_trades.json` |
 | `PAPER_COST_PCT` | `0.002` | Round-trip trading cost, subtracted from every trade |
 | `PAPER_BENCHMARK` | `SPY` | Priced alongside each trade to measure alpha |
-| `STOP_LOSS_PCT` | `0.0` | `0` = watches close on schedule as before. Above 0, a scheduled (horizon-expiry) exit at a loss is postponed instead of sold, until it's profitable, hits its target, or falls this far past entry (use the in-app control) |
+| `STOP_LOSS_PCT` | `0.08` | Most any one position may lose. Each stop is sized to the stock's volatility (`STOP_ATR_MULT` x its 14-day ATR) and capped here; `0` = the 8% default. Stops can't be turned off (use the in-app control) |
+| `STOP_ATR_MULT` | `1.5` | Stop distance in multiples of the stock's normal daily range |
+| `LET_WINNERS_RUN` | `True` | At the target, trail the stop instead of selling |
+| `MIN_CONFIDENCE` | `60` | Lowest AI confidence (0-100) that still alerts or trades |
+| `AI_TRADE_CONFIRM` | `True` | Ask the AI again, with live price action, before opening a position |
+| `MAX_OPEN_POSITIONS` | `20` | Most positions open at once (also bounds the watch check's memory) |
+| `ALLOW_SHORTS` | `True` | Open (and paper-trade) short positions on negative news |
+| `NOTIFY_SHORTS` | `True` | Phone notifications for short setups and their buy-back signals |
+| `SHORT_MIN_IMPACT` | `CRITICAL` | Weakest impact that may open a short |
+
+How positions are opened and closed is described in `strategy.py` and
+`handoff/portfolio_and_notifications.md`.
 
 > Do not set `LOOKBACK_MINUTES` much below 15. The news feeds only publish
 > every 10–30 minutes, so a narrower window filters out everything and the app
