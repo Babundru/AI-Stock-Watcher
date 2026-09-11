@@ -27,7 +27,9 @@ Runs in a daemon thread, started by `.start()`. Every `CHECK_INTERVAL`
 4. Every article goes through `_process_article`: dedup check (last 120
    processed URLs, `data/processed_urls.json`) -> analyze
    (`self.analyzer.analyze_article`, one of three interchangeable engines,
-   see `ai_engines.md`) -> alert if POSITIVE/NEGATIVE + impact at least
+   see `ai_engines.md`; the URL is marked processed only once the engine
+   has actually judged it - a failed call leaves it for the next scan) ->
+   alert if POSITIVE/NEGATIVE + impact at least
    `MIN_IMPACT` + not FLAT + confidence at least `MIN_CONFIDENCE` + new,
    company-specific news -> close any open position the news contradicts
    -> `_decide_trade` (short settings, price context, priced-in and

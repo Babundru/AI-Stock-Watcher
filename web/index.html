@@ -350,14 +350,15 @@
   .exit-grid .big small { display: block; font-size: 11px; color: var(--text-3); font-weight: 600; letter-spacing: 0; }
 
   /* ---- Forms ---------------------------------------------------------- */
-  input, select {
+  input, select, textarea {
     font-family: inherit; font-size: 16px; /* 16px stops iOS zooming on focus */
     color: var(--text); background: var(--surface-2); border: 1px solid transparent; border-radius: 12px;
     height: 44px; padding: 0 14px; width: 100%; min-width: 0;
     transition: border-color .15s var(--ease), background .15s var(--ease);
   }
-  input::placeholder { color: var(--text-3); }
-  input:focus, select:focus { outline: none; border-color: var(--line-2); background: var(--surface-3); }
+  textarea { height: auto; padding: 10px 14px; line-height: 1.5; resize: vertical; }
+  input::placeholder, textarea::placeholder { color: var(--text-3); }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--line-2); background: var(--surface-3); }
   input[type="date"] { color-scheme: dark; }
   select {
     appearance: none; -webkit-appearance: none; padding-right: 36px; cursor: pointer;
@@ -794,7 +795,11 @@
               <select id="st-provider"></select>
               <div class="hint">"openai" plus a base URL also reaches any OpenAI-compatible host; "openrouter" and "routera" route one key to many models (model names like <code>anthropic/claude-opus-5</code>).</div>
             </div>
-            <div class="field"><label for="st-cloud-model">Model</label><input id="st-cloud-model" autocomplete="off" spellcheck="false"></div>
+            <div class="field">
+              <label for="st-cloud-model">Models</label>
+              <textarea id="st-cloud-model" rows="3" autocomplete="off" spellcheck="false" placeholder="openai/gpt-5.6-luna&#10;xai/grok-4.6"></textarea>
+              <div class="hint">One per line, most preferred first. An article a model fails on goes to the next one; a model that failed waits 5 minutes before it is first again.</div>
+            </div>
             <div class="field">
               <label for="st-cloud-key">API key</label>
               <input id="st-cloud-key" type="password" autocomplete="new-password" placeholder="">
@@ -1833,7 +1838,8 @@ function renderSettings(s) {
   const sel = $('#st-provider');
   sel.innerHTML = (s.providers || []).map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
   sel.value = s.CLOUD_AI_PROVIDER || '';
-  $('#st-cloud-model').value = s.CLOUD_AI_MODEL || '';
+  // Stored as "a, b"; edited one per line.
+  $('#st-cloud-model').value = (s.CLOUD_AI_MODEL || '').split(',').map(m => m.trim()).filter(Boolean).join('\n');
   $('#st-cloud-url').value = s.CLOUD_AI_BASE_URL || '';
   $('#st-cloud-key').value = '';
   $('#st-cloud-key').placeholder = s.cloud_api_key_set ? 'Leave blank to keep the stored key' : 'Paste your API key';
@@ -1889,7 +1895,9 @@ $('#st-save').addEventListener('click', async () => {
     USE_CLOUD_AI: choice === 'cloud',
     USE_LOCAL_LLM: choice === 'local',
     CLOUD_AI_PROVIDER: $('#st-provider').value,
-    CLOUD_AI_MODEL: $('#st-cloud-model').value.trim(),
+    // Blank means "leave as is": JSON drops an undefined key, and the
+    // server refuses an empty model list.
+    CLOUD_AI_MODEL: $('#st-cloud-model').value.trim() || undefined,
     CLOUD_AI_BASE_URL: $('#st-cloud-url').value.trim(),
     CLOUD_AI_API_KEY: $('#st-cloud-key').value,
     clear_api_key: $('#st-clear-key').checked,

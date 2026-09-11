@@ -1,5 +1,6 @@
 import config
-from llm_prompts import build_market_prompt, build_trade_prompt, parse_json_response
+from llm_prompts import (AnalysisUnavailable, build_market_prompt, build_trade_prompt,
+                         parse_json_response)
 import requests
 
 class MarketAnalyzer:
@@ -22,31 +23,32 @@ class MarketAnalyzer:
     def analyze_article(self, company, article, market_is_open, portfolio_tickers=None):
         """
         Analyzes a single news article for sentiment and market impact using a single-pass conditional prompt.
+        Returns None for an irrelevant article; raises AnalysisUnavailable
+        when the model gave no usable answer.
         """
         if not self.use_local:
-            return None
+            raise AnalysisUnavailable("local LLM is turned off in settings")
 
         prompt = build_market_prompt(company, article, market_is_open, portfolio_tickers)
         if not prompt:
             return None
 
         try:
-            response_text = self._analyze_local(prompt)
-            if not response_text: return None
-
-            data = parse_json_response(response_text)
-            if not data: return None
-
-            if not data.get('is_relevant', False):
-                # Model decided this is noise - drop it before it reaches
-                # the notifier.
-                return None
-
-            return data
-
+            data = parse_json_response(self._analyze_local(prompt))
         except Exception as e:
             print(f"Error analyzing article for {company}: {e}")
+            data = None
+        if not data:
+            # Ollama unreachable or erroring (_analyze_local has logged it),
+            # or a reply that wasn't JSON - either way, no verdict yet.
+            raise AnalysisUnavailable("no usable reply from the local LLM")
+
+        if not data.get('is_relevant', False):
+            # Model decided this is noise - drop it before it reaches
+            # the notifier.
             return None
+
+        return data
 
     def confirm_trade(self, article, analysis, context, direction):
         """Second pass for a would-be trade, with live price context (see

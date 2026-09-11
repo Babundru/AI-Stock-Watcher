@@ -6,6 +6,7 @@ from news_collector import NewsCollector
 from analyzer import MarketAnalyzer
 from cloud_analyzer import CloudAnalyzer
 from keyword_analyzer import KeywordAnalyzer
+from llm_prompts import AnalysisUnavailable
 from notifier import Notifier
 from ollama_manager import OllamaManager
 from portfolio_manager import PortfolioManager
@@ -22,6 +23,12 @@ import gc
 import ctypes
 import json
 import os
+
+# How many scans an article gets for its analysis to go through. A failure is
+# usually the engine being down (API outage, Ollama not running) rather than
+# the article, so it is retried - but not forever, in case it is the article
+# (too long for the model, say).
+MAX_ANALYSIS_ATTEMPTS = 3
 
 
 def _process_rss_mb():
@@ -113,6 +120,11 @@ class StockAppBackend:
         self.urls_lock = threading.Lock()
         # Let the collector skip re-downloading articles we've already analysed
         self.collector.is_seen = self.processed_set.__contains__
+        # url -> failed analysis attempts, for articles waiting on a retry.
+        self._failed_attempts = {}
+        # Set once the engine fails during a scan, cleared when the next scan
+        # starts. See _analysis_failed.
+        self._engine_down = False
 
     @staticmethod
     def engine_name():
@@ -127,7 +139,7 @@ class StockAppBackend:
     def engine_description():
         """Human-readable engine label for the UIs."""
         if config.USE_CLOUD_AI:
-            return f"Cloud AI · {config.CLOUD_AI_PROVIDER}/{config.CLOUD_AI_MODEL}"
+            return f"Cloud AI · {config.CLOUD_AI_PROVIDER} · {' → '.join(config.cloud_models())}"
         if config.USE_LOCAL_LLM:
             return f"Local AI · {config.LOCAL_MODEL_NAME}"
         return "Keyword scoring · offline"
@@ -301,6 +313,8 @@ class StockAppBackend:
         while self._alive(generation):
             try:
                 self.log(f"\nScanning for news at {now_local().strftime('%H:%M:%S')}...")
+                # Each scan gives an engine that failed last time a new chance.
+                self._engine_down = False
                 
                 market_open = self.notifier.is_market_open()
                 status_msg = "OPEN" if market_open else "CLOSED"
@@ -388,22 +402,9 @@ class StockAppBackend:
                 # sleep here made Stop take up to a minute after an error.
                 self._sleep(60, generation)
 
-    def _process_article(self, company_hint, article, market_is_open, is_discovery=False):
-        url = article.get('url')
-        title = article.get('title', 'No Title')
-        
-        if not url:
-            self.log(f"⊘ Skipping article (no URL): {title[:60]}...")
-            return
-        
-        # Check if already processed
-        if url in self.processed_set:
-            self.log(f"⊘ Already processed: {title[:60]}...")
-            return  # Already processed
-
-        self.log(f"\n📰 Processing article: {title}")
-        self.log(f"   URL: {url[:80]}...")
-
+    def _mark_processed(self, url):
+        """Record `url` as analysed, so it is neither fetched nor analysed again."""
+        self._failed_attempts.pop(url, None)
         # Add to processed deque (automatically maintains 120 URL limit).
         # Once the deque is full, appending evicts the oldest entry - drop that
         # from the mirror set too so the two stay in sync.
@@ -421,15 +422,66 @@ class StockAppBackend:
             self._save_stats()
             self.articles_since_save = 0
 
+    def _analysis_failed(self, url, error):
+        """The engine couldn't analyse an article. Leave it unmarked so the
+        next scan retries it, up to MAX_ANALYSIS_ATTEMPTS, and hold the rest
+        of this scan's articles back rather than failing on each in turn."""
+        self._engine_down = True
+        attempts = self._failed_attempts.pop(url, 0) + 1
+        if attempts >= MAX_ANALYSIS_ATTEMPTS:
+            self._mark_processed(url)
+            self.log(f"   ✗ Analysis failed ({error}) - giving up on this article "
+                     f"after {attempts} attempts")
+            return
+        self._failed_attempts[url] = attempts
+        # An article that drops out of its feed before it succeeds would
+        # otherwise stay here forever; dicts keep insertion order, so this
+        # forgets the oldest.
+        if len(self._failed_attempts) > self.max_stored_urls:
+            del self._failed_attempts[next(iter(self._failed_attempts))]
+        self.log(f"   ⚠ Analysis failed ({error}) - retrying on the next scan "
+                 f"(attempt {attempts}/{MAX_ANALYSIS_ATTEMPTS}); other new articles wait too")
+
+    def _process_article(self, company_hint, article, market_is_open, is_discovery=False):
+        url = article.get('url')
+        title = article.get('title', 'No Title')
+        
+        if not url:
+            self.log(f"⊘ Skipping article (no URL): {title[:60]}...")
+            return
+        
+        # Check if already processed
+        if url in self.processed_set:
+            self.log(f"⊘ Already processed: {title[:60]}...")
+            return  # Already processed
+
+        if self._engine_down:
+            # The engine already failed earlier in this scan. Left unmarked,
+            # the article comes back on the next scan instead of failing too.
+            return
+
+        self.log(f"\n📰 Processing article: {title}")
+        self.log(f"   URL: {url[:80]}...")
+
         
         # Get portfolio tickers for context
         portfolio_tickers = list(self.portfolio_mgr.get_portfolio().keys())
         
         # Analyze
         self.log(f"   🔍 Analyzing with {self.engine_name()}...")
-        self.stats['scanned'] += 1
         self.status(f"Analyzing: {title[:48]}")
-        analysis = self.analyzer.analyze_article(company_hint, article, market_is_open, portfolio_tickers)
+        try:
+            analysis = self.analyzer.analyze_article(company_hint, article, market_is_open, portfolio_tickers)
+        except AnalysisUnavailable as e:
+            self._analysis_failed(url, e)
+            self.status("Idle")
+            return
+
+        # Marked only once the engine has actually judged the article.
+        # Marking it before the call wrote off every article that arrived
+        # during an outage - the collector never offers a seen URL again.
+        self._mark_processed(url)
+        self.stats['scanned'] += 1
         if not analysis:
             self.log(f"   ⊘ No analysis results (article may not match criteria)")
             self.stats['skipped'] += 1

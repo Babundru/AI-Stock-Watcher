@@ -331,7 +331,7 @@ class StockAppGUI(ctk.CTk):
         try:
             import config
             if config.USE_CLOUD_AI:
-                return f"Cloud AI  ·  {config.CLOUD_AI_MODEL}"
+                return f"Cloud AI  ·  {' → '.join(config.cloud_models())}"
             if config.USE_LOCAL_LLM:
                 return f"Local AI  ·  {config.LOCAL_MODEL_NAME}"
             return "Keyword scoring  ·  offline"
@@ -716,13 +716,15 @@ class StockAppGUI(ctk.CTk):
                           corner_radius=RADIUS_SM).pack(pady=(5, 0))
 
         e_cloud_key = add_input("API key", current_cloud_key, show="*")
-        e_cloud_model = add_input("Model", current_cloud_model)
+        e_cloud_model = add_input("Models (comma-separated, most preferred first)", current_cloud_model)
         e_cloud_base_url = add_input("Base URL (optional - for OpenAI-compatible hosts)", current_cloud_base_url)
 
         ctk.CTkLabel(scroll,
                     text="ℹ️ Runs on every scanned article - pick a cheaper/faster\n"
-                         "model if you scan frequently. Overrides the local model\n"
-                         "above when enabled. 'openai' + a base URL also reaches\n"
+                         "model if you scan frequently. With several models listed,\n"
+                         "an article a model fails on goes to the next one; a model\n"
+                         "that failed waits 5 min before it is first again.\n"
+                         "Overrides the local model above when enabled. 'openai' + a base URL also reaches\n"
                          "OpenAI-compatible third-party hosts (Groq, Together, a\n"
                          "local server, ...); 'openrouter' and 'routera' each route\n"
                          "one key to many hosted models (model names look like\n"

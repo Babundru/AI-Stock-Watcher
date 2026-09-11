@@ -12,6 +12,13 @@ import json
 #                          with live price context the screen doesn't have.
 
 
+class AnalysisUnavailable(Exception):
+    """The engine gave no verdict at all - API error, model unreachable, a
+    reply that wasn't JSON. Distinct from analyze_article() returning None,
+    which means the article was judged and found irrelevant: the scan loop
+    retries these instead of writing the article off."""
+
+
 def _article_text(article, limit):
     """Scraped body when we got something substantial, else the feed
     description; trimmed to `limit` chars at a sentence boundary."""

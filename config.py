@@ -65,6 +65,11 @@ CLOUD_AI_PROVIDER = "anthropic"
 # Model to call. Configurable because this analyzer runs on every discovered
 # article (potentially dozens per CHECK_INTERVAL) - a cheaper/faster model
 # can be swapped in here for that volume without changing any code.
+#
+# May also be a comma-separated list, most preferred first, e.g.
+# "openai/gpt-5.6-luna, xai/grok-4.6": when a model fails, the same article
+# goes to the next one (see cloud_analyzer.py). All of them are called
+# through CLOUD_AI_PROVIDER with the same key. Read it via cloud_models().
 CLOUD_AI_MODEL = "claude-opus-5"
 
 # API key for the selected provider. Never put a real key here - this file
@@ -298,6 +303,27 @@ _FLOAT = lambda v: float(v)
 _IMPACT = lambda v: str(v).upper() if str(v).upper() in IMPACT_LEVELS else MIN_IMPACT
 _SHORT_IMPACT = lambda v: str(v).upper() if str(v).upper() in IMPACT_LEVELS else "CRITICAL"
 
+
+def _split_models(value):
+    """Split a model list - "a, b", one per line, or a JSON array - into
+    names, trimmed, with blanks and repeats dropped."""
+    parts = value if isinstance(value, (list, tuple)) else str(value).replace("\n", ",").split(",")
+    models = []
+    for part in parts:
+        name = str(part).strip()
+        if name and name not in models:
+            models.append(name)
+    return models
+
+
+def _MODELS(value):
+    """A model priority list, stored as one "a, b" string."""
+    models = _split_models(value)
+    if not models:
+        raise ValueError("at least one model name is needed")
+    return ", ".join(models)
+
+
 USER_SETTINGS = {
     "NTFY_TOPIC": _STR,
     "NOTIFICATIONS_ENABLED": _BOOL,
@@ -318,7 +344,7 @@ USER_SETTINGS = {
     "OLLAMA_URL": _STR,
     "USE_CLOUD_AI": _BOOL,
     "CLOUD_AI_PROVIDER": _STR,
-    "CLOUD_AI_MODEL": _STR,
+    "CLOUD_AI_MODEL": _MODELS,
     "CLOUD_AI_API_KEY": _STR,
     "CLOUD_AI_BASE_URL": _STR,
     "DASHBOARD_USERNAME": _STR,
@@ -407,3 +433,9 @@ def save_settings(values):
 def save_setting(key, value):
     """Persist one setting (see save_settings)."""
     return save_settings({key: value})[key]
+
+
+def cloud_models():
+    """CLOUD_AI_MODEL as a list, most preferred first. Read live, like the
+    other settings, so a saved change applies when the engine is rebuilt."""
+    return _split_models(CLOUD_AI_MODEL)

@@ -16,6 +16,18 @@ dict | None` - and are judged against the identical output contract, so
 swapping engines never changes what counts as "relevant" or "CRITICAL"
 purely because of a different code path.
 
+`None` means the article was judged and isn't relevant (or had no text to
+judge). An engine that produced no verdict at all - API error, Ollama
+unreachable, a reply that isn't JSON - raises
+`llm_prompts.AnalysisUnavailable` instead (the keyword engine never does).
+`main.py` then leaves the article off the processed-URL list so the next
+scan retries it (at most `MAX_ANALYSIS_ATTEMPTS` = 3 times), and holds
+back the rest of that scan's articles, so an outage costs one log line a
+minute rather than one per article. Before this, a failure looked exactly
+like "not relevant": the article was marked processed and never looked at
+again, which is how a Routera outage on 2026-09-11 silently dropped every
+article that arrived while it lasted.
+
 ## The shared prompt contract (`llm_prompts.py`)
 
 Both LLM-based engines (local and cloud) send the exact same prompt,
@@ -92,15 +104,33 @@ worked, and was never meant to, on the Linux VM - that's exactly why
 | `openrouter` | `OpenRouterProvider` | `OpenAIProvider` with a defaulted base URL |
 | `routera` | `RouteraProvider` | See below - not a simple `OpenAIProvider` subclass |
 
-If `CLOUD_AI_API_KEY` is empty, `CloudAnalyzer.provider` stays `None` and
-`analyze_article` always returns `None` (logged once as a warning, not per
-article).
+If `CLOUD_AI_API_KEY` is empty, `CloudAnalyzer.provider` stays `None` (the
+constructor warns once) and `analyze_article` raises `AnalysisUnavailable`,
+so each scan logs one failure and the article is retried like any other
+engine failure (see above).
+
+### Model fallback
+
+`CLOUD_AI_MODEL` may be a comma-separated list, most preferred first
+(`config.cloud_models()` parses it; the dashboard edits it one per line).
+`CloudAnalyzer` builds one provider per model - same `CLOUD_AI_PROVIDER`,
+key and base URL - and `_ask()` sends each request (the article screen and
+the trade check alike) down the list until one returns parseable JSON. A
+model whose call fails outright is benched for `MODEL_COOLDOWN` (5 min):
+moved to the back of the queue, not out of it, so with every model failing
+each is still tried, and once the cooldown ends the preferred model is
+first again. A reply that merely isn't JSON moves only that one request
+on. `AnalysisUnavailable` is raised only when every model has failed.
+Mind the price of what you list second: while the first model is down,
+every article runs on it.
 
 ### Routera specifics - **read this before changing the model**
 
 Routera (`https://www.routera.one`) is a one-key-many-models router:
 `CLOUD_AI_MODEL` is `"<vendor>/<model>"`, e.g. `"openai/gpt-5.6-luna"` or
-`"anthropic/claude-opus-5"`.
+`"anthropic/claude-opus-5"` - or a priority list of them (see "Model
+fallback" above). One list may mix vendors: each model gets its own
+Routera dispatch below.
 
 **Routera exposes two different wire formats depending on the vendor
 prefix**, confirmed against their docs and hit as a real bug during setup:
@@ -137,6 +167,16 @@ service-wide due to abuse and returns `403 insufficient_plan` regardless
 of purchased token balance. That's Routera account-side, not this app's
 bug - don't spend time debugging the app if you see that error, just pick
 a different (non-free-plan) model.
+
+**`403 INSUFFICIENT_BALANCE` with a healthy balance** (2026-09-11): every
+`openai/gpt-5.6-*` model returned `{"code":"INSUFFICIENT_BALANCE",
+"message":"Insufficient account balance"}` on both `/v1/chat/completions`
+and `/v1/responses`, while `/v1/balance` showed ~12M tokens and
+`xai/grok-4.6` worked on the same key - Routera's upstream, not the
+account. Routera's status page stayed green throughout. To tell the two
+apart, send a 5-token request to the model and to one other vendor's model
+with the same key; `GET /v1/usage` shows per-model multipliers and failure
+counts.
 
 ## Engine 3: Keyword (offline, `keyword_analyzer.py`)
 

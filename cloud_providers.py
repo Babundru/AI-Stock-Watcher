@@ -199,7 +199,14 @@ class RouteraProvider(BaseCloudProvider):
         # Built lazily (not in __init__) so a missing SDK for whichever
         # branch this model doesn't need is never imported at all.
         if self._delegate is None:
-            self._delegate = self._build_delegate()
+            try:
+                self._delegate = self._build_delegate()
+            except ImportError as e:
+                # complete() must not raise. With a model list mixing
+                # "anthropic/..." and other vendors, one branch's SDK being
+                # missing should fail just that model, not the whole scan.
+                self._log(f"Cloud AI Error: {e}")
+                return None
         return self._delegate.complete(prompt, system=system)
 
 
