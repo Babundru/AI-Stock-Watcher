@@ -1,6 +1,8 @@
 import datetime
 import json
 
+from reddit_source import SOURCE_PREFIX, is_reddit_article
+
 # Shared between analyzer.py (local Ollama) and cloud_analyzer.py (Anthropic
 # API) so the two engines are judged on the exact same prompt - only the
 # backend that executes it differs.
@@ -50,6 +52,21 @@ def _published_line(article):
     return f"{published.astimezone(datetime.timezone.utc):%Y-%m-%d %H:%M} UTC ({minutes} min ago)"
 
 
+def _source_note(article):
+    """Framing for an article that is not news reporting (empty otherwise).
+    Without it a Reddit post reads to the model like a breaking story."""
+    if not is_reddit_article(article):
+        return ""
+    where = article['source'][len(SOURCE_PREFIX):]
+    return f"""
+        Source: a post on {where} (retail investors on Reddit), followed by its top comments.
+        This is NOT a news report - treat every claim in it as unverified opinion. Rate it relevant only if
+        it points to a concrete, checkable company event that is new (earnings, a filing, a contract, a
+        lawsuit, FDA news, ...), or makes an unusually specific, well-evidenced case for a catalyst.
+        Memes, hype, screenshots of personal gains or losses and "YOLO" bets are irrelevant. Use the
+        comments to judge the post: pushback, corrections or "this is old news" count against it."""
+
+
 def build_market_prompt(company, article, market_is_open, portfolio_tickers=None):
     """Build the single-pass conditional relevance/sentiment prompt for one
     article. Returns None if the article has no usable text to analyze."""
@@ -72,7 +89,7 @@ def build_market_prompt(company, article, market_is_open, portfolio_tickers=None
         Target Context: {company}
         {portfolio_context}
         Market Status: {market_context}
-        Published: {_published_line(article)}
+        Published: {_published_line(article)}{_source_note(article)}
 
         Article Title: {title}
         Article Text: {article_text}
@@ -162,7 +179,7 @@ def build_trade_prompt(article, analysis, context, direction):
         opening a {side} position in {analysis.get('ticker')} RIGHT NOW, at the current price, still has an edge.
 
         Article title: {article.get('title', '')}
-        Published: {_published_line(article)}
+        Published: {_published_line(article)}{_source_note(article)}
         Article text: {_article_text(article, 1500)}
 
         Screen result:

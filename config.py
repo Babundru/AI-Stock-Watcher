@@ -10,7 +10,7 @@ LOOKBACK_MINUTES = 30
 # Check interval in seconds
 # With 1-minute intervals: 24 hours * 60 requests/hour = 1440 requests/day
 # Fast scanning to catch breaking news immediately
-# Note: App tracks last 120 processed URLs to avoid duplicates
+# Note: App tracks last 500 processed URLs to avoid duplicates
 CHECK_INTERVAL = 60  # 1 minute
 
 # How often to check open watches (stocks with a pending sell signal) against
@@ -192,6 +192,26 @@ NOTIFY_SHORTS = True
 # long-run upward drift, so they need a stronger signal than longs do.
 SHORT_MIN_IMPACT = "CRITICAL"
 
+# --- REDDIT SOURCES ---
+# Subreddits added as custom sources are read through Reddit's public feeds,
+# which allow only about one request a minute (see reddit_source.py). A post
+# waits REDDIT_COMMENT_DELAY_MIN minutes for comments to arrive and is then
+# analysed once, together with its top REDDIT_COMMENTS_PER_POST comments.
+# 0 comments analyses each post as soon as it is seen - faster, but the post
+# alone, with nothing to show how other traders read it.
+REDDIT_COMMENTS_PER_POST = 10
+REDDIT_COMMENT_DELAY_MIN = 30
+
+# Whether an alert raised by a Reddit post may open a position - or close one
+# by contradicting it. Off: Reddit posts notify you but never trade. They are
+# retail opinion rather than reporting, and cheap to pump.
+REDDIT_CAN_TRADE = False
+
+# How often each subreddit's newest posts are polled, in minutes, and the
+# oldest a post may be when first seen and still be worth analysing.
+REDDIT_POLL_MINUTES = 10
+REDDIT_MAX_POST_AGE_HOURS = 6
+
 # --- NOTIFICATION SETTINGS ---
 # Ntfy.sh topic name.
 #
@@ -338,6 +358,9 @@ USER_SETTINGS = {
     "ALLOW_SHORTS": _BOOL,
     "NOTIFY_SHORTS": _BOOL,
     "SHORT_MIN_IMPACT": _SHORT_IMPACT,
+    "REDDIT_COMMENTS_PER_POST": _INT,
+    "REDDIT_COMMENT_DELAY_MIN": _INT,
+    "REDDIT_CAN_TRADE": _BOOL,
     "USE_LOCAL_LLM": _BOOL,
     "LOCAL_MODEL_NAME": _STR,
     "OLLAMA_NUM_THREADS": _INT,

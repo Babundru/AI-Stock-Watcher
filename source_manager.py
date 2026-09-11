@@ -3,6 +3,8 @@ import os
 import uuid
 from typing import Dict, List, Optional
 
+import reddit_source
+
 class SourceManager:
     """Manages user-configurable news sources for web scraping."""
     
@@ -76,25 +78,31 @@ class SourceManager:
         
         Args:
             name: Display name for the source
-            url: URL of the news source (can be Twitter/X URL)
-            source_type: Type of source ('webpage', 'rss', 'twitter')
-            
+            url: URL of the news source (can be a Twitter/X URL, or a
+                 subreddit - "r/stocks" or any reddit.com link into one)
+            source_type: Type of source ('webpage', 'rss', 'twitter', 'reddit')
+
         Returns:
             Source ID if successful
-            
+
         Raises:
             ValueError: If URL is invalid
         """
         # Validate and normalize URL
         url = url.strip()
-        
+
         # Check if it's a Twitter/X URL and convert to Nitter
         if self._is_twitter_url(url):
             original_url = url
             url = self._convert_to_nitter(url)
             source_type = "twitter"
             print(f"Detected Twitter URL, converted to Nitter: {url}")
-        
+        elif source_type == "reddit" or reddit_source.is_reddit_url(url):
+            subreddit = self._reddit_subreddit(url)
+            url = reddit_source.subreddit_url(subreddit)
+            source_type = "reddit"
+            name = (name or "").strip() or f"r/{subreddit}"
+
         if not self._validate_url(url):
             raise ValueError(f"Invalid URL: {url}")
         
@@ -184,6 +192,19 @@ class SourceManager:
                 return source["enabled"]
         return False
     
+    def _reddit_subreddit(self, url: str) -> str:
+        """The subreddit a Reddit source points at, refusing links that are not
+        to a subreddit and one that is already a source - two copies would
+        split one request budget between them for nothing."""
+        subreddit = reddit_source.parse_subreddit(url, bare_ok=True)
+        if not subreddit:
+            raise ValueError("Reddit sources must be a subreddit, e.g. r/wallstreetbets")
+        for source in self.sources.get("sources", []):
+            existing = reddit_source.parse_subreddit(source.get("url"), bare_ok=True)
+            if source.get("type") == "reddit" and (existing or "").lower() == subreddit.lower():
+                raise ValueError(f"r/{subreddit} is already a source")
+        return subreddit
+
     def _is_twitter_url(self, url: str) -> bool:
         """Check if URL is a Twitter/X URL."""
         url_lower = url.lower()

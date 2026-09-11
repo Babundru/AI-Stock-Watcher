@@ -167,12 +167,18 @@ tag to negative alerts so you can tell risk to your holdings apart from general
 market news.
 
 ### Sources
-Add your own news sources by name and URL, then **Add source**. Three kinds
+Add your own news sources by name and URL, then **Add source**. Four kinds
 are detected automatically:
 
 - **RSS feeds** — best results; use these when available
 - **Web pages** — the app looks for a feed link, otherwise scrapes headlines
 - **Twitter/X profile URLs** — automatically converted to a Nitter mirror
+- **Subreddits** — `r/wallstreetbets` or any link into one. Each new post is
+  analysed together with its top comments, 30 minutes after it was posted so
+  the comments have arrived (both adjustable in Settings). Reddit only allows
+  about one request a minute, so expect roughly 40–50 posts an hour in total
+  however many subreddits you add. Reddit alerts never open or close trades
+  unless you turn that on in Settings — they are opinion, not reporting.
 
 Use the toggle to enable or disable a source, and `×` to remove it.
 

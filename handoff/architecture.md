@@ -67,6 +67,7 @@ writes against a disk with ~45 write IOPS.
 ```
 main.py              StockAppBackend - the scan loop, orchestrates everything below
 ├── news_collector.py    Fetches/scrapes articles (RSS, webpage, Twitter/Nitter)
+│   └── reddit_source.py     Subreddit posts + comments via Reddit's rate-limited feeds (data/reddit_state.json)
 ├── source_manager.py     User-added custom sources (data/news_sources.json)
 ├── analyzer.py           Local Ollama analysis engine
 ├── cloud_analyzer.py     Cloud AI analysis engine
