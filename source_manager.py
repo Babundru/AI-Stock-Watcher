@@ -5,6 +5,42 @@ from typing import Dict, List, Optional
 
 import reddit_source
 
+# How far a source's claims can be taken at their word. "reporting" is news
+# a newsroom wrote; "opinion" is someone's say-so - a post on X or Reddit -
+# and a story from one only trades once the price has confirmed it
+# (strategy.plan_trade). Each source can be set either way; these types
+# start out as opinion.
+REPORTING = "reporting"
+OPINION = "opinion"
+TRUST_LEVELS = (REPORTING, OPINION)
+_OPINION_TYPES = ("twitter", "reddit")
+
+
+def default_trust(source_type):
+    return OPINION if source_type in _OPINION_TYPES else REPORTING
+
+
+def source_trust(source):
+    """A source's trust setting, or its type's default when it has none
+    (sources saved before the setting existed)."""
+    trust = (source or {}).get("trust")
+    return trust if trust in TRUST_LEVELS else default_trust((source or {}).get("type"))
+
+
+def article_trust(article):
+    """The trust of the source an article came from. The collector tags
+    custom sources' articles with it; anything untagged goes by where it
+    came from - the built-in news feeds are reporting, X and Reddit posts
+    opinion."""
+    trust = (article or {}).get("trust")
+    if trust in TRUST_LEVELS:
+        return trust
+    source = (article or {}).get("source") or ""
+    if reddit_source.is_reddit_article(article) or source.startswith("Twitter/"):
+        return OPINION
+    return REPORTING
+
+
 class SourceManager:
     """Manages user-configurable news sources for web scraping."""
     
@@ -72,22 +108,26 @@ class SourceManager:
         except Exception as e:
             print(f"Error saving sources: {e}")
     
-    def add_source(self, name: str, url: str, source_type: str = "webpage") -> str:
+    def add_source(self, name: str, url: str, source_type: str = "webpage",
+                   trust: Optional[str] = None) -> str:
         """
         Add a new news source.
-        
+
         Args:
             name: Display name for the source
             url: URL of the news source (can be a Twitter/X URL, or a
                  subreddit - "r/stocks" or any reddit.com link into one)
             source_type: Type of source ('webpage', 'rss', 'twitter', 'reddit')
+            trust: 'reporting' or 'opinion'; None for the type's default
 
         Returns:
             Source ID if successful
 
         Raises:
-            ValueError: If URL is invalid
+            ValueError: If URL or trust is invalid
         """
+        if trust is not None and trust not in TRUST_LEVELS:
+            raise ValueError(f"trust must be one of {', '.join(TRUST_LEVELS)}")
         # Validate and normalize URL
         url = url.strip()
 
@@ -112,7 +152,8 @@ class SourceManager:
             "name": name,
             "url": url,
             "enabled": True,  # New sources are enabled by default
-            "type": source_type
+            "type": source_type,
+            "trust": trust or default_trust(source_type),
         }
         
         self.sources["sources"].append(new_source)
@@ -160,15 +201,15 @@ class SourceManager:
         
         Args:
             source_id: ID of source to update
-            **kwargs: Properties to update (name, url, enabled, type)
-            
+            **kwargs: Properties to update (name, url, enabled, type, trust)
+
         Returns:
             True if updated, False if not found
         """
         for source in self.sources["sources"]:
             if source["id"] == source_id:
                 for key, value in kwargs.items():
-                    if key in ["name", "url", "enabled", "type"]:
+                    if key in ["name", "url", "enabled", "type", "trust"]:
                         source[key] = value
                 self._save_sources()
                 print(f"Updated source: {source_id}")
@@ -191,7 +232,14 @@ class SourceManager:
                 self._save_sources()
                 return source["enabled"]
         return False
-    
+
+    def set_trust(self, source_id: str, trust: str) -> bool:
+        """Mark a source as 'reporting' or 'opinion' (see TRUST_LEVELS).
+        Raises ValueError for anything else; False if there's no such source."""
+        if trust not in TRUST_LEVELS:
+            raise ValueError(f"trust must be one of {', '.join(TRUST_LEVELS)}")
+        return self.update_source(source_id, trust=trust)
+
     def _reddit_subreddit(self, url: str) -> str:
         """The subreddit a Reddit source points at, refusing links that are not
         to a subreddit and one that is already a source - two copies would

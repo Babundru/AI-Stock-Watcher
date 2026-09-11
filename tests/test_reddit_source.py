@@ -358,8 +358,6 @@ class PromptTests(unittest.TestCase):
         prompt = llm_prompts.build_market_prompt("Custom Source News", self.article("Reddit/r/stocks"), True)
         self.assertIn("a post on r/stocks", prompt)
         self.assertIn("NOT a news report", prompt)
-        trade = llm_prompts.build_trade_prompt(self.article("Reddit/r/stocks"), {"ticker": "NVDA"}, {}, "LONG")
-        self.assertIn("NOT a news report", trade)
 
     def test_news_is_unchanged(self):
         prompt = llm_prompts.build_market_prompt("Custom Source News", self.article("Custom/CNBC"), True)

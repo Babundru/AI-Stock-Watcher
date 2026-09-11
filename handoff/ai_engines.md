@@ -46,6 +46,7 @@ noise, or a full structured object for real news:
   "confidence": 0-100,
   "is_new_information": true,
   "is_company_specific": true,
+  "value_is_capped": false,
   "explanation": "...",
   "prediction": "GAP UP|GAP DOWN|RALLY|DROP|FLAT",
   "horizon": "INTRADAY|DAYS|WEEKS"
@@ -56,23 +57,25 @@ noise, or a full structured object for real news:
 alert in `main.py:_alert_skip_reasons` (below `MIN_CONFIDENCE`, or either
 flag explicitly `false`, drops it). A field the engine leaves out never
 counts against an alert - the keyword engine has none of them.
-`expected_move_pct` feeds `strategy.plan_trade` (the priced-in check and
-the target). The prompt also gets the article's publish time and a
-calibration paragraph ("most news moves a large-cap < 2%").
+`expected_move_pct` feeds `strategy.plan_trade` (the reward/risk check and
+the target), and `value_is_capped` its `capped` rule (a cash takeover's
+target is pinned to the offer price - nothing left to ride). The prompt
+also gets the article's publish time and a calibration paragraph ("most
+news moves a large-cap < 2%").
 
-### The trade confirmation (`build_trade_prompt`)
+### No trade-confirmation call
 
-A second call, made only for alerts that are about to become a trade
-(after the rule checks in `strategy.plan_trade` pass, so a handful a day),
-via `confirm_trade()` on both LLM engines. It sends the article again with
-the live price context from `price_lookup.fetch_context` - move since the
-previous close and since publication, 5-day change, 14-day ATR - and asks
-for a bull case, a bear case, `take_trade`, `confidence` and
-`expected_remaining_move_pct`. A pass, or confidence below
-`MIN_CONFIDENCE`, cancels the trade; the remaining move sets the target.
-If the call fails the trade is decided on the rules alone (logged).
-`AI_TRADE_CONFIRM` turns it off. The keyword engine has no
-`confirm_trade`, so it always trades on the rules.
+Until strategy v3 a second call (`build_trade_prompt` / `confirm_trade`,
+switch `AI_TRADE_CONFIRM`) re-read the article with the live price context
+and could veto a trade. It was removed. The price rules in
+`strategy.plan_trade` now do that job - a move against the news, a move
+already spent, the market's own move - deterministically, and each rule
+can be judged from its skipped trades (`shadow_trades.py`). For X and
+Reddit a second read of the same text couldn't verify a rumour anyway;
+those need the price to confirm the story instead. The one judgement the
+rules can't make, news that caps the price, is the screen's
+`value_is_capped` field - no extra call. An `AI_TRADE_CONFIRM` left in an
+old `data/settings.json` is ignored.
 
 `horizon` feeds `watch_manager.py`'s sell-signal expiry window - see
 `portfolio_and_notifications.md`. `parse_json_response()` tolerates a

@@ -2,8 +2,7 @@ import time
 
 import config
 from cloud_providers import PROVIDERS
-from llm_prompts import (AnalysisUnavailable, build_market_prompt, build_trade_prompt,
-                         parse_json_response)
+from llm_prompts import AnalysisUnavailable, build_market_prompt, parse_json_response
 
 # Ollama gets a JSON-mode flag to force this; hosted chat APIs don't have an
 # equivalent, so the constraint is stated in a system prompt instead.
@@ -121,11 +120,3 @@ class CloudAnalyzer:
             return None
 
         return data
-
-    def confirm_trade(self, article, analysis, context, direction):
-        """Second pass for a would-be trade, with live price context (see
-        llm_prompts.build_trade_prompt). Returns the parsed dict, or None if
-        every model failed or answered with something unusable."""
-        if not self.providers:
-            return None
-        return self._ask(build_trade_prompt(article, analysis, context, direction))

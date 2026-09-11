@@ -38,6 +38,11 @@ replaced rules that closed winners at a fixed +5/10% but gave losers no
 floor, or postponed their time exit until they recovered - so the closed
 record hovered near zero while losers piled up in the open book. Every
 watch and paper trade records `strategy` so the two can be compared.
+Strategy `v3` (Sep 2026) changed only the entry: v2 skipped a stock that
+had already moved half the AI's (deliberately low) expected move, measured
+its reward/risk on the move *left*, and ran a second AI call that leaned
+towards passing - between them, almost nothing that had started moving the
+news's way was ever traded.
 
 **Entry** (`main.py:_decide_trade`, cheapest checks first):
 - Short gates: `ALLOW_SHORTS` / `NOTIFY_SHORTS` (both off = negative news
@@ -45,13 +50,34 @@ watch and paper trade records `strategy` so the two can be compared.
   (default CRITICAL). `ALLOW_SHORTS` off with `NOTIFY_SHORTS` on sends the
   setup marked "not tracked" and opens no watch.
 - One position per ticker; at most `MAX_OPEN_POSITIONS` (20) open.
-- `price_lookup.fetch_context` (two small single-ticker requests), then
-  `strategy.plan_trade`: skip if already moved `PRICED_IN_FRACTION` (50%)
-  of the expected move since the previous close or since publication;
-  stop = `STOP_ATR_MULT` (1.5) x 14-day ATR clamped to [`STOP_MIN_PCT`,
-  `STOP_LOSS_PCT`]; target = expected move still ahead, clamped to
-  1.5-20%; skip if target < `MIN_REWARD_RISK` (1.2) x stop.
-- The AI trade confirmation (see `ai_engines.md`), then entry pricing.
+- `price_lookup.fetch_context(ticker, published, benchmark=SPY)` (two
+  small single-ticker requests each for the stock and for SPY), then
+  `strategy.plan_trade`. "Moved" is the story's own move
+  (`strategy.news_move`): from the price at publication for news published
+  during the regular session, from the previous close for news published
+  while the market was shut (the gap is the reaction), minus SPY's move
+  over the same window. In multiples of the 14-day ATR (the "daily range",
+  2% when unknown), first match wins:
+  - `capped` - the screen said `value_is_capped` (a cash takeover's target).
+  - `against` - moved more than `AGAINST_NEWS_ATR_MULT` (0.5) daily ranges
+    against the news: the market reads it differently.
+  - `exhausted` - moved with it past both `EXHAUSTED_ATR_MULT` (3) daily
+    ranges and the whole expected move: the move is spent. (Both, so a big
+    story on a calm stock isn't cut off after 3% - a plain 3x ATR limit was
+    stricter than v2 there.)
+  - `unconfirmed` - a story from an opinion source (X, Reddit - see
+    `data_sources.md`) that hasn't moved the price at least
+    `CONFIRM_ATR_MULT` (0.5) daily ranges its way, or can't be priced.
+  - `reward_risk` - the story's expected move is below `MIN_REWARD_RISK`
+    (1.2) x the stop.
+
+  Short of `exhausted`, a move with the news is the market agreeing and
+  doesn't count against the trade. Stop = `STOP_ATR_MULT` (1.5) x ATR
+  clamped to [`STOP_MIN_PCT`, `STOP_LOSS_PCT`]; target = expected move
+  minus what has already happened, but at least `MIN_REWARD_RISK` x the
+  stop, clamped to 1.5-20%. A refused signal is followed as a skipped trade
+  (below).
+- Entry pricing (`fetch_prices`, with SPY in the same call).
 - An alert whose direction contradicts an open position in the same
   ticker closes it first (`news_reversal`).
 
@@ -108,6 +134,29 @@ watch and paper trade records `strategy` so the two can be compared.
 
 Dashboard surface: `GET /api/watches` (`server.py`) backs the "Watching"
 card on the Alerts tab (open watches only) - see `ui.md`.
+
+## Skipped trades (`shadow_trades.py`, `data/shadow_trades.json`)
+
+A signal `strategy.plan_trade` refuses is followed as if it had been
+traded: opened at the context price with the plan's stop and target (the
+plan is sized even when it refuses), run through exactly the exits a real
+watch gets (`main.py:_exit_reason` - `strategy.update_exit`, the time exit
+and `max_age`) in the same `_check_watches` pass and price call, and
+closed silently - never notified. `ShadowBook.summary()` splits the
+results by `skip_rule`: win rate, expectancy after `PAPER_COST_PCT`, alpha
+vs SPY. That is how to tell whether a rule keeps the app out of losers or
+out of winners - read it before moving any of the `*_ATR_MULT` settings.
+Shown under Paper trading in the dashboard (`GET /api/paper` ->
+`skipped`), in the desktop app's Paper view and in `paper_report.py`.
+
+- Kept out of `paper_trades.json` on purpose: that is what the app did.
+- Only price-rule refusals are followed - not position-limit or short
+  settings skips, which happen before there's a price - and only signals
+  that would have been tracked (not a short with `ALLOW_SHORTS` off).
+- Bounded: `MAX_SHADOW_POSITIONS` (20) open, one per ticker, the newest
+  1000 closed kept. They ride in the watch check's `fetch_prices` call,
+  which stays chunked at 25 tickers, so the peak per chunk is unchanged;
+  a full book adds one more round trip. Follows `PAPER_TRADING`.
 
 ## Live prices (`price_lookup.py`)
 

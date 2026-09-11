@@ -11,10 +11,11 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from main import StockAppBackend
 from portfolio_manager import PortfolioManager
 from paper_trader import PaperTrader
+from shadow_trades import RULE_LABELS, ShadowBook
 import config
 from config import (PAPER_COST_PCT, PAPER_BENCHMARK,
                     PAPER_START_CAPITAL, PAPER_POSITION_PCT)
-from source_manager import SourceManager
+from source_manager import SourceManager, source_trust, OPINION, REPORTING
 from keyword_manager import KeywordManager
 
 # --- THEME ---------------------------------------------------------------
@@ -103,6 +104,7 @@ class StockAppGUI(ctk.CTk):
         # Read straight off disk so the record is visible whether or not the
         # watcher is running - the backend owns writing it, not showing it.
         self.paper = PaperTrader(cost_pct=PAPER_COST_PCT, benchmark=PAPER_BENCHMARK)
+        self.shadows = ShadowBook(cost_pct=PAPER_COST_PCT)
         self.source_mgr = SourceManager()
         self.keyword_mgr = KeywordManager()
         self.backend = None
@@ -674,8 +676,6 @@ class StockAppGUI(ctk.CTk):
         e_max_pos = add_input("Maximum open positions", getattr(config, 'MAX_OPEN_POSITIONS', 20))
         let_run_var = add_check("Let winners run (trail the stop at the target)",
                                 getattr(config, 'LET_WINNERS_RUN', True))
-        confirm_var = add_check("AI trade check with live price action",
-                                getattr(config, 'AI_TRADE_CONFIRM', True))
 
         ctk.CTkLabel(scroll, text="Short selling", font=UI(16, "bold"),
                     text_color=COLOR_ACCENT).pack(pady=(20, 0))
@@ -799,7 +799,6 @@ class StockAppGUI(ctk.CTk):
                     "MIN_CONFIDENCE": min_conf,
                     "MAX_OPEN_POSITIONS": max_pos,
                     "LET_WINNERS_RUN": let_run_var.get(),
-                    "AI_TRADE_CONFIRM": confirm_var.get(),
                     "ALLOW_SHORTS": allow_shorts_var.get(),
                     "NOTIFY_SHORTS": notify_shorts_var.get(),
                     "REDDIT_COMMENTS_PER_POST": reddit_comments,
@@ -1206,6 +1205,7 @@ class StockAppGUI(ctk.CTk):
         """Reload the ledger and mark open positions to live prices."""
         try:
             self.paper.reload()
+            self.shadows.reload()
         except Exception as e:
             self.log_queue.put(f"Paper ledger read failed: {e}")
             return
@@ -1307,6 +1307,33 @@ class StockAppGUI(ctk.CTk):
         else:
             ctk.CTkLabel(self.paper_scroll, text="No closed trades yet", font=UI(12),
                          text_color=COLOR_TEXT_MUTE).pack(pady=14)
+
+        # Signals the entry rules turned down, followed as if traded - a
+        # rule whose skipped trades would have made money is keeping the app
+        # out of winners (shadow_trades.py).
+        skipped = self.shadows.summary()
+        self._paper_heading("Skipped trades",
+                            "signals the entry rules turned down, followed as if traded")
+        if skipped['by_rule']:
+            for rule, row in skipped['by_rule'].items():
+                self._skipped_row(RULE_LABELS.get(rule, rule), row)
+        else:
+            text = (f"None closed yet — {skipped['open']} being followed" if skipped['open']
+                    else "Nothing skipped yet")
+            ctk.CTkLabel(self.paper_scroll, text=text, font=UI(12),
+                         text_color=COLOR_TEXT_MUTE).pack(pady=14)
+
+    def _skipped_row(self, label, row):
+        line = ctk.CTkFrame(self.paper_scroll, fg_color=COLOR_PANEL, corner_radius=RADIUS,
+                            border_color=COLOR_LINE, border_width=1)
+        line.pack(fill='x', pady=2)
+        ctk.CTkLabel(line, text=label, width=240, anchor='w', font=UI(12, "bold"),
+                     text_color=COLOR_TEXT).pack(side='left', padx=12, pady=8)
+        ctk.CTkLabel(line, text=f"{row['trades']} closed · {row['win_rate'] * 100:.0f}% would have won",
+                     anchor='w', font=UI(10), text_color=COLOR_TEXT_MUTE).pack(side='left', padx=6)
+        exp = row['expectancy']
+        ctk.CTkLabel(line, text=f"{exp * 100:+.2f}% per trade", anchor='e', font=MONO(13, "bold"),
+                     text_color=COLOR_SUCCESS if exp >= 0 else COLOR_DANGER).pack(side='right', padx=12)
 
     def _paper_heading(self, title, subtitle):
         head = ctk.CTkFrame(self.paper_scroll, fg_color="transparent")
@@ -1571,6 +1598,14 @@ class StockAppGUI(ctk.CTk):
         self.log_queue.put(f"Source {status}")
         self.refresh_sources_list()
     
+    def toggle_trust(self, source_id, current):
+        """Flip a source between reporting and opinion. An opinion source's
+        stories only trade once the price has confirmed them."""
+        new = REPORTING if current == OPINION else OPINION
+        self.source_mgr.set_trust(source_id, new)
+        self.log_queue.put(f"Source marked as {new}")
+        self.refresh_sources_list()
+
     def reset_sources(self):
         """Reset sources to defaults."""
         if messagebox.askyesno("Confirm Reset", "Reset to default sources?"):
@@ -1617,6 +1652,14 @@ class StockAppGUI(ctk.CTk):
             ctk.CTkButton(row, text="×", width=40, height=40,
                          fg_color="transparent", text_color=COLOR_TEXT_MUTE, hover_color=COLOR_DANGER_SOFT,
                          font=UI(18), command=lambda sid=source_id: self.delete_source(sid)).pack(side='right', padx=5)
+
+            # Reporting trades on the price rules alone; opinion (X and
+            # Reddit by default) waits for the price to confirm the story.
+            trust = source_trust(source)
+            ctk.CTkButton(row, text="Opinion" if trust == OPINION else "Reporting", width=90, height=30,
+                         fg_color=COLOR_PANEL_HI, hover_color=COLOR_LINE_HI,
+                         text_color=COLOR_ACCENT if trust == OPINION else COLOR_TEXT_DIM, font=UI(11),
+                         command=lambda sid=source_id, t=trust: self.toggle_trust(sid, t)).pack(side='right', padx=5)
 
     def _setup_keywords_tab(self):
         """Setup the Keywords management tab."""

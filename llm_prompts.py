@@ -7,11 +7,10 @@ from reddit_source import SOURCE_PREFIX, is_reddit_article
 # API) so the two engines are judged on the exact same prompt - only the
 # backend that executes it differs.
 #
-# Two prompts:
-#   build_market_prompt  - the screen, run on every article.
-#   build_trade_prompt   - the trade confirmation, run only for the few
-#                          articles that pass the screen and the rule checks,
-#                          with live price context the screen doesn't have.
+# One prompt, build_market_prompt, run on every article. Whether an alert
+# then becomes a trade is decided by the price rules in strategy.plan_trade,
+# not by a second model call: a second read of the same text adds a veto
+# that can't be tuned, and can't verify a rumour either.
 
 
 class AnalysisUnavailable(Exception):
@@ -123,6 +122,7 @@ def build_market_prompt(company, article, market_is_open, portfolio_tickers=None
             "confidence": 70,
             "is_new_information": true,
             "is_company_specific": true,
+            "value_is_capped": false,
             "explanation": "Concise summary of why this matters.",
             "prediction": "GAP UP",
             "horizon": "DAYS"
@@ -144,6 +144,9 @@ def build_market_prompt(company, article, market_is_open, portfolio_tickers=None
           a recap, commentary on an earlier announcement).
         - is_company_specific: false if the story is really about the market, the economy or a whole
           sector rather than this one company.
+        - value_is_capped: true only when the news fixes the stock at a set price, so it jumps once and
+          then sits there - the target of an agreed cash acquisition or tender offer, say. false for
+          everything else, including the acquirer.
         - Prediction: GAP UP / GAP DOWN (if closed) or RALLY / DROP (if open)
         - Horizon: how long this specific news item should keep moving the price
           before the market has fully priced it in - i.e. how long until it's
@@ -154,67 +157,6 @@ def build_market_prompt(company, article, market_is_open, portfolio_tickers=None
               analyst upgrade, a contract win, a product announcement)
             - WEEKS (structural news that takes longer to be fully priced in,
               e.g. M&A, major regulatory action, a large multi-year contract)
-        """
-
-
-def _pct(value):
-    return "unknown" if value is None else f"{value * 100:+.2f}%"
-
-
-def _price(value):
-    return "unknown" if value is None else f"{value:.2f}"
-
-
-def build_trade_prompt(article, analysis, context, direction):
-    """Prompt for the trade confirmation: given what the screen concluded and
-    what the price has done since, does opening a position NOW still have an
-    edge? Run only for would-be trades, so it can afford to ask for both
-    sides of the argument."""
-    side = "LONG (buy, profit if the price rises)" if direction == "LONG" \
-        else "SHORT (sell short, profit if the price falls)"
-    ctx = context or {}
-    atr = ctx.get('atr_pct')
-    return f"""
-        You are a disciplined event-driven trader. A news screen flagged the article below. Decide whether
-        opening a {side} position in {analysis.get('ticker')} RIGHT NOW, at the current price, still has an edge.
-
-        Article title: {article.get('title', '')}
-        Published: {_published_line(article)}{_source_note(article)}
-        Article text: {_article_text(article, 1500)}
-
-        Screen result:
-        - Sentiment: {analysis.get('sentiment')}, impact: {analysis.get('impact')}
-        - Expected total move: {analysis.get('expected_move_pct')}%
-        - Why: {analysis.get('explanation')}
-
-        Market data for {analysis.get('ticker')} (prices include pre/after-hours trading):
-        - Current price: {_price(ctx.get('price'))}
-        - Previous regular-session close: {_price(ctx.get('ref_close'))} (move since: {_pct(ctx.get('change_since_close_pct'))})
-        - Price when the article was published: {_price(ctx.get('price_at_publish'))} (move since: {_pct(ctx.get('change_since_publish_pct'))})
-        - Change over the 5 sessions before: {_pct(ctx.get('change_5d_pct'))}
-        - Normal daily range (14-day ATR): {"unknown" if atr is None else f"{atr * 100:.2f}%"} of the price
-
-        Think about:
-        - How much of the expected move has already happened? News that has been priced in has no edge left.
-        - Is the move still ahead clearly bigger than the stock's normal daily range? If not, it is noise.
-        - Sharp news spikes often partly reverse within days. Is this the kind of news that keeps going?
-        - Did the price move AGAINST the news? That can mean the market reads it differently.
-
-        Respond in JSON only - no other text before or after it:
-        {{
-            "bull_case": "One or two sentences: the best argument FOR taking this trade now.",
-            "bear_case": "One or two sentences: the best argument AGAINST taking it now.",
-            "take_trade": true,
-            "confidence": 65,
-            "expected_remaining_move_pct": 4.5,
-            "horizon": "DAYS",
-            "reason": "One sentence verdict."
-        }}
-
-        - expected_remaining_move_pct: the further move you expect FROM THE CURRENT PRICE in the trade's
-          direction, as a plain positive number (4.5 means 4.5%).
-        - confidence: 0-100 that this trade reaches that move before reversing. 50 is a coin flip.
-        - horizon: INTRADAY, DAYS or WEEKS - how long the remaining move should take.
         """
 
 

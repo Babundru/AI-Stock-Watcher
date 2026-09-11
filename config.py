@@ -146,9 +146,10 @@ BREAKEVEN_AT = 0.5
 LET_WINNERS_RUN = True
 TRAIL_AFTER_TARGET_MULT = 0.5
 
-# A trade is skipped when the move still expected is not at least this many
-# times the stop distance - i.e. when the news is not expected to move the
-# stock clearly more than it moves on an ordinary day anyway.
+# A trade is skipped when the story's expected move is not at least this
+# many times the stop distance - i.e. when the news is not expected to move
+# the stock clearly more than it moves on an ordinary day anyway. It is also
+# the least a position aims for: no target is set closer than this x the stop.
 MIN_REWARD_RISK = 1.2
 
 # --- STRATEGY: ENTRIES ---
@@ -156,23 +157,40 @@ MIN_REWARD_RISK = 1.2
 # below this are dropped before they notify or trade.
 MIN_CONFIDENCE = 60
 
-# Second AI pass for would-be trades only (a handful a day, not every
-# article): the model sees the article again together with the live price
-# context - how far the stock has already moved since the previous close and
-# since the article was published, and its normal daily range - and decides
-# whether a position opened *now* still has room to run. Ignored by the
-# keyword engine, which trades on the hard rules alone.
-AI_TRADE_CONFIRM = True
+# How far the stock has already moved on a story decides whether it is still
+# worth trading, measured in multiples of its normal daily range (14-day
+# ATR). "Moved" is the story's effect alone: from the price when it was
+# published - or from the previous close, for news that came out while the
+# market was shut - less the market's own move (PAPER_BENCHMARK) over the
+# same time. See strategy.plan_trade.
+#
+# A move the way the news points is the market agreeing with it - stocks
+# with real company news tend to keep drifting in its direction for days -
+# so it is no reason to stay out, up to a point: once the move is past both
+# EXHAUSTED_ATR_MULT daily ranges and the story's whole expected move, it is
+# spent, and chasing it is where reversals are likeliest.
+EXHAUSTED_ATR_MULT = 3.0
 
-# Hard "already priced in" rule, applied whatever the AI says: skip a trade
-# when the stock has already moved this fraction of the expected move in the
-# trade's direction. By the time a story reaches an RSS feed, the fast money
-# has often already traded it; buying at that point is buying the top.
-PRICED_IN_FRACTION = 0.5
+# A move the other way is the warning sign: the market reads the story
+# differently. Beyond this many daily ranges against it, the trade is skipped.
+AGAINST_NEWS_ATR_MULT = 0.5
+
+# Stories from sources marked "opinion" (X and Reddit by default, see
+# source_manager.py) can't be taken at their word, so the price has to have
+# confirmed them already: at least this many daily ranges the news's way.
+# News reporting needs no confirmation.
+CONFIRM_ATR_MULT = 0.5
 
 # Most positions open at once. Also a memory guard for the 1GB VM: every
 # open position is priced on every watch check (see price_lookup.MAX_BATCH).
 MAX_OPEN_POSITIONS = 20
+
+# Signals the entry rules turned down are followed as if they had been traded
+# (data/shadow_trades.json, see shadow_trades.py) - the only way to tell
+# whether a rule is keeping the app out of losers or out of winners. At most
+# this many are followed at once; they are priced alongside the real
+# positions on every watch check, so this is a memory bound too.
+MAX_SHADOW_POSITIONS = 20
 
 # --- SHORT SELLING ---
 # Whether negative news on a stock you don't own opens a SHORT position
@@ -353,7 +371,6 @@ USER_SETTINGS = {
     "STOP_ATR_MULT": _FLOAT,
     "LET_WINNERS_RUN": _BOOL,
     "MIN_CONFIDENCE": _INT,
-    "AI_TRADE_CONFIRM": _BOOL,
     "MAX_OPEN_POSITIONS": _INT,
     "ALLOW_SHORTS": _BOOL,
     "NOTIFY_SHORTS": _BOOL,

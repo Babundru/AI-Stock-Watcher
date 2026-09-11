@@ -14,6 +14,7 @@ import sys
 from config import (PAPER_COST_PCT, PAPER_BENCHMARK,
                     PAPER_START_CAPITAL, PAPER_POSITION_PCT)
 from paper_trader import PaperTrader
+from shadow_trades import RULE_LABELS, ShadowBook
 
 # Below this many closed trades, every figure in the report is noise: a run
 # of five lucky alerts looks identical to an edge. Stated up front rather
@@ -24,6 +25,22 @@ MIN_MEANINGFUL_TRADES = 30
 
 def pct(value, places=2):
     return "n/a" if value is None else f"{value * 100:+.{places}f}%"
+
+
+def print_skipped():
+    """Signals the entry rules turned down, followed as if traded
+    (shadow_trades.py), split by the rule that turned them down."""
+    summary = ShadowBook(cost_pct=PAPER_COST_PCT).summary()
+    if not summary['open'] and not summary['closed']:
+        return
+    print("\n  Skipped trades - signals the entry rules turned down, followed as if traded:")
+    print(f"    {summary['closed']} closed, {summary['open']} still being followed")
+    for rule, row in summary['by_rule'].items():
+        print(f"    {RULE_LABELS.get(rule, rule):<32} {row['trades']:>3} trades  "
+              f"{row['win_rate'] * 100:>5.1f}% win  {pct(row['expectancy'])} exp")
+    if summary['closed']:
+        print("    (a rule whose skipped trades show a positive expectancy is keeping\n"
+              "     the app out of winners - same small-sample caveat as above)")
 
 
 def main():
@@ -41,6 +58,7 @@ def main():
         else:
             print("Nothing recorded at all yet. The ledger fills up as alerts "
                   "fire; with the HIGH/CRITICAL filter that can be a slow drip.")
+        print_skipped()
         return
 
     n = stats['trades']
@@ -111,6 +129,8 @@ def main():
             print(f"    {when}  {t['direction']:<5} {t['ticker']:<6} "
                   f"{t['entry_price']:>9.2f} → {t['exit_price']:>9.2f}  "
                   f"{pct(t['net_pct']):>9}  {t['reason']}")
+
+    print_skipped()
 
     if '--stops' not in args and '--stop' not in args:
         print("\n  (--trades for the full list, --stops for the stop-loss study)")

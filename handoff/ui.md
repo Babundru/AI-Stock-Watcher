@@ -45,6 +45,7 @@ everything the desktop GUI has. Feature map, with the endpoint behind it:
 | Logs: AI-traffic filter, auto-scroll, clear | client-side only |
 | Portfolio: add / remove / clear all / live P/L per holding | `POST /api/portfolio`, `DELETE /api/portfolio/<t>`, `DELETE /api/portfolio`, `GET /api/portfolio/summary` |
 | Sources: add / toggle / remove / reset | `/api/sources...`, `POST /api/sources/reset` |
+| Sources: reporting / opinion chip per row (tap to flip) | `POST /api/sources/<id>/trust` |
 | Keywords: add / remove / reset, "inactive" banner | `/api/keywords...`, `POST /api/keywords/reset`, `GET /api/engine` (`ai_active`) |
 | Settings: ntfy topic, ownership tag, engine + provider/model/key/base URL, Ollama model/threads/URL, paper cost, dashboard login | `GET/POST /api/settings` |
 | Reload files edited by hand on the server | `POST /api/reload` |
@@ -72,6 +73,10 @@ stored one, `clear_api_key: true` removes the key.
   live value/profit in the hero card), `GET /api/portfolio/history` (heavier -
   drives the canvas chart, see `portfolio_and_notifications.md` for why
   it's split from `summary`).
+- Paper trading (`loadPaper`, on-demand): `GET /api/paper`, which also
+  carries `skipped` - the `shadow_trades.py` overview, rendered by
+  `renderSkipped` as a per-rule "Skipped trades" card under Closed trades.
+  No extra price call: its figures are from the last watch check.
 - Sources/Keywords tabs also load on-demand via their respective
   `GET /api/{sources,keywords}`.
 

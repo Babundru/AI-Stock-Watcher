@@ -144,9 +144,14 @@ class PaperTrader:
             # rules in force and by how confident the AI was.
             "strategy": watch.get('strategy', 'v1'),
             "confidence": watch.get('confidence'),
-            "ai_confirmed": watch.get('ai_confirmed'),
+            "source_trust": watch.get('source_trust'),
             "expected_move_pct": watch.get('expected_move_pct'),
+            # v3: the story's own move (net of the market) and whether it
+            # was measured from publication or the previous close. v2 stored
+            # the larger raw move of the two here.
             "already_moved_pct": watch.get('already_moved_pct'),
+            "moved_from": watch.get('moved_from'),
+            "market_move_pct": watch.get('market_move_pct'),
             "atr_pct": watch.get('atr_pct'),
             "stop_pct": watch.get('stop_pct'),
             "impact": watch.get('impact'),

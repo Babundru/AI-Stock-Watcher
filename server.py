@@ -39,7 +39,7 @@ from main import StockAppBackend
 from portfolio_manager import PortfolioManager
 from portfolio_history import compute_history
 from price_lookup import fetch_prices
-from source_manager import SourceManager
+from source_manager import SourceManager, source_trust
 import reddit_source
 from keyword_manager import KeywordManager
 
@@ -179,7 +179,7 @@ _SETTINGS_PUBLIC = (
     "USE_LOCAL_LLM", "LOCAL_MODEL_NAME", "OLLAMA_NUM_THREADS", "OLLAMA_URL",
     "PAPER_COST_PCT", "DASHBOARD_USERNAME",
     "ALLOW_SHORTS", "NOTIFY_SHORTS", "SHORT_MIN_IMPACT",
-    "MIN_CONFIDENCE", "AI_TRADE_CONFIRM", "LET_WINNERS_RUN",
+    "MIN_CONFIDENCE", "LET_WINNERS_RUN",
     "MAX_OPEN_POSITIONS", "STOP_ATR_MULT",
     "REDDIT_COMMENTS_PER_POST", "REDDIT_COMMENT_DELAY_MIN", "REDDIT_CAN_TRADE",
 )
@@ -456,11 +456,16 @@ def api_paper():
     paper = backend.paper
     tickers = paper.tickers_open()
     prices = fetch_prices(tickers) if tickers else {}
-    return jsonify(paper.overview(
+    data = paper.overview(
         prices,
         start_capital=config.PAPER_START_CAPITAL,
         position_pct=config.PAPER_POSITION_PCT,
-    ))
+    )
+    # Signals the entry rules turned down, followed as if traded - shown
+    # beside the record, never mixed into it (shadow_trades.py). Marked at
+    # the last watch check's prices, so this costs no extra price call.
+    data["skipped"] = backend.shadows.overview() if backend.shadows else None
+    return jsonify(data)
 
 
 @app.route("/api/watches")
@@ -484,6 +489,7 @@ def _sources_payload():
     out = []
     for source in source_mgr.get_sources():
         source = dict(source)
+        source["trust"] = source_trust(source)
         if source.get("type") == "reddit":
             subreddit = reddit_source.parse_subreddit(source.get("url"), bare_ok=True) or ""
             source["waiting"] = waiting.get(subreddit.lower(), 0)
@@ -496,9 +502,27 @@ def api_sources():
     if request.method == "POST":
         body = request.get_json(silent=True) or {}
         try:
-            source_mgr.add_source(body.get("name", ""), body.get("url", ""), body.get("type", "webpage"))
+            source_mgr.add_source(body.get("name", ""), body.get("url", ""), body.get("type", "webpage"),
+                                  body.get("trust") or None)
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
+    return jsonify(_sources_payload())
+
+
+@app.route("/api/sources/<source_id>/trust", methods=["POST"])
+def api_sources_trust(source_id):
+    """Mark a source as news reporting or opinion. POST {"trust": "opinion"}.
+
+    A story from an opinion source only trades once the price has confirmed
+    it (strategy.plan_trade). The collector shares this manager, so the
+    change applies from the next scan.
+    """
+    trust = (request.get_json(silent=True) or {}).get("trust")
+    try:
+        if not source_mgr.set_trust(source_id, trust):
+            return jsonify({"error": "no such source"}), 404
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     return jsonify(_sources_payload())
 
 

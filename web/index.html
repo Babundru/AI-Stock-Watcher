@@ -224,6 +224,9 @@
   .chip.cover { background: var(--info-soft); color: var(--info); }
   .chip.sm { height: 20px; padding: 0 7px; font-size: 10px; }
   .chip.owned { background: var(--info-soft); color: var(--info); }
+  /* Source trust: a tappable chip on each source row. */
+  .chip.opinion { background: var(--warn-soft); color: var(--warn); }
+  button.chip { border: 0; cursor: pointer; font-family: inherit; }
   .tag {
     display: inline-flex; align-items: center; height: 24px; padding: 0 9px; border-radius: 8px;
     background: var(--surface-2); color: var(--text-2); font-size: 11.5px; font-weight: 600; white-space: nowrap;
@@ -694,6 +697,11 @@
             <div class="card-title">Closed trades <span class="sub">the record, after <span id="pp-cost">0.20%</span> costs</span></div>
             <div class="rows" id="pp-closed-body"></div>
           </div>
+          <div class="card flush" id="pp-skip-card" style="display:none;">
+            <div class="card-title">Skipped trades <span class="sub" id="pp-skip-sub"></span></div>
+            <div class="hint" style="padding:0 16px 8px;">Signals the entry rules turned down, followed as if they had been traded. A rule whose skipped trades would have made money is keeping the app out of winners.</div>
+            <div class="rows" id="pp-skip-body"></div>
+          </div>
         </div>
       </section>
 
@@ -728,7 +736,7 @@
             </select>
             <button class="btn primary" id="src-add" style="height:44px">Add</button>
           </div>
-          <div class="hint">Twitter/X profile links are converted to a Nitter mirror automatically. For Reddit, add a subreddit (<code>r/stocks</code>): each post is analysed together with its top comments once they've had time to arrive — 30 minutes by default, see Settings.</div>
+          <div class="hint">Twitter/X profile links are converted to a Nitter mirror automatically. For Reddit, add a subreddit (<code>r/stocks</code>): each post is analysed together with its top comments once they've had time to arrive — 30 minutes by default, see Settings. X and Reddit sources start out marked <b>Opinion</b>: their stories only trade once the price has confirmed them. Tap a source's label to change it.</div>
         </details>
         <div class="card flush">
           <div class="card-title">Sources <span class="sub" id="src-count"></span>
@@ -821,8 +829,6 @@
         <div class="card">
           <div class="card-title">Trading strategy</div>
           <div class="form-grid">
-            <label class="check-row"><span class="txt">AI trade check<small>Before opening a position, ask the AI again with the live price action, so news the market has already priced in is skipped.</small></span>
-              <span class="switch"><input type="checkbox" id="st-confirm"><span class="track"></span></span></label>
             <label class="check-row"><span class="txt">Let winners run<small>At the target, trail the stop close behind the price instead of selling.</small></span>
               <span class="switch"><input type="checkbox" id="st-let-run"><span class="track"></span></span></label>
           </div>
@@ -1582,6 +1588,8 @@ async function loadPaper() {
     </div>`;
   }).join('') : '<div class="empty">No closed trades yet.</div>';
 
+  renderSkipped(d.skipped);
+
   // Equity curve.
   const card = $('#pp-chart-card');
   if (s && s.equity_curve && s.equity_curve.length > 1) {
@@ -1593,6 +1601,32 @@ async function loadPaper() {
   } else {
     card.style.display = 'none';
   }
+}
+
+// Signals the entry rules turned down, followed as if traded, split by the
+// rule that turned them down (shadow_trades.py). A rule whose skipped
+// trades would have made money is keeping the app out of winners.
+const SKIP_RULES = {against: 'Moved against the news', exhausted: 'Move already spent',
+  unconfirmed: 'Opinion source, unconfirmed', capped: 'Price capped by the news',
+  reward_risk: 'Story too small for the stock'};
+function renderSkipped(k) {
+  const card = $('#pp-skip-card');
+  if (!k) { card.style.display = 'none'; return; }
+  card.style.display = 'block';
+  const s = k.summary || {};
+  $('#pp-skip-sub').textContent = `${s.closed || 0} closed · ${s.open || 0} followed`;
+  const rules = Object.entries(s.by_rule || {});
+  $('#pp-skip-body').innerHTML = rules.length ? rules.map(([rule, r]) => `<div class="row-item">
+      <div class="row-main">
+        <div class="row-title"><span class="name">${esc(SKIP_RULES[rule] || rule)}</span></div>
+        <div class="row-sub">${r.trades} closed · ${(r.win_rate * 100).toFixed(0)}% would have won</div>
+      </div>
+      <div class="row-end">
+        <div class="v ${pctClass(r.expectancy)}">${pctText(r.expectancy)}</div>
+        <div class="s">per trade</div>
+      </div>
+    </div>`).join('')
+    : `<div class="empty">${s.open ? `None closed yet — ${s.open} being followed.` : 'Nothing skipped yet.'}</div>`;
 }
 
 function drawPaperChart(curve) {
@@ -1754,7 +1788,7 @@ async function loadSources() {
     <div class="row-item">
       <span class="avatar">${icon(SRC_ICON[s.type] || 'globe')}</span>
       <div class="row-main">
-        <div class="row-title"><span class="name">${esc(s.name)}</span></div>
+        <div class="row-title"><span class="name">${esc(s.name)}</span>${trustChip(s)}</div>
         <div class="row-sub">${esc(s.type)}${s.waiting ? ` · ${s.waiting} waiting for comments` : ''} · ${esc(s.url)}</div>
       </div>
       <div class="row-actions">
@@ -1771,6 +1805,21 @@ async function loadSources() {
     await fetch('/api/sources/' + b.dataset.del, {method: 'DELETE'});
     loadSources();
   }));
+  list.querySelectorAll('[data-trust]').forEach(b => b.addEventListener('click', async () => {
+    await fetch('/api/sources/' + b.dataset.trust + '/trust', {method: 'POST',
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify({trust: b.dataset.next})});
+    loadSources();
+  }));
+}
+// Reporting trades on the price rules alone; opinion (X and Reddit by
+// default) waits for the price to confirm the story. Tapping flips it.
+function trustChip(s) {
+  const opinion = s.trust === 'opinion';
+  const title = opinion
+    ? 'Opinion: its stories only trade once the price has confirmed them. Tap to mark it as reporting.'
+    : 'Reporting: its stories trade on the price rules alone. Tap to mark it as opinion.';
+  return `<button class="chip sm ${opinion ? 'opinion' : 'reporting'}" data-trust="${esc(s.id)}"
+    data-next="${opinion ? 'reporting' : 'opinion'}" title="${title}" aria-label="${esc(s.name)}: ${opinion ? 'opinion' : 'reporting'}. Tap to change.">${opinion ? 'Opinion' : 'Reporting'}</button>`;
 }
 $('#src-add').addEventListener('click', async () => {
   const name = $('#src-name').value.trim();
@@ -1877,7 +1926,6 @@ function renderSettings(s) {
   $('#st-cost').value = ((s.PAPER_COST_PCT || 0) * 100).toFixed(2);
 
   $('#st-min-conf').value = s.MIN_CONFIDENCE ?? 60;
-  $('#st-confirm').checked = !!s.AI_TRADE_CONFIRM;
   $('#st-let-run').checked = !!s.LET_WINNERS_RUN;
   $('#st-atr-mult').value = s.STOP_ATR_MULT ?? 1.5;
   $('#st-max-pos').value = s.MAX_OPEN_POSITIONS ?? 20;
@@ -1935,7 +1983,6 @@ $('#st-save').addEventListener('click', async () => {
     OLLAMA_URL: $('#st-ollama-url').value.trim(),
     PAPER_COST_PCT: cost / 100,
     MIN_CONFIDENCE: minConf,
-    AI_TRADE_CONFIRM: $('#st-confirm').checked,
     LET_WINNERS_RUN: $('#st-let-run').checked,
     STOP_ATR_MULT: atrMult,
     MAX_OPEN_POSITIONS: maxPos,

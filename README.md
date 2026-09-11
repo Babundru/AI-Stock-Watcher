@@ -386,8 +386,11 @@ Edit `config.py`:
 | `STOP_ATR_MULT` | `1.5` | Stop distance in multiples of the stock's normal daily range |
 | `LET_WINNERS_RUN` | `True` | At the target, trail the stop instead of selling |
 | `MIN_CONFIDENCE` | `60` | Lowest AI confidence (0-100) that still alerts or trades |
-| `AI_TRADE_CONFIRM` | `True` | Ask the AI again, with live price action, before opening a position |
+| `EXHAUSTED_ATR_MULT` | `3.0` | Skip a trade once the story has moved the stock this many normal daily ranges *and* past its whole expected move - too late to chase |
+| `AGAINST_NEWS_ATR_MULT` | `0.5` | Skip it when the stock has moved this many daily ranges against the news |
+| `CONFIRM_ATR_MULT` | `0.5` | How far the price must confirm a story from an opinion source (X, Reddit) before it trades |
 | `MAX_OPEN_POSITIONS` | `20` | Most positions open at once (also bounds the watch check's memory) |
+| `MAX_SHADOW_POSITIONS` | `20` | Skipped trades followed at once, to judge the entry rules |
 | `ALLOW_SHORTS` | `True` | Open (and paper-trade) short positions on negative news |
 | `NOTIFY_SHORTS` | `True` | Phone notifications for short setups and their buy-back signals |
 | `SHORT_MIN_IMPACT` | `CRITICAL` | Weakest impact that may open a short |

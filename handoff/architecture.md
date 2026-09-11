@@ -32,13 +32,15 @@ Runs in a daemon thread, started by `.start()`. Every `CHECK_INTERVAL`
    alert if POSITIVE/NEGATIVE + impact at least
    `MIN_IMPACT` + not FLAT + confidence at least `MIN_CONFIDENCE` + new,
    company-specific news -> close any open position the news contradicts
-   -> `_decide_trade` (short settings, price context, priced-in and
-   reward/risk rules, AI trade confirmation) opens a watch (LONG for
-   POSITIVE, SHORT for NEGATIVE) or records why not -> notify
+   -> `_decide_trade` (short settings, price context, the price rules in
+   `strategy.plan_trade`) opens a watch (LONG for POSITIVE, SHORT for
+   NEGATIVE), or records why not and follows the refused signal as a
+   skipped trade (`shadow_trades.py`) -> notify
 5. Every `WATCH_CHECK_INTERVAL` (5 min): `_check_watches` prices every
-   open watch, ratchets its stop and closes+notifies any whose stop,
-   target or time exit fired (see `strategy.py` and
-   `portfolio_and_notifications.md`), then calls `_release_memory()`
+   open watch and skipped trade in one call, ratchets their stops and
+   closes any whose stop, target or time exit fired - notifying for
+   watches only (see `strategy.py` and `portfolio_and_notifications.md`),
+   then calls `_release_memory()`
 6. `_release_memory()` (`gc.collect()` + glibc `malloc_trim(0)`), then
    logs `💾 Memory in use: N MB` (RSS from `/proc/self/statm`,
    silently skipped off Linux). **This line is the first thing to check if
@@ -79,6 +81,9 @@ main.py              StockAppBackend - the scan loop, orchestrates everything be
 ├── notifier.py            ntfy.sh push notifications + US market-hours check
 ├── portfolio_manager.py  Holdings (data/portfolio.json)
 ├── watch_manager.py       Long/short exit watches opened after an alert (data/watches.json)
+├── strategy.py            Entry and exit rules, pure functions (plan_trade, update_exit)
+├── paper_trader.py        Paper-trading ledger of every watch's round trip (data/paper_trades.json)
+├── shadow_trades.py       Skipped trades: refused signals followed as if traded (data/shadow_trades.json)
 ├── price_lookup.py        Batched yfinance quote lookup, shared by watch-checking + portfolio summary
 └── portfolio_history.py  Reconstructs daily portfolio value history via yfinance (server.py only)
 
@@ -114,6 +119,8 @@ tickers/sources/keywords/watches, single-process access).
 | `data/settings.json` | `config.py` (read-only there) | No - secrets |
 | `data/portfolio.json` | `portfolio_manager.py` | No - personal holdings |
 | `data/watches.json` | `watch_manager.py` | No - personal |
+| `data/paper_trades.json` | `paper_trader.py` | No - personal, never trimmed |
+| `data/shadow_trades.json` | `shadow_trades.py` | No - runtime, newest 1000 closed |
 | `data/processed_urls.json` | `main.py` directly | No - runtime cache |
 | `data/stats.json` | `main.py` directly | No - runtime counters |
 | `data/keywords.json` | `keyword_manager.py` | Yes - just tuning, no secrets |

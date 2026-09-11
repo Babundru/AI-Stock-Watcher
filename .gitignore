@@ -24,6 +24,7 @@ data/settings.json
 data/watches.json
 data/stats.json
 data/paper_trades.json
+data/shadow_trades.json
 data/reddit_state.json
 
 # Environments / tooling

@@ -8,8 +8,8 @@ from urllib.parse import urlparse
 from bs4 import BeautifulSoup, SoupStrainer, XMLParsedAsHTMLWarning
 import warnings
 from concurrent.futures import ThreadPoolExecutor
-from source_manager import SourceManager
-from reddit_source import RedditPoller, is_reddit_url
+from source_manager import SourceManager, source_trust, OPINION
+from reddit_source import RedditPoller, is_reddit_url, parse_subreddit
 from config import LOOKBACK_MINUTES
 import feedparser
 
@@ -312,14 +312,20 @@ class NewsCollector:
             try:
                 print(f"Scraping {source_name}...")
                 if source_type == 'twitter' or self._is_nitter_url(source_url):
-                    return self._fetch_from_nitter(source_url, source_name)
+                    articles = self._fetch_from_nitter(source_url, source_name)
                 elif source_type == 'rss' or self._is_rss_feed(source_url):
-                    return self._fetch_from_rss(source_url, source_name)
+                    articles = self._fetch_from_rss(source_url, source_name)
                 else:
-                    return self._fetch_from_webpage(source_url, source_name)
+                    articles = self._fetch_from_webpage(source_url, source_name)
             except Exception as e:
                 print(f"Error fetching from {source_name}: {e}")
                 return []
+            # Carried to the trade decision: a story from an opinion source
+            # only trades once the price has confirmed it.
+            trust = source_trust(source)
+            for article in articles:
+                article['trust'] = trust
+            return articles
 
         # Reddit sources go to the poller as a group - they share one request
         # budget - and it runs alongside the others as one more job.
@@ -333,9 +339,18 @@ class NewsCollector:
                 all_articles.extend(articles)
             if reddit_job:
                 try:
-                    all_articles.extend(reddit_job.result())
+                    posts = reddit_job.result()
                 except Exception as e:
                     print(f"Error polling Reddit: {e}")
+                    posts = []
+                # The poller serves every subreddit at once; each post takes
+                # its own subreddit's trust setting ("Reddit/r/<sub>").
+                trust = {(parse_subreddit(s.get('url'), bare_ok=True) or '').lower(): source_trust(s)
+                         for s in reddit}
+                for post in posts:
+                    sub = (post.get('source') or '').split('/r/', 1)[-1].lower()
+                    post['trust'] = trust.get(sub, OPINION)
+                all_articles.extend(posts)
 
         print(f"Collected {len(all_articles)} articles from custom sources.")
         return all_articles

@@ -63,6 +63,22 @@ A source is auto-classified by URL shape when added
   `REDDIT_CAN_TRADE` is on. Throughput is roughly 40-50 analysed posts an
   hour in total, whatever the number of subreddits.
 
+## Source trust: reporting or opinion (`source_manager.py`)
+
+Every custom source has `trust`, `reporting` or `opinion`
+(`TRUST_LEVELS`). Twitter/X and Reddit sources start as opinion,
+everything else as reporting; a source saved before the field existed gets
+its type's default (`source_trust`). `fetch_from_custom_sources` tags each
+article with its source's trust - a Reddit post with its own subreddit's -
+and `article_trust()` falls back on the `source` prefix for untagged ones
+(the built-in feeds are reporting). An alert from an opinion source only
+trades once the price has confirmed it (`strategy.plan_trade`'s
+`unconfirmed` rule, see `portfolio_and_notifications.md`); Reddit also
+still needs `REDDIT_CAN_TRADE`. Platform isn't the whole story - some X
+accounts are headline wires, and Seeking Alpha's feed is partly contributor
+opinion - so it's set per source: the chip on each dashboard source row
+(`POST /api/sources/<id>/trust`) or the button in the desktop Sources tab.
+
 ## Scraping mechanics (`news_collector.py`)
 
 - One shared `requests.Session()` with browser-like headers

@@ -5,13 +5,29 @@ read (and tested) in one place. main.py gathers the inputs (the analysis,
 the price context from price_lookup.fetch_context, live prices) and acts on
 what these return; watch_manager.py stores the resulting state per position.
 
-Entry - a signal only becomes a trade when there is still a move ahead:
+Entry - a signal becomes a trade unless the price says otherwise. "Moved"
+below is this story's effect alone (see news_move), in multiples of the
+stock's normal daily range (14-day ATR):
 
-  * Already priced in: skip when the stock has already moved
-    PRICED_IN_FRACTION of the expected move in the trade's direction, since
-    the previous close or since the article was published.
+  * Against the news: skip when the stock has moved against the story by
+    more than AGAINST_NEWS_ATR_MULT daily ranges - the market reads it
+    differently.
+  * Exhausted: skip when it has already moved with the story past both
+    EXHAUSTED_ATR_MULT daily ranges and the whole expected move - the move
+    is spent, and chasing it is where reversals are likeliest. Anything
+    short of that is the market agreeing with the news, not a reason to
+    stay out: stocks with real company news tend to keep drifting the way
+    the news points.
+  * Unconfirmed: a story from an opinion source (X, Reddit - see
+    source_manager.article_trust) needs the price to have confirmed it
+    already, by at least CONFIRM_ATR_MULT daily ranges its way.
+  * Capped: the news pins the stock to a set price (a cash takeover's
+    target), so there is nothing left to ride.
   * Reward vs risk: the stop is sized to the stock's volatility, and the
-    move still expected has to be at least MIN_REWARD_RISK x that stop.
+    story's expected move has to be at least MIN_REWARD_RISK x that stop.
+
+A refused signal is still followed as if it had been traded
+(shadow_trades.py), so each rule's refusals can be judged.
 
 Exit - checked on every watch pass, first match wins:
 
@@ -35,8 +51,11 @@ import config
 
 # Recorded on every watch and paper trade, so the ledger can compare rule
 # sets instead of blending trades made under different ones.
-STRATEGY_VERSION = "v2"
+STRATEGY_VERSION = "v3"
 LEGACY_STRATEGY = "v1"
+
+# Normal daily range assumed for a stock whose ATR couldn't be worked out.
+FALLBACK_ATR_PCT = 0.02
 
 LONG = "LONG"
 SHORT = "SHORT"
@@ -156,63 +175,105 @@ def stop_pct_for(atr_pct):
 
 # --- entry -----------------------------------------------------------------
 
-def already_moved(direction, context):
-    """How far the stock has already gone in the trade's direction, as a
-    fraction - the larger of the move since the previous regular close and
-    the move since the article was published. None without price data.
+def news_move(direction, context):
+    """How far this story has moved the stock so far, in the trade's
+    direction and net of the market: a fraction, positive when the price has
+    gone the way the news points. None without price data.
 
-    Both matter: news released after the close shows up against the close,
-    while news breaking mid-session can be hidden in a day that was already
-    down, and only shows against the price at publication.
+    Returns {'pct', 'from', 'market_pct'}: 'from' is 'publish' or 'close',
+    'market_pct' the benchmark's raw move over the same window (None when it
+    couldn't be priced - then nothing is subtracted).
+
+    News that came out during the regular session is measured from the price
+    at publication, so a day that was already up or down for other reasons
+    isn't counted as the story's doing. News that came out while the market
+    was shut is measured from the previous close: its reaction happens in
+    thin pre/after-hours trading and at the open, often ahead of the feed's
+    timestamp, so the gap against the close is the reaction.
     """
-    if not context:
+    ctx = context or {}
+    if ctx.get('published_in_session') and ctx.get('change_since_publish_pct') is not None:
+        stock, market, since = (ctx['change_since_publish_pct'],
+                                ctx.get('market_since_publish_pct'), 'publish')
+    elif ctx.get('change_since_close_pct') is not None:
+        stock, market, since = (ctx['change_since_close_pct'],
+                                ctx.get('market_since_close_pct'), 'close')
+    else:
         return None
-    moves = [context.get('change_since_close_pct'), context.get('change_since_publish_pct')]
-    moves = [m for m in moves if m is not None]
-    if not moves:
-        return None
-    sign = -1 if direction == SHORT else 1
-    return max(sign * m for m in moves)
+    move = stock - (market or 0.0)
+    return {'pct': -move if direction == SHORT else move, 'from': since, 'market_pct': market}
 
 
-def plan_trade(direction, impact, expected_pct, context, remaining_pct=None):
-    """Decide whether a signal still has room to run, and size its exits.
+def plan_trade(direction, impact, expected_pct, context, needs_confirmation=False, capped=False):
+    """Decide whether a signal is worth trading now, and size its exits.
 
     `expected_pct` is the analysis's expected total move (a fraction, or None
-    to fall back to the impact bucket). `remaining_pct`, when the AI trade
-    confirmation supplied one, is its estimate of the move still ahead and
-    sets the target instead - but the hard priced-in rule is always checked
-    against the first-pass expectation, whatever the second pass says.
+    to fall back to the impact bucket). `needs_confirmation` is set for a
+    story from an opinion source, `capped` when the analysis says the news
+    pins the stock to a set price.
 
-    Returns a dict with 'ok' and 'reason', plus the sizing when ok.
+    Returns a dict with 'ok'; when not ok, the 'rule' that refused it and a
+    readable 'reason'. The sizing is filled in either way, so a refused
+    signal can still be followed as a skipped trade (shadow_trades.py).
     """
     atr = (context or {}).get('atr_pct')
+    daily = atr or FALLBACK_ATR_PCT
     expected = expected_pct or TARGET_PCT.get(impact, DEFAULT_TARGET_PCT)
-    moved = already_moved(direction, context)
+    move = news_move(direction, context)
+    moved = move['pct'] if move else None
+    stop = stop_pct_for(atr)
+    # Whatever the expected move still has to go - but never less than the
+    # reward the entry rule asks for. A stock already past the AI's estimate
+    # is more likely the estimate being low than the move being over, and
+    # with LET_WINNERS_RUN the target is where the stop starts trailing
+    # closely, not an exit.
+    remaining = expected - max(moved or 0.0, 0.0)
+    target = _clamp(max(remaining, config.MIN_REWARD_RISK * stop), TARGET_MIN_PCT, TARGET_MAX_PCT)
     plan = {
         'ok': False,
+        'rule': None,
         'reason': None,
         'expected_move_pct': round(expected, 6),
         'already_moved_pct': round(moved, 6) if moved is not None else None,
+        'moved_from': move['from'] if move else None,
+        'market_move_pct': round(move['market_pct'], 6) if move and move['market_pct'] is not None else None,
         'atr_pct': round(atr, 6) if atr else None,
+        'stop_pct': round(stop, 6),
+        'target_pct': round(target, 6),
     }
 
-    if moved is not None and moved >= config.PRICED_IN_FRACTION * expected:
-        plan['reason'] = (f"already priced in - moved {moved * 100:+.1f}% of an "
-                          f"expected {expected * 100:.1f}%")
+    def skip(rule, reason):
+        plan['rule'] = rule
+        plan['reason'] = reason
         return plan
 
-    remaining = remaining_pct if remaining_pct else expected - max(moved or 0.0, 0.0)
-    stop = stop_pct_for(atr)
-    target = _clamp(remaining, TARGET_MIN_PCT, TARGET_MAX_PCT)
-    plan['stop_pct'] = round(stop, 6)
-    plan['target_pct'] = round(target, 6)
+    if capped:
+        return skip('capped', "the news pins the stock to a set price (a cash takeover, say) - "
+                              "nothing left to ride")
+    if moved is None:
+        if needs_confirmation:
+            return skip('unconfirmed', "opinion source, and no price data to confirm it")
+    else:
+        unit = "its normal daily range" if atr else f"a typical {daily * 100:.0f}% daily range"
+        if moved <= -config.AGAINST_NEWS_ATR_MULT * daily:
+            return skip('against', f"moved {abs(moved) * 100:.1f}% against the news "
+                                   f"({abs(moved) / daily:.1f}x {unit}) - the market reads it differently")
+        # Both, so a big story on a calm stock isn't called spent after a
+        # few ordinary days' range, nor a small one on a jumpy stock after
+        # less than one.
+        if moved >= max(config.EXHAUSTED_ATR_MULT * daily, expected):
+            return skip('exhausted', f"already moved {moved * 100:.1f}% on the news - past the "
+                                     f"{expected * 100:.1f}% expected and {moved / daily:.1f}x {unit}; "
+                                     f"too late to chase")
+        need = config.CONFIRM_ATR_MULT * daily
+        if needs_confirmation and moved < need:
+            return skip('unconfirmed', f"opinion source, and the price hasn't confirmed it: "
+                                       f"{moved * 100:+.1f}% the news's way so far, needs {need * 100:.1f}%")
 
-    if target < config.MIN_REWARD_RISK * stop:
-        daily = f" (normal daily range {atr * 100:.1f}%)" if atr else ""
-        plan['reason'] = (f"move left ({target * 100:.1f}%) too small for the "
-                          f"{stop * 100:.1f}% stop this stock needs{daily}")
-        return plan
+    if expected < config.MIN_REWARD_RISK * stop:
+        daily_note = f" (normal daily range {atr * 100:.1f}%)" if atr else ""
+        return skip('reward_risk', f"expected move ({expected * 100:.1f}%) too small for the "
+                                   f"{stop * 100:.1f}% stop this stock needs{daily_note}")
 
     plan['ok'] = True
     return plan

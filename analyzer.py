@@ -1,6 +1,5 @@
 import config
-from llm_prompts import (AnalysisUnavailable, build_market_prompt, build_trade_prompt,
-                         parse_json_response)
+from llm_prompts import AnalysisUnavailable, build_market_prompt, parse_json_response
 import requests
 
 class MarketAnalyzer:
@@ -49,19 +48,6 @@ class MarketAnalyzer:
             return None
 
         return data
-
-    def confirm_trade(self, article, analysis, context, direction):
-        """Second pass for a would-be trade, with live price context (see
-        llm_prompts.build_trade_prompt). Returns the parsed dict, or None if
-        the model could not be reached or answered with something unusable."""
-        if not self.use_local:
-            return None
-        prompt = build_trade_prompt(article, analysis, context, direction)
-        try:
-            return parse_json_response(self._analyze_local(prompt))
-        except Exception as e:
-            print(f"Error confirming trade: {e}")
-            return None
 
     def _analyze_local(self, prompt):
         """

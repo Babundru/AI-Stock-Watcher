@@ -13,6 +13,7 @@ Stocks Watcher application.
 | `reddit_state.json` | Reddit posts already seen, and posts waiting for their comments before analysis | No — runtime state |
 | `stats.json` | Running counters: articles scanned, alerts (notifications) sent, skipped | No — runtime state |
 | `paper_trades.json` | Track record: entry/exit price and profit or loss of every alert | No — runtime state |
+| `shadow_trades.json` | Skipped trades: signals the entry rules turned down, followed as if traded, to judge each rule. Keeps the newest 1000 closed | No — runtime state |
 | `keywords.json` | Scoring keywords with weights (~200 by default) | Yes |
 | `news_sources.json` | Your custom news sources | Yes |
 

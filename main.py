@@ -12,6 +12,8 @@ from ollama_manager import OllamaManager
 from portfolio_manager import PortfolioManager
 from watch_manager import WatchManager
 from paper_trader import PaperTrader
+from shadow_trades import ShadowBook
+from source_manager import article_trust, OPINION
 import price_lookup
 import reddit_source
 import strategy
@@ -108,6 +110,10 @@ class StockAppBackend:
         # app behaves - see paper_trader.py.
         self.paper = PaperTrader(cost_pct=PAPER_COST_PCT,
                                  benchmark=PAPER_BENCHMARK) if PAPER_TRADING else None
+        # Signals the entry rules refused, followed as if they had been
+        # traded, so the rules themselves can be judged - see
+        # shadow_trades.py. Part of the paper record, so the same switch.
+        self.shadows = ShadowBook(cost_pct=PAPER_COST_PCT) if PAPER_TRADING else None
         self._last_watch_check = 0
         self.processed_urls_file = 'data/processed_urls.json'
         # Oldest processed URLs are forgotten past this. Was 120: Reddit
@@ -182,6 +188,8 @@ class StockAppBackend:
         self.notifier.apply_settings()
         if self.paper:
             self.paper.cost_pct = config.PAPER_COST_PCT
+        if self.shadows:
+            self.shadows.cost_pct = config.PAPER_COST_PCT
         self.log(f"Settings applied: engine = {self.engine_description()}")
 
     def _load_processed_urls(self):
@@ -621,11 +629,12 @@ class StockAppBackend:
                       expected_pct, confidence, analysis, article, url, title):
         """Turn an alert into a position, or say why not.
 
-        Cheapest checks first: the price context and the AI trade check each
-        cost a request, so they only run for alerts that could still become
-        a trade. Returns a dict - 'opened', 'reason', and when the trade was
-        at least sized, its entry/target/stop (a short that is notified but
-        not paper-traded still shows its setup in the notification).
+        Cheapest checks first: the price context costs a few requests, so it
+        only runs for alerts that could still become a trade. Returns a dict
+        - 'opened', 'reason', and when the trade was at least sized, its
+        entry/target/stop (a short that is notified but not paper-traded
+        still shows its setup in the notification). A signal the price rules
+        refuse is followed as a skipped trade (shadow_trades.py).
         """
         decision = {'opened': False, 'direction': direction, 'reason': None, 'watch': None}
 
@@ -649,43 +658,20 @@ class StockAppBackend:
             return no(f"position limit reached ({config.MAX_OPEN_POSITIONS} open)")
 
         self.status(f"Checking price action: {ticker}")
-        context = price_lookup.fetch_context(ticker, article.get('published_ts'))
+        context = price_lookup.fetch_context(ticker, article.get('published_ts'),
+                                             benchmark=PAPER_BENCHMARK)
         self.log(f"   📈 {_describe_context(context)}")
-        plan = strategy.plan_trade(direction, impact, expected_pct, context)
-        if not plan['ok']:
-            return no(plan['reason'])
-
+        trust = article_trust(article)
         horizon = analysis.get('horizon')
-        ai_confirmed = None
-        if config.AI_TRADE_CONFIRM and hasattr(self.analyzer, 'confirm_trade'):
-            self.status(f"AI trade check: {ticker}")
-            verdict = self.analyzer.confirm_trade(article, analysis, context, direction)
-            if not verdict:
-                # A provider hiccup shouldn't silently stop all trading; the
-                # hard rules above have already passed.
-                self.log("   (AI trade check unavailable - deciding on the rules alone)")
-            else:
-                take = strategy.parse_flag(verdict.get('take_trade'))
-                v_conf = strategy.parse_confidence(verdict.get('confidence'))
-                self.log(f"   🤖 Bull case: {verdict.get('bull_case')}")
-                self.log(f"   🤖 Bear case: {verdict.get('bear_case')}")
-                self.log(f"   🤖 Verdict: {'take it' if take else 'pass'} "
-                         f"(confidence {_fmt(v_conf)}) - {verdict.get('reason')}")
-                if take is not True:
-                    return no(f"AI trade check passed on it - {verdict.get('reason') or 'no edge left'}")
-                if v_conf is not None and v_conf < config.MIN_CONFIDENCE:
-                    return no(f"AI trade check confidence {v_conf} is below {config.MIN_CONFIDENCE}")
-                ai_confirmed = True
-                if v_conf is not None:
-                    confidence = v_conf
-                remaining = strategy.parse_pct(verdict.get('expected_remaining_move_pct'))
-                if remaining:
-                    plan = strategy.plan_trade(direction, impact, expected_pct, context,
-                                               remaining_pct=remaining)
-                    if not plan['ok']:
-                        return no(plan['reason'])
-                if (verdict.get('horizon') or '').upper() in strategy.HORIZON_TRADING_DAYS:
-                    horizon = verdict['horizon'].upper()
+        plan = strategy.plan_trade(
+            direction, impact, expected_pct, context,
+            needs_confirmation=trust == OPINION,
+            capped=strategy.parse_flag(analysis.get('value_is_capped')) is True)
+        if not plan['ok']:
+            if tracked:
+                self._follow_skipped(ticker, company, direction, impact, horizon, confidence,
+                                     trust, title, url, context, plan)
+            return no(plan['reason'])
 
         # Entry priced the same way every watch check prices it, with the
         # benchmark riding along in the same batched call.
@@ -712,9 +698,11 @@ class StockAppBackend:
             target_pct=plan['target_pct'], stop_pct=plan['stop_pct'],
             extra={
                 'confidence': confidence,
-                'ai_confirmed': ai_confirmed,
+                'source_trust': trust,
                 'expected_move_pct': plan['expected_move_pct'],
                 'already_moved_pct': plan['already_moved_pct'],
+                'moved_from': plan['moved_from'],
+                'market_move_pct': plan['market_move_pct'],
                 'atr_pct': plan['atr_pct'],
             },
         )
@@ -724,6 +712,25 @@ class StockAppBackend:
             self.paper.open_trade(watch, prices.get(PAPER_BENCHMARK))
         decision.update(opened=True, watch=watch, expires_at=watch['expires_at'])
         return decision
+
+    def _follow_skipped(self, ticker, company, direction, impact, horizon, confidence,
+                        trust, title, url, context, plan):
+        """Follow a signal the entry rules refused as if it had been traded,
+        so the rule that refused it can be judged later (shadow_trades.py).
+        Never notified."""
+        if not self.shadows:
+            return
+        ctx = context or {}
+        record = self.shadows.track(
+            ticker, company, direction, ctx.get('price'), plan,
+            horizon=horizon, impact=impact, confidence=confidence, source_trust=trust,
+            headline=title, url=url, benchmark_price=ctx.get('market_price'))
+        if record:
+            self.log(f"   👻 Following it as a skipped trade ({plan['rule']}) to see "
+                     f"whether the rule was right")
+        elif self.shadows.is_full():
+            self.log(f"   (not followed as a skipped trade - {config.MAX_SHADOW_POSITIONS} "
+                     f"already are)")
 
     def _close_on_reversal(self, ticker, direction):
         """Close an open position in `ticker` facing the other way from new
@@ -789,21 +796,23 @@ class StockAppBackend:
     def _check_watches(self):
         """Check every open watch's current price against its exits and close
         + notify any that fire - a sell signal for longs, a buy-back signal
-        for shorts. The rules are in strategy.py."""
+        for shorts. Skipped trades (shadow_trades.py) go through the same
+        exits in the same pass, silently. The rules are in strategy.py."""
         open_watches = self.watch_mgr.get_open_watches()
-        if not open_watches:
+        skipped = self.shadows.open_records() if self.shadows else []
+        if not open_watches and not skipped:
             return
 
-        self.log(f"👀 Checking {len(open_watches)} open watch(es) for exit signals...")
-        tickers = list({w['ticker'] for w in open_watches})
+        if open_watches:
+            self.log(f"👀 Checking {len(open_watches)} open watch(es) for exit signals...")
+        # One batched price call for both: skipped trades ride along with
+        # the real positions instead of costing requests of their own.
+        tickers = list({w['ticker'] for w in open_watches} | {s['ticker'] for s in skipped})
         if self.paper:
             tickers.append(PAPER_BENCHMARK)
         prices = price_lookup.fetch_prices(tickers)
         benchmark_price = prices.get(PAPER_BENCHMARK) if self.paper else None
         now = now_local()
-        # Time exits wait for the regular session: fired at 3am they would
-        # close on a stale after-hours print nobody could trade at. Price
-        # exits (stops) fire whenever a price is there.
         market_open = strategy.us_market_open()
         cost = self.paper.cost_pct if self.paper else config.PAPER_COST_PCT
 
@@ -819,26 +828,35 @@ class StockAppBackend:
             if self.paper:
                 self.paper.mark_price(watch['id'], price)
 
-            reason, target_reached = self.watch_mgr.update_exit(watch, price, cost)
-            if not reason and market_open:
-                if self.watch_mgr.over_age_limit(watch, now):
-                    reason = 'max_age'
-                    self.log(f"  📅 {watch['company']} ({watch['ticker']}) open past the age "
-                             f"limit - closing at {price:.2f}")
-                elif now >= _parse_time(watch.get('expires_at'), now):
-                    reason = 'horizon_expired'
-
+            reason, target_reached = self._exit_reason(watch, price, now, market_open, cost)
+            if reason == 'max_age':
+                self.log(f"  📅 {watch['company']} ({watch['ticker']}) open past the age "
+                         f"limit - closing at {price:.2f}")
             if target_reached and not reason:
                 self._notify_target_reached(watch, price)
             if reason:
                 self._close_position(watch, reason, price, benchmark_price, now)
 
-        # One write for the whole pass: update_exit and mark_price only
-        # mutate in memory, so without this every still-open position's
+        for record in skipped:
+            price = prices.get(record['ticker'])
+            if not price:
+                continue
+            self.shadows.mark_price(record, price)
+            reason, _ = self._exit_reason(record, price, now, market_open, cost)
+            if reason:
+                self.shadows.close(record, reason, price, benchmark_price, now)
+                self.log(f"  👻 Skipped trade {record['ticker']} ({record['skip_rule']}) would have "
+                         f"closed at {price:.2f}: {record['net_pct'] * 100:+.2f}% after costs ({reason})")
+
+        # One write per file for the whole pass: update_exit and mark_price
+        # only mutate in memory, so without this every still-open position's
         # ratcheted stop and excursions would be lost on restart.
-        self.watch_mgr.save()
-        if self.paper:
-            self.paper.save()
+        if open_watches:
+            self.watch_mgr.save()
+            if self.paper:
+                self.paper.save()
+        if skipped:
+            self.shadows.save()
 
         # The price call above is the single largest allocation this process
         # makes (yfinance/pandas frames), and it runs on a coarser cadence
@@ -846,6 +864,24 @@ class StockAppBackend:
         # Without trimming here the high-water mark of the last price fetch
         # stays resident until the next scan finishes.
         _release_memory()
+
+    @staticmethod
+    def _exit_reason(position, price, now, market_open, cost):
+        """Ratchet a position's stop from `price` and say which exit fires,
+        if any: (reason or None, target_just_reached). The same rules for a
+        real position and a skipped trade.
+
+        Time exits wait for the regular session: fired at 3am they would
+        close on a stale after-hours print nobody could trade at. Price
+        exits (stops) fire whenever a price is there.
+        """
+        reason, target_reached = strategy.update_exit(position, price, cost)
+        if not reason and market_open:
+            if WatchManager.over_age_limit(position, now):
+                reason = 'max_age'
+            elif now >= _parse_time(position.get('expires_at'), now):
+                reason = 'horizon_expired'
+        return reason, target_reached
 
     def _notify_target_reached(self, watch, price):
         """A let-it-run position reached its target: it stays open, with its
@@ -895,4 +931,13 @@ def _describe_context(ctx):
         parts.append(f"{ctx['change_since_publish_pct'] * 100:+.1f}% since published")
     if ctx.get('atr_pct') is not None:
         parts.append(f"daily range {ctx['atr_pct'] * 100:.1f}%")
+    market = [f"{ctx[key] * 100:+.1f}% since {label}"
+              for key, label in (('market_since_close_pct', 'close'),
+                                 ('market_since_publish_pct', 'published'))
+              if ctx.get(key) is not None]
+    if market:
+        parts.append("market " + ", ".join(market))
+    if ctx.get('published_in_session') is not None:
+        parts.append("published " + ("in" if ctx['published_in_session'] else "outside")
+                     + " market hours")
     return "Price context: " + ", ".join(parts)

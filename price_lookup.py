@@ -159,10 +159,10 @@ def _intraday_prices(tickers):
     return prices
 
 
-def fetch_context(ticker, published_at=None):
-    """Price context for deciding whether a news move is still ahead of us
-    or has already happened. Returns a dict with whichever of these could be
-    worked out ({} if none):
+def fetch_context(ticker, published_at=None, benchmark=None):
+    """Price context for deciding how far a story has already moved a
+    stock. Returns a dict with whichever of these could be worked out ({} if
+    none):
 
       price                     last trade, extended hours included
       ref_close                 last regular-session close before the news
@@ -171,19 +171,50 @@ def fetch_context(ticker, published_at=None):
       change_since_publish_pct  price vs price_at_publish
       change_5d_pct             ref_close vs the close five sessions earlier
       atr_pct                   14-day average true range / ref_close
+      published_in_session      whether `published_at` fell in a regular
+                                US session (absent without one)
+      market_price, market_since_close_pct, market_since_publish_pct
+                                the same for `benchmark` (the market), when
+                                given - what strategy.news_move nets out
 
     Only called for would-be trades - a handful a day - never per article.
-    Two single-ticker requests: a month of daily bars (~21 rows) and five
-    days of 1-minute bars (a few thousand rows, a few hundred KB). Only the
-    columns needed are kept and the frames are dropped before returning, so
-    this adds nothing lasting on top of the yfinance import itself.
+    Two single-ticker requests per symbol: a month of daily bars (~21 rows)
+    and five days of 1-minute bars (a few thousand rows, a few hundred KB).
+    Only the columns needed are kept and the frames are dropped before
+    returning, so this adds nothing lasting on top of the yfinance import.
 
     `published_at` is an aware datetime or ISO string; naive means UTC.
     """
     ctx = _context_for(ticker, published_at)
     if not ctx and _CLASS_SHARE.match(ticker or ''):
         ctx = _context_for(ticker.replace('.', '-'), published_at)
+    if ctx and benchmark:
+        market = _context_for(benchmark, published_at)
+        ctx['market_price'] = market.get('price')
+        ctx['market_since_close_pct'] = market.get('change_since_close_pct')
+        ctx['market_since_publish_pct'] = market.get('change_since_publish_pct')
+    if ctx and published_at:
+        in_session = _in_regular_session(published_at)
+        if in_session is not None:
+            ctx['published_in_session'] = in_session
     return ctx
+
+
+def _in_regular_session(when):
+    """Whether `when` (aware datetime or ISO string; naive = UTC) fell in a
+    US regular session, 09:30-16:00 ET on a weekday - holidays not
+    modelled. None if it can't be read."""
+    import pandas as pd
+
+    try:
+        ts = pd.Timestamp(when)
+        if ts.tzinfo is None:
+            ts = ts.tz_localize("UTC")
+        et = ts.tz_convert("America/New_York")
+    except (TypeError, ValueError):
+        return None
+    minutes = et.hour * 60 + et.minute
+    return et.weekday() < 5 and 9 * 60 + 30 <= minutes < 16 * 60
 
 
 def _context_for(ticker, published_at):
