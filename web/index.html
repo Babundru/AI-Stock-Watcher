@@ -276,7 +276,18 @@
     display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 12.5px; color: var(--text-2);
     min-width: 0;
   }
-  .activity span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #activity { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Countdown to the next scan, beside "Waiting until ...": a ring that
+     empties as the wait runs out, and the time left. */
+  .scan-timer {
+    display: inline-flex; align-items: center; gap: 6px; flex: none;
+    height: 24px; padding: 0 9px 0 6px; border-radius: 999px; background: var(--surface-2);
+    color: var(--text); font-size: 12px; font-weight: 700;
+  }
+  .scan-timer svg { width: 14px; height: 14px; transform: rotate(-90deg); }
+  .scan-timer circle { fill: none; stroke-width: 2.4; }
+  .scan-timer .track { stroke: var(--surface-3); }
+  .scan-timer .left { stroke: var(--info); stroke-linecap: round; transition: stroke-dashoffset 1s linear; }
 
   /* ---- Rows (instrument-list style) ----------------------------------- */
   .avatar {
@@ -588,7 +599,7 @@
             <div class="stat"><div class="n" id="stat-alerts">0</div><div class="l">Alerts</div></div>
             <div class="stat"><div class="n" id="stat-skipped">0</div><div class="l">Skipped</div></div>
           </div>
-          <div class="activity"><span class="dot" id="activity-dot"></span><span id="activity">Idle</span></div>
+          <div class="activity"><span class="dot" id="activity-dot"></span><span id="activity">Idle</span><span class="scan-timer num" id="scan-timer" role="timer" title="Time left until the next scan" hidden><svg viewBox="0 0 16 16" aria-hidden="true"><circle class="track" cx="8" cy="8" r="6"/><circle class="left" id="scan-timer-ring" cx="8" cy="8" r="6" pathLength="100" stroke-dasharray="100"/></svg><span id="scan-timer-text">0:00</span></span></div>
         </div>
 
         <div class="alerts-layout">
@@ -1045,6 +1056,32 @@ function isAiTraffic(text) {
   return /SENT TO|<-- RESPONSE|AI RESPONSE/.test(text);
 }
 
+// --- Countdown to the next scan -----------------------------------------
+// The server sends the seconds left; between polls the page counts down on
+// its own clock, re-syncing only on a real jump so the digits don't stutter.
+let scanDeadline = null, scanTotal = 0;
+function syncScanTimer(next) {
+  if (!next) {
+    scanDeadline = null;
+  } else {
+    const deadline = performance.now() + next.in * 1000;
+    if (scanDeadline === null || next.of !== scanTotal || Math.abs(deadline - scanDeadline) > 1500) {
+      scanDeadline = deadline;
+      scanTotal = next.of;
+    }
+  }
+  renderScanTimer();
+}
+function renderScanTimer() {
+  const timer = $('#scan-timer');
+  if (scanDeadline === null) { timer.hidden = true; return; }
+  const left = Math.max(0, Math.round((scanDeadline - performance.now()) / 1000));
+  $('#scan-timer-text').textContent = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+  $('#scan-timer-ring').style.strokeDashoffset = scanTotal ? 100 * (1 - left / scanTotal) : 0;
+  timer.hidden = false;
+}
+setInterval(renderScanTimer, 1000);
+
 // --- Status / logs / alerts polling ------------------------------------
 async function pollState() {
   try {
@@ -1056,6 +1093,7 @@ async function pollState() {
     $('#activity-dot').classList.toggle('on', data.running);
     renderRunButton(data.running);
     $('#activity').textContent = data.activity || 'Idle';
+    syncScanTimer(data.running ? data.next_scan : null);
     $('#stat-scanned').textContent = fmtCount(data.stats.scanned);
     $('#stat-alerts').textContent = fmtCount(data.stats.alerts);
     $('#stat-skipped').textContent = fmtCount(data.stats.skipped);

@@ -18,7 +18,8 @@ counts as an alert.
 ## The scan loop (`main.py: StockAppBackend._run_loop`)
 
 Runs in a daemon thread, started by `.start()`. Every `CHECK_INTERVAL`
-(60s, `config.py`):
+(60s, `config.py`) - `WEEKEND_CHECK_INTERVAL` (25 min) on Saturdays and
+Sundays, New York time:
 
 1. Fetch custom sources (`news_collector.py: fetch_from_custom_sources`)
 2. If `GLOBAL_SCAN` (default on): fetch top business headlines from 4
@@ -47,7 +48,11 @@ Runs in a daemon thread, started by `.start()`. Every `CHECK_INTERVAL`
    the VM misbehaves** - flat at a few hundred MB is healthy; a steady
    climb across hours is the failure mode from `incidents.md`.
 7. Sleeps in 1-second increments (so `.stop()` is responsive) until the
-   next cycle
+   next cycle. A weekend wait still polls Reddit sources alone every
+   `CHECK_INTERVAL` (`_wait`): Reddit allows one request a minute, which
+   one request per 25-minute scan could not keep up with. The other
+   sources need no such thing - each scan's lookback window reaches back
+   past the previous scan (`NewsCollector.window_start`)
 
 **Log routing gotcha**: `self.log(...)` calls in `main.py` go through
 whatever `log_callback` the entry point supplied - `server.py` routes

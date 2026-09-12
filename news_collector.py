@@ -148,9 +148,18 @@ class NewsCollector:
         # One poller for every Reddit source: Reddit's feed budget is about
         # one request a minute for the whole app, not per source.
         self.reddit = RedditPoller()
+        # Set by the scan loop before each scan: the oldest publish time
+        # (UTC) still worth fetching, LOOKBACK_MINUTES before the previous
+        # scan started. None - the first scan - means LOOKBACK_MINUTES ago.
+        self.window_start = None
 
     def _seen(self, url):
         return bool(url and self.is_seen and self.is_seen(url))
+
+    def _cutoff(self, now):
+        """Articles published before this are too old (see window_start)."""
+        cutoff = now - datetime.timedelta(minutes=LOOKBACK_MINUTES)
+        return min(cutoff, self.window_start) if self.window_start else cutoff
 
     def _get(self, url, timeout=15, allow_redirects=True, headers=None):
         """GET a URL, reading at most MAX_DOWNLOAD_BYTES of the body."""
@@ -329,32 +338,46 @@ class NewsCollector:
 
         # Reddit sources go to the poller as a group - they share one request
         # budget - and it runs alongside the others as one more job.
-        reddit = [s for s in sources if s.get('type') == 'reddit' or is_reddit_url(s.get('url'))]
+        reddit = [s for s in sources if self._is_reddit_source(s)]
         others = [s for s in sources if s not in reddit]
 
         all_articles = []
         with ThreadPoolExecutor(max_workers=min(len(sources), MAX_SCRAPE_WORKERS)) as pool:
-            reddit_job = pool.submit(self.reddit.poll, reddit, self._seen) if reddit else None
+            reddit_job = pool.submit(self._poll_reddit, reddit) if reddit else None
             for articles in pool.map(fetch_one, others):
                 all_articles.extend(articles)
             if reddit_job:
-                try:
-                    posts = reddit_job.result()
-                except Exception as e:
-                    print(f"Error polling Reddit: {e}")
-                    posts = []
-                # The poller serves every subreddit at once; each post takes
-                # its own subreddit's trust setting ("Reddit/r/<sub>").
-                trust = {(parse_subreddit(s.get('url'), bare_ok=True) or '').lower(): source_trust(s)
-                         for s in reddit}
-                for post in posts:
-                    sub = (post.get('source') or '').split('/r/', 1)[-1].lower()
-                    post['trust'] = trust.get(sub, OPINION)
-                all_articles.extend(posts)
+                all_articles.extend(reddit_job.result())
 
         print(f"Collected {len(all_articles)} articles from custom sources.")
         return all_articles
-    
+
+    def fetch_reddit_posts(self):
+        """Poll the enabled Reddit sources alone - what the scan loop does
+        between weekend scans (see StockAppBackend._wait)."""
+        reddit = [s for s in self.source_mgr.get_sources(enabled_only=True) if self._is_reddit_source(s)]
+        return self._poll_reddit(reddit) if reddit else []
+
+    def _poll_reddit(self, sources):
+        """One RedditPoller.poll() over the Reddit `sources`. The poller serves
+        every subreddit at once; each post takes its own subreddit's trust
+        setting ("Reddit/r/<sub>")."""
+        try:
+            posts = self.reddit.poll(sources, self._seen)
+        except Exception as e:
+            print(f"Error polling Reddit: {e}")
+            return []
+        trust = {(parse_subreddit(s.get('url'), bare_ok=True) or '').lower(): source_trust(s)
+                 for s in sources}
+        for post in posts:
+            sub = (post.get('source') or '').split('/r/', 1)[-1].lower()
+            post['trust'] = trust.get(sub, OPINION)
+        return posts
+
+    @staticmethod
+    def _is_reddit_source(source):
+        return source.get('type') == 'reddit' or is_reddit_url(source.get('url'))
+
     def _is_nitter_url(self, url):
         """Check if URL is a Nitter instance."""
         return 'nitter' in url.lower()
@@ -504,7 +527,7 @@ class NewsCollector:
     def _feed_to_articles(self, feed, source_name, limit=10, match=None, scrape=True):
         """Turn parsed feed entries into article dicts (see _fetch_from_rss)."""
         articles = []
-        now = datetime.datetime.now(datetime.timezone.utc)
+        cutoff = self._cutoff(datetime.datetime.now(datetime.timezone.utc))
 
         for entry in feed.entries[:limit]:
             # Check if recent (within lookback period)
@@ -515,7 +538,7 @@ class NewsCollector:
                     pub_datetime = datetime.datetime(*pub_date[:6], tzinfo=pytz.UTC)
                 except (TypeError, ValueError):
                     pub_datetime = None
-            if pub_datetime and (now - pub_datetime).total_seconds() > LOOKBACK_MINUTES * 60:
+            if pub_datetime and pub_datetime < cutoff:
                 continue
 
             link = (entry.get('link') or '').strip()

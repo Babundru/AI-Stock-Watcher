@@ -5,6 +5,11 @@ import os
 # narrower than that filters out everything and the app finds no news.
 # Duplicates are not a concern: processed URLs are cached (see main.py),
 # so a wider window costs nothing but catches slower-updating feeds.
+#
+# Counted back from when the previous scan started, not from now, so the
+# window stretches to cover the whole gap between two scans - however long
+# the wait (WEEKEND_CHECK_INTERVAL) or the scan itself took. See
+# NewsCollector.window_start.
 LOOKBACK_MINUTES = 30
 
 # Check interval in seconds
@@ -12,6 +17,13 @@ LOOKBACK_MINUTES = 30
 # Fast scanning to catch breaking news immediately
 # Note: App tracks last 500 processed URLs to avoid duplicates
 CHECK_INTERVAL = 60  # 1 minute
+
+# Check interval on Saturdays and Sundays, New York time - the market's own
+# calendar: Friday's after-hours session is over by then and Monday's
+# pre-market hours away, so nothing needs reacting to within the minute.
+# The longer wait skips no story (see LOOKBACK_MINUTES), and Reddit sources
+# keep their own pace regardless (see StockAppBackend._wait).
+WEEKEND_CHECK_INTERVAL = 25 * 60  # 25 minutes
 
 # How often to check open watches (stocks with a pending sell signal) against
 # their current price, in seconds. Coarser than CHECK_INTERVAL on purpose:

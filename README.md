@@ -370,7 +370,8 @@ Edit `config.py`:
 | Setting | Default | Meaning |
 |---|---|---|
 | `CHECK_INTERVAL` | `60` | Seconds between scans |
-| `LOOKBACK_MINUTES` | `30` | How recent an article must be to be considered |
+| `WEEKEND_CHECK_INTERVAL` | `1500` | Seconds between scans on Saturdays and Sundays (New York time), when the market is shut. Reddit sources keep their own pace |
+| `LOOKBACK_MINUTES` | `30` | How recent an article must be to be considered - counted back from the previous scan, so a longer gap between scans skips nothing |
 | `GLOBAL_SCAN` | `True` | Scan all market news. Set `False` to watch only `TARGET_COMPANIES` |
 | `TARGET_COMPANIES` | `[]` | Company names to track when `GLOBAL_SCAN` is off |
 | `USE_LOCAL_LLM` | `True` | `False` uses the offline keyword scorer instead |

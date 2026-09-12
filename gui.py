@@ -157,10 +157,23 @@ class StockAppGUI(ctk.CTk):
 
         ctk.CTkFrame(status_box, height=1, fg_color=COLOR_LINE).pack(fill='x', padx=14)
 
-        self.activity_label = ctk.CTkLabel(status_box, text="Idle", text_color=COLOR_TEXT_DIM,
+        activity_box = ctk.CTkFrame(status_box, fg_color="transparent")
+        activity_box.pack(fill='x', padx=14, pady=(9, 12))
+        self.activity_label = ctk.CTkLabel(activity_box, text="Idle", text_color=COLOR_TEXT_DIM,
                                            font=UI(11), anchor="w", justify="left",
                                            wraplength=176)
-        self.activity_label.pack(fill='x', padx=14, pady=(9, 12))
+        self.activity_label.pack(fill='x')
+
+        # Countdown to the next scan, under "Waiting until ...": a bar that
+        # empties as the wait runs out, and the time left. Packed only while
+        # the backend waits between scans (see _update_countdown).
+        self.countdown_row = ctk.CTkFrame(activity_box, fg_color="transparent")
+        self.countdown_label = ctk.CTkLabel(self.countdown_row, text="", text_color=COLOR_TEXT,
+                                            font=MONO(11, "bold"), height=16)
+        self.countdown_label.pack(side='right', padx=(8, 0))
+        self.countdown_bar = ctk.CTkProgressBar(self.countdown_row, height=4, corner_radius=2,
+                                                fg_color=COLOR_LINE, progress_color=COLOR_ACCENT)
+        self.countdown_bar.pack(side='left', fill='x', expand=True)
 
         # Controls
         self._create_sidebar_btn("Start watching", self.start_backend, COLOR_SUCCESS, 2)
@@ -885,7 +898,26 @@ class StockAppGUI(ctk.CTk):
             for key, label in self.stat_labels.items():
                 label.configure(text=str(stats.get(key, 0)))
 
+        self._update_countdown()
         self.after(100, self.process_log_queue)
+
+    def _update_countdown(self):
+        """Show the time left until the next scan while the backend waits
+        between scans; hide it the rest of the time."""
+        countdown = self.backend.next_scan_countdown() if self.backend else None
+        if countdown is None:
+            if self.countdown_row.winfo_manager():
+                self.countdown_row.pack_forget()
+            return
+        left, total = countdown
+        seconds = int(round(left))
+        text = f"{seconds // 60}:{seconds % 60:02d}"
+        # Redraw once a second, not on every 100ms tick.
+        if text != self.countdown_label.cget("text"):
+            self.countdown_label.configure(text=text)
+            self.countdown_bar.set(left / total if total else 0)
+        if not self.countdown_row.winfo_manager():
+            self.countdown_row.pack(fill='x', pady=(6, 0))
 
     def start_backend(self):
         if self.backend and self.backend.running: return

@@ -30,7 +30,10 @@ A source is auto-classified by URL shape when added
 - **RSS/Atom** (`_fetch_from_rss`): standard feedparser path, filters by
   `LOOKBACK_MINUTES` (default 30 - narrower would miss slower feeds, wider
   is free since dedup happens separately) and optionally by a
-  company-name match string.
+  company-name match string. The window is counted back from the previous
+  scan's start (`NewsCollector.window_start`, set by the scan loop), so it
+  stretches over a longer gap - the 25-minute weekend interval, or a slow
+  scan - instead of letting stories fall between two scans.
 - **Webpage** (`_fetch_from_webpage`): scrapes a page directly for
   article-shaped links, more fragile than RSS (whatever HTML structure
   the site currently has). Anything not RSS/Twitter falls here by

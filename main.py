@@ -1,6 +1,6 @@
 import config
-from config import (CHECK_INTERVAL, WATCH_CHECK_INTERVAL, TARGET_COMPANIES,
-                    PAPER_TRADING, PAPER_COST_PCT, PAPER_BENCHMARK)
+from config import (CHECK_INTERVAL, WEEKEND_CHECK_INTERVAL, WATCH_CHECK_INTERVAL,
+                    TARGET_COMPANIES, PAPER_TRADING, PAPER_COST_PCT, PAPER_BENCHMARK)
 from local_time import now_local
 from news_collector import NewsCollector
 from analyzer import MarketAnalyzer
@@ -67,6 +67,14 @@ def _release_memory():
         ctypes.CDLL("libc.so.6").malloc_trim(0)
     except Exception:
         pass
+
+
+def is_weekend(now=None):
+    """Saturday or Sunday in New York, when WEEKEND_CHECK_INTERVAL applies:
+    Saturday 07:00 to Monday 07:00 in Romania (06:00 for the few weeks a
+    year when only one side has changed its clocks)."""
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    return now.astimezone(strategy.ET).weekday() >= 5
 
 
 class StockAppBackend:
@@ -136,6 +144,10 @@ class StockAppBackend:
         # Set once the engine fails during a scan, cleared when the next scan
         # starts. See _analysis_failed.
         self._engine_down = False
+        # (time.time() the next scan starts at, seconds in the whole wait)
+        # while the loop waits between scans, else None. One tuple, so the
+        # UIs' countdown (next_scan_countdown) never reads half of an update.
+        self.next_scan = None
 
     @staticmethod
     def engine_name():
@@ -283,7 +295,8 @@ class StockAppBackend:
         # Attaches to an already-running Ollama rather than starting a second.
         if self.ollama:
             self.ollama.start()
-        self.log(f"Monitoring started. Check interval: {CHECK_INTERVAL//60} minutes")
+        self.log(f"Monitoring started. Check interval: {CHECK_INTERVAL // 60} min, "
+                 f"{WEEKEND_CHECK_INTERVAL // 60} min at weekends (New York time)")
         self.thread = threading.Thread(target=self._run_loop, args=(self._generation,))
         self.thread.daemon = True
         self.thread.start()
@@ -310,6 +323,51 @@ class StockAppBackend:
                 break
             time.sleep(1)
 
+    def _wait(self, seconds, generation, status=None):
+        """Sleep until the next scan, polling Reddit every CHECK_INTERVAL
+        meanwhile if the wait is longer (the weekend one). `status` is put
+        back once a post analysed meanwhile has replaced it.
+
+        The feeds don't need this - the next scan's window reaches back over
+        the wait (see NewsCollector.window_start) - but Reddit does: it
+        allows one request a minute and the poller makes at most one per
+        call, so with one call per scan a busy subreddit's posts, queued for
+        their comments, would expire before they were got through.
+        """
+        deadline = time.time() + seconds
+        self.next_scan = (deadline, seconds)
+        try:
+            while self._alive(generation):
+                left = deadline - time.time()
+                if left < 1:
+                    break
+                self._sleep(min(round(left), CHECK_INTERVAL), generation)
+                if deadline - time.time() >= 1 and self._alive(generation):
+                    if self._poll_reddit(generation) and status:
+                        self.status(status)
+        finally:
+            self.next_scan = None
+
+    def next_scan_countdown(self):
+        """(seconds left, seconds in the whole wait) until the next scan while
+        the loop waits for it, else None - for the UIs' countdown timer."""
+        next_scan = self.next_scan
+        if next_scan is None or not self.running:
+            return None
+        deadline, total = next_scan
+        return max(0.0, deadline - time.time()), total
+
+    def _poll_reddit(self, generation):
+        """Analyse whatever Reddit posts have become ready. Returns how many."""
+        posts = self.collector.fetch_reddit_posts()
+        if posts:
+            market_open = self.notifier.is_market_open()
+            for article in posts:
+                if not self._alive(generation):
+                    break
+                self._process_article("Custom Source News", article, market_open, is_discovery=True)
+        return len(posts)
+
     def _run_loop(self, generation):
         self.log("Stocks Watcher Started...")
 
@@ -323,8 +381,17 @@ class StockAppBackend:
         else:
              self.log(f"Tracking companies: {', '.join(TARGET_COMPANIES)}")
 
+        # When the last complete scan started. Each scan's window reaches
+        # LOOKBACK_MINUTES back past it, so a story that reached its feed just
+        # after that scan looked is still caught, however long the wait since
+        # (25 minutes at weekends) or the scan itself took.
+        prev_scan_start = None
         while self._alive(generation):
             try:
+                scan_start = datetime.datetime.now(datetime.timezone.utc)
+                self.collector.window_start = (
+                    prev_scan_start - datetime.timedelta(minutes=config.LOOKBACK_MINUTES)
+                    if prev_scan_start else None)
                 self.log(f"\nScanning for news at {now_local().strftime('%H:%M:%S')}...")
                 # Each scan gives an engine that failed last time a new chance.
                 self._engine_down = False
@@ -374,6 +441,9 @@ class StockAppBackend:
 
                 if not self._alive(generation):
                     break
+                # Only a scan that got this far counts as complete: after an
+                # error the next one reaches back past the last good one.
+                prev_scan_start = scan_start
 
                 # --- WATCH CHECK (sell signals) ---
                 # Coarser cadence than the news scan - price doesn't need to
@@ -399,15 +469,18 @@ class StockAppBackend:
                 if rss is not None:
                     self.log(f"   💾 Memory in use: {rss:.0f} MB")
 
-                # --- SMART SCHEDULER ---
-                # Calculate sleep time until next 15-minute mark (xx:00, xx:15, xx:30, xx:45)
-                # To sync with device time.
-                # Sleep for the configured check interval
-                next_run_time = now_local() + datetime.timedelta(seconds=CHECK_INTERVAL)
-                self.log(f"Sleeping until {next_run_time.strftime('%H:%M:%S')} ({CHECK_INTERVAL}s)...")
-                self.status(f"Waiting until {next_run_time.strftime('%H:%M:%S')}")
+                # --- SCHEDULER ---
+                # Longer at weekends, when the market is shut. The next
+                # scan's window stretches back over the wait, so it skips
+                # nothing.
+                interval = WEEKEND_CHECK_INTERVAL if is_weekend() else CHECK_INTERVAL
+                next_run_time = now_local() + datetime.timedelta(seconds=interval)
+                waiting = f"Waiting until {next_run_time.strftime('%H:%M:%S')}"
+                self.log(f"Sleeping until {next_run_time.strftime('%H:%M:%S')} ({interval}s"
+                         f"{', weekend schedule' if interval != CHECK_INTERVAL else ''})...")
+                self.status(waiting)
                 
-                self._sleep(CHECK_INTERVAL, generation)
+                self._wait(interval, generation, waiting)
 
             except Exception as e:
                 self.log(f"Error in main loop: {e}")

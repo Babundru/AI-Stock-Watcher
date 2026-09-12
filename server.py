@@ -272,6 +272,10 @@ def api_state():
     since = request.args.get("since", 0, type=int)
     data = state.snapshot(since_log_seq=since)
     data['running'] = backend.running
+    # Seconds left rather than a time of day, so the dashboard's countdown
+    # doesn't depend on the phone's clock agreeing with this machine's.
+    countdown = backend.next_scan_countdown()
+    data['next_scan'] = {'in': round(countdown[0]), 'of': countdown[1]} if countdown else None
     return jsonify(data)
 
 
