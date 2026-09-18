@@ -8,6 +8,7 @@ import datetime
 import price_lookup
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import alert_history
 from main import StockAppBackend
 from portfolio_manager import PortfolioManager
 from paper_trader import PaperTrader
@@ -114,7 +115,9 @@ class StockAppGUI(ctk.CTk):
         # the UI thread rather than touching widgets from another thread.
         self.alert_queue = queue.Queue()
         self.status_queue = queue.Queue()
-        self.alerts = []
+        # Persisted history is newest-first on disk; self.alerts is oldest-
+        # first (appended to, then shown via reversed()) - flip it on load.
+        self.alerts = list(reversed(alert_history.load()))
         self.show_ai_traffic = ctk.BooleanVar(value=False)
         self.autoscroll = ctk.BooleanVar(value=True)
 
@@ -383,6 +386,7 @@ class StockAppGUI(ctk.CTk):
 
     def clear_alerts(self):
         self.alerts = []
+        alert_history.clear()
         self.refresh_alerts_list()
 
     def refresh_alerts_list(self):
@@ -488,6 +492,7 @@ class StockAppGUI(ctk.CTk):
         'news_reversal': "New news points the other way - closing.",
         'horizon_expired': "Time window passed - closing on schedule.",
         'max_age': "Held the maximum time - closing.",
+        'manual': "Closed by hand from the Portfolio tab.",
     }
 
     def _build_exit_card(self, alert):
@@ -886,6 +891,7 @@ class StockAppGUI(ctk.CTk):
             self.alerts.append(self.alert_queue.get())
             new_alerts = True
         if new_alerts:
+            alert_history.save(list(reversed(self.alerts)))
             self.refresh_alerts_list()
 
         # Latest status wins; discard any backlog
@@ -1262,6 +1268,30 @@ class StockAppGUI(ctk.CTk):
         except Exception:
             pass
 
+    def sell_paper_position(self, watch_id):
+        """The Sell button on an open paper position - closes it at the
+        current market price instead of waiting for the strategy's own exit
+        rules. Goes through the backend (StockAppBackend.close_watch_manually)
+        so the real watch/paper/notifier instances are touched, not this
+        view's own read-only copies - which needs the watcher started."""
+        if not self.backend:
+            messagebox.showinfo("Not running", "Start the watcher to sell a paper position.")
+            return
+        self.log_queue.put(f"Selling paper position {watch_id}...")
+        threading.Thread(target=self._sell_paper_position_thread, args=(watch_id,),
+                         daemon=True).start()
+
+    def _sell_paper_position_thread(self, watch_id):
+        price = None
+        try:
+            price = self.backend.close_watch_manually(watch_id)
+        except Exception as e:
+            self.log_queue.put(f"Sell failed: {e}")
+        if price is None:
+            self.log_queue.put(f"Could not sell {watch_id} - no open position, or it couldn't be priced.")
+        if self.winfo_exists():
+            self.after(0, self.refresh_paper_view)
+
     def _render_paper(self, prices, pending=False):
         data = self.paper.overview(prices,
                                    start_capital=PAPER_START_CAPITAL,
@@ -1320,7 +1350,8 @@ class StockAppGUI(ctk.CTk):
                     p['ticker'], p['direction'], p['entry_price'], p.get('current_price'),
                     p.get('unrealised_pct'), (p.get('opened_at') or '')[5:16].replace('T', ' '),
                     note=(f"{p['progress'] * 100:.0f}% to target"
-                          if p.get('progress') is not None else ""))
+                          if p.get('progress') is not None else ""),
+                    watch_id=p.get('watch_id'))
         else:
             ctk.CTkLabel(self.paper_scroll, text="No open positions", font=UI(12),
                          text_color=COLOR_TEXT_MUTE).pack(pady=14)
@@ -1334,7 +1365,8 @@ class StockAppGUI(ctk.CTk):
                     t['net_pct'], (t.get('closed_at') or '')[5:16].replace('T', ' '),
                     note={'target_hit': "target hit", 'stop_loss': "stop-loss",
                           'trailing_stop': "trailing stop", 'news_reversal': "news reversal",
-                          'horizon_expired': "time stop", 'max_age': "age limit"
+                          'horizon_expired': "time stop", 'max_age': "age limit",
+                          'manual': "sold manually"
                           }.get(t.get('reason'), t.get('reason') or ''))
         else:
             ctk.CTkLabel(self.paper_scroll, text="No closed trades yet", font=UI(12),
@@ -1375,7 +1407,8 @@ class StockAppGUI(ctk.CTk):
         ctk.CTkLabel(head, text=subtitle, font=UI(10),
                      text_color=COLOR_TEXT_MUTE).pack(side='left', padx=10)
 
-    def _paper_row(self, ticker, direction, entry, exit_price, pct_value, when, note=""):
+    def _paper_row(self, ticker, direction, entry, exit_price, pct_value, when, note="",
+                   watch_id=None):
         is_short = direction == 'SHORT'
         accent = COLOR_DANGER if is_short else COLOR_SUCCESS
         row = ctk.CTkFrame(self.paper_scroll, fg_color=COLOR_PANEL, corner_radius=RADIUS,
@@ -1397,6 +1430,14 @@ class StockAppGUI(ctk.CTk):
                      text_color=colour).pack(side='left', padx=6)
         ctk.CTkLabel(row, text=note, anchor='w', font=UI(10),
                      text_color=COLOR_TEXT_MUTE).pack(side='left', padx=6)
+        # Only an open position (watch_id given) can be sold - a closed
+        # trade already has its exit.
+        if watch_id:
+            ctk.CTkButton(row, text="Sell", width=60, height=26,
+                          command=lambda wid=watch_id: self.sell_paper_position(wid),
+                          fg_color=COLOR_ACCENT_SOFT, border_width=0,
+                          text_color=COLOR_ACCENT, hover_color=COLOR_PANEL_HI,
+                          corner_radius=RADIUS_SM, font=UI(10, "bold")).pack(side='right', padx=(6, 12))
         ctk.CTkLabel(row, text=when, anchor='e', font=MONO(10),
                      text_color=COLOR_TEXT_MUTE).pack(side='right', padx=12)
 

@@ -1604,11 +1604,26 @@ async function loadPaper() {
         <div class="v ${pctClass(p.unrealised_pct)}">${pctText(p.unrealised_pct)}</div>
         <div class="s">${p.current_price ? 'now ' + fmtPrice(p.current_price) : '—'}</div>
       </div>
+      <button class="btn ghost sm" data-sell="${esc(p.watch_id)}" title="Sell at the current price" aria-label="Sell ${esc(p.ticker)}">Sell</button>
     </div>`;
   }).join('') : '<div class="empty">No open positions.</div>';
+  ob.querySelectorAll('[data-sell]').forEach(b => b.addEventListener('click', async () => {
+    if (b.disabled) return;
+    b.disabled = true;
+    b.textContent = '…';
+    try {
+      const r = await fetch('/api/watches/' + encodeURIComponent(b.dataset.sell) + '/sell', {method: 'POST'});
+      if (!r.ok) throw new Error(await r.text());
+      loadWatches();
+    } catch (e) {
+      b.disabled = false;
+      b.textContent = 'Sell';
+    }
+    loadPaper();
+  }));
 
   // Closed trades.
-  const REASONS = {target_hit: 'Target hit', stop_loss: 'Stop-loss', trailing_stop: 'Trailing stop', news_reversal: 'News reversal', horizon_expired: 'Time stop', max_age: 'Age limit', max_postponed: 'Postpone limit'};
+  const REASONS = {target_hit: 'Target hit', stop_loss: 'Stop-loss', trailing_stop: 'Trailing stop', news_reversal: 'News reversal', horizon_expired: 'Time stop', max_age: 'Age limit', max_postponed: 'Postpone limit', manual: 'Closed manually'};
   const cb = $('#pp-closed-body');
   const closed = d.closed_recent || [];
   cb.innerHTML = closed.length ? closed.map(t => {

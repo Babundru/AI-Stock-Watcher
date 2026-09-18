@@ -26,6 +26,8 @@ data/stats.json
 data/paper_trades.json
 data/shadow_trades.json
 data/reddit_state.json
+data/alerts_history.json
+
 
 # Environments / tooling
 .venv/

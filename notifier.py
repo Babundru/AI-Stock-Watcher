@@ -212,8 +212,8 @@ class Notifier:
             ticker: Stock ticker
             company: Company name
             reason: "target_hit", "stop_loss", "trailing_stop",
-                "news_reversal", "horizon_expired", "max_age", or (records
-                from before v2) "max_postponed"
+                "news_reversal", "horizon_expired", "max_age", "manual", or
+                (records from before v2) "max_postponed"
             entry_price: Price when the original alert fired
             current_price: Price now
             target_price: Price that would have counted as the move "playing out"
@@ -246,6 +246,9 @@ class Notifier:
             emoji = "⏱"
             reason_text = ("Postponed as long as allowed and still not in profit - "
                            "closing rather than holding it open indefinitely.")
+        elif reason == "manual":
+            emoji = "✋"
+            reason_text = "Closed by hand from the dashboard."
         else:
             emoji = "⏰"
             reason_text = "Expected time window passed without the alerted-on move happening - reassess the position."

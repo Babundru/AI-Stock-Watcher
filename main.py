@@ -866,6 +866,29 @@ class StockAppBackend:
             except Exception as e:
                 self.log(f"  (alert view update failed: {e})")
 
+    def close_watch_manually(self, watch_id):
+        """User-initiated exit - the "Sell" button on an open paper
+        position, for whenever someone doesn't want to wait for the
+        strategy's own exit rules to fire. Goes through the same
+        _close_position path as an automatic exit (paper trade recorded,
+        SELL/COVER notification sent, Alerts panel updated), just with
+        reason='manual' and a price fetched fresh rather than one already in
+        hand from a watch-check pass.
+
+        Returns the exit price on success, or None if there's no such open
+        watch or it couldn't be priced.
+        """
+        watch = next((w for w in self.watch_mgr.get_open_watches() if w['id'] == watch_id), None)
+        if not watch:
+            return None
+        wanted = [watch['ticker']] + ([PAPER_BENCHMARK] if self.paper else [])
+        prices = price_lookup.fetch_prices(wanted)
+        price = prices.get(watch['ticker'])
+        if not price:
+            return None
+        self._close_position(watch, 'manual', price, prices.get(PAPER_BENCHMARK), now_local())
+        return price
+
     def _check_watches(self):
         """Check every open watch's current price against its exits and close
         + notify any that fire - a sell signal for longs, a buy-back signal

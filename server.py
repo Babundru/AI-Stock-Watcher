@@ -31,6 +31,7 @@ os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 from flask import Flask, jsonify, request, send_from_directory
 
+import alert_history
 import config
 import strategy
 from cloud_providers import PROVIDERS
@@ -63,7 +64,11 @@ class DashboardState:
         self._lock = threading.Lock()
         self.logs = collections.deque(maxlen=MAX_LOG_LINES)
         self.log_seq = 0
-        self.alerts = collections.deque(maxlen=MAX_ALERTS)
+        # Seeded from disk so the Alerts panel shows recent history right
+        # after a restart instead of sitting empty until the next alert -
+        # only the newest MAX_HISTORY were ever persisted, well under
+        # MAX_ALERTS, so this never truncates anything.
+        self.alerts = collections.deque(alert_history.load(), maxlen=MAX_ALERTS)
         self.activity = "Idle"
         self.stats = {'scanned': 0, 'alerts': 0, 'skipped': 0}
 
@@ -82,6 +87,7 @@ class DashboardState:
             ts = entry.get('time')
             entry['time'] = ts.isoformat() if isinstance(ts, datetime.datetime) else ts
             self.alerts.appendleft(entry)
+            alert_history.save(self.alerts)
 
     def set_status(self, activity, stats):
         with self._lock:
@@ -91,6 +97,7 @@ class DashboardState:
     def clear_alerts(self):
         with self._lock:
             self.alerts.clear()
+            alert_history.clear()
 
     def snapshot(self, since_log_seq=0):
         with self._lock:
@@ -484,6 +491,18 @@ def api_watches_delete(watch_id):
         # position would otherwise sit in the ledger forever.
         backend.paper.discard_trade(watch_id)
     return jsonify(backend.watch_mgr.get_all())
+
+
+@app.route("/api/watches/<watch_id>/sell", methods=["POST"])
+def api_watches_sell(watch_id):
+    """Manually close an open paper position at the current market price -
+    the Sell button on the Paper trading tab, for not wanting to wait for
+    the strategy's own exit rules. Unlike the DELETE above, this records a
+    real closed trade (reason 'manual') instead of discarding it."""
+    price = backend.close_watch_manually(watch_id)
+    if price is None:
+        return jsonify({"error": "no open position with that id, or it couldn't be priced"}), 404
+    return jsonify({"closed": True, "exit_price": price})
 
 
 def _sources_payload():
