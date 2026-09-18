@@ -87,7 +87,13 @@ opinion - so it's set per source: the chip on each dashboard source row
 - One shared `requests.Session()` with browser-like headers
   (`BROWSER_HEADERS`) to get past basic anti-bot checks - some sites
   (investing.com, in practice) still 403 anyway; that's the site blocking
-  automated clients, not an app bug, and other sources cover the gap.
+  automated clients, not an app bug. Its feed has no summaries either, so
+  such a story reaches the model as its headline alone (see
+  `ai_engines.md`) - it used to be dropped unread.
+- A page that redirects to a cookie-consent host (`consent.` / `guce.`,
+  e.g. Yahoo from EU addresses) counts as not scraped (`ConsentWall`): its
+  text is the same cookie notice for every article, and fed to the model
+  as the article it made every Yahoo story look irrelevant.
 - Downloads are capped at `MAX_DOWNLOAD_BYTES` (3MB) via streaming reads -
   logged as "Response exceeded 3MB, truncating" when hit (routinely true
   for CNBC's homepage-style URLs); this is a safety cap, not an error.

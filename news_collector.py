@@ -60,6 +60,22 @@ def _looks_like_feed(body):
 def _norm_url(url):
     return (url or '').strip().lower().rstrip('/')
 
+
+class ConsentWall(Exception):
+    """A request ended on a cookie-consent page instead of the content."""
+
+
+# Hosts publishers redirect to for their cookie-consent page - Yahoo does,
+# from EU addresses: guce.yahoo.com -> consent.yahoo.com. The page's text is
+# the same cookie notice for every article, and fed to the model as the
+# article it made every Yahoo story look irrelevant.
+_CONSENT_HOST_PREFIXES = ('consent.', 'guce.')
+
+
+def _is_consent_wall(url):
+    host = (urlparse(url or '').hostname or '').lower()
+    return host.startswith(_CONSENT_HOST_PREFIXES)
+
 # Browser-like headers to get past basic anti-bot checks.
 BROWSER_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -169,6 +185,8 @@ class NewsCollector:
         )
         try:
             response.raise_for_status()
+            if _is_consent_wall(response.url):
+                raise ConsentWall(response.url)
             chunks = []
             total = 0
             for chunk in response.iter_content(8192):
@@ -206,6 +224,9 @@ class NewsCollector:
             return None
         except requests.exceptions.HTTPError as e:
             print(f"✗ HTTP {e.response.status_code} error: {url[:80]}...")
+            return None
+        except ConsentWall:
+            print(f"✗ Cookie-consent page instead of the article: {url[:80]}...")
             return None
         except Exception as e:
             print(f"✗ Failed to scrape ({type(e).__name__}): {url[:80]}...")

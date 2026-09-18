@@ -13,6 +13,12 @@ from reddit_source import SOURCE_PREFIX, is_reddit_article
 # that can't be tuned, and can't verify a rumour either.
 
 
+# Stands in for the article text when only the headline could be got.
+HEADLINE_ONLY = ("(Only the headline is available - the article itself could not be retrieved. "
+                 "Judge the headline alone: rate it relevant only if it states a concrete company "
+                 "event, and let the missing detail lower your confidence.)")
+
+
 class AnalysisUnavailable(Exception):
     """The engine gave no verdict at all - API error, model unreachable, a
     reply that wasn't JSON. Distinct from analyze_article() returning None,
@@ -68,13 +74,20 @@ def _source_note(article):
 
 def build_market_prompt(company, article, market_is_open, portfolio_tickers=None):
     """Build the single-pass conditional relevance/sentiment prompt for one
-    article. Returns None if the article has no usable text to analyze."""
+    article. Returns None only if there is not even a headline to analyze."""
     title = article.get('title', 'No Title')
     article_text = _article_text(article, 5000)
 
-    if not article_text or len(article_text.strip()) == 0:
-        print(f"Skipping article '{title}' due to empty content/description.")
-        return None
+    if not article_text.strip():
+        if not (article.get('title') or '').strip():
+            print(f"Skipping article with neither a headline nor any text: {article.get('url', '')[:80]}")
+            return None
+        # Investing.com's and Seeking Alpha's feeds carry no summary and
+        # their pages often refuse the scraper (HTTP 403), so for their
+        # stories the headline is all there is. These used to be skipped -
+        # and marked processed, so never looked at again - which threw away
+        # wire items like "X appoints Y as CEO" unread.
+        article_text = HEADLINE_ONLY
 
     market_context = "The market is currently OPEN." if market_is_open else "The market is currently CLOSED."
     portfolio_context = ""

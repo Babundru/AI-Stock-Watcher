@@ -362,6 +362,20 @@ class PromptTests(unittest.TestCase):
     def test_news_is_unchanged(self):
         prompt = llm_prompts.build_market_prompt("Custom Source News", self.article("Custom/CNBC"), True)
         self.assertNotIn("Reddit", prompt)
+        self.assertNotIn(llm_prompts.HEADLINE_ONLY, prompt)
+
+    def test_a_headline_alone_is_still_analysed(self):
+        # Investing.com's feed has no summaries and its pages refuse the
+        # scraper: the headline is all there is.
+        article = {"title": "Lululemon appoints Heidi O'Neill as CEO", "content": None,
+                   "description": "", "source": "Custom/Investing.com"}
+        prompt = llm_prompts.build_market_prompt("Custom Source News", article, True)
+        self.assertIn("Lululemon appoints Heidi O'Neill as CEO", prompt)
+        self.assertIn(llm_prompts.HEADLINE_ONLY, prompt)
+
+    def test_nothing_at_all_is_skipped(self):
+        article = {"title": "  ", "content": None, "description": "", "source": "Custom/X"}
+        self.assertIsNone(llm_prompts.build_market_prompt("Custom Source News", article, True))
 
 
 class TradeGateTests(SettingsMixin, unittest.TestCase):

@@ -42,7 +42,12 @@ Strategy `v3` (Sep 2026) changed only the entry: v2 skipped a stock that
 had already moved half the AI's (deliberately low) expected move, measured
 its reward/risk on the move *left*, and ran a second AI call that leaned
 towards passing - between them, almost nothing that had started moving the
-news's way was ever traded.
+news's way was ever traded. Strategy `v4` (Sep 2026) changed only
+`reward_risk`: v3 wanted the expected move to reach `MIN_REWARD_RISK` x the
+stop - 1.8 daily ranges - so a HIGH story rated at 5% traded only on stocks
+calmer than 2.8% a day (most mega-caps, little else), and the app went days
+without a trade. It is now `MIN_MOVE_ATR_MULT` (1.2) daily ranges, the
+"clearly more than an ordinary day" the rule was always described as.
 
 **Entry** (`main.py:_decide_trade`, cheapest checks first):
 - Short gates: `ALLOW_SHORTS` / `NOTIFY_SHORTS` (both off = negative news
@@ -68,8 +73,9 @@ news's way was ever traded.
   - `unconfirmed` - a story from an opinion source (X, Reddit - see
     `data_sources.md`) that hasn't moved the price at least
     `CONFIRM_ATR_MULT` (0.5) daily ranges its way, or can't be priced.
-  - `reward_risk` - the story's expected move is below `MIN_REWARD_RISK`
-    (1.2) x the stop.
+  - `reward_risk` - the story's expected move is below `MIN_MOVE_ATR_MULT`
+    (1.2) daily ranges: no more than an ordinary day. Without an ATR, below
+    `MIN_REWARD_RISK` (1.2) x the stop (then the 8% maximum).
 
   Short of `exhausted`, a move with the news is the market agreeing and
   doesn't count against the trade. Stop = `STOP_ATR_MULT` (1.5) x ATR

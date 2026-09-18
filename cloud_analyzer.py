@@ -1,5 +1,3 @@
-import time
-
 import config
 from cloud_providers import PROVIDERS
 from llm_prompts import AnalysisUnavailable, build_market_prompt, parse_json_response
@@ -11,11 +9,12 @@ JSON_ONLY_SYSTEM_PROMPT = (
     "fences, no text before or after it."
 )
 
-# Seconds a model whose API call failed spends at the back of the queue.
-# Long enough that an outage costs one wasted call every few minutes rather
-# than one per article; short enough that a passing error doesn't leave a
-# pricier fallback model running for long.
-MODEL_COOLDOWN = 300
+# Calls a model gets before the request moves on to the next model. Hosted
+# APIs fail transiently - a 500, a dropped connection, a momentary rate
+# limit - and a second attempt usually goes through, which is cheaper than
+# handing every article to a pricier fallback. Only a failed call is worth
+# repeating: a call that returned something is never sent twice.
+MODEL_ATTEMPTS = 2
 
 
 class CloudAnalyzer:
@@ -35,8 +34,6 @@ class CloudAnalyzer:
         self.ai_log_callback = ai_log_callback
         # (model, provider) pairs, most preferred first.
         self.providers = []
-        # model -> time.monotonic() until which it waits at the back of the queue.
-        self._benched = {}
 
         # Read at construction (not import) so a settings change followed
         # by StockAppBackend.apply_settings() builds a fresh, current client.
@@ -74,31 +71,31 @@ class CloudAnalyzer:
         """The parsed JSON reply of the first model, in priority order, that
         gives one - or None if none did.
 
-        A model whose call fails outright (the provider has logged why) is
-        benched for MODEL_COOLDOWN: moved to the back of the queue rather
-        than out of it, so with every model failing each is still tried,
-        and once the cooldown ends the preferred model is first again. A
-        reply that merely wasn't JSON moves only this one request along.
+        No model is ever taken out of the queue or held back for later
+        requests: every request starts again at the preferred model, so a
+        single passing error never pushes a whole scan onto a pricier
+        fallback. A model whose call fails outright (the provider has
+        logged why) is simply retried, up to MODEL_ATTEMPTS calls, before
+        the request moves on. A call that came back - even with a reply
+        that wasn't JSON - is already paid for, so it is not repeated;
+        that model just yields this one request to the next.
         """
-        now = time.monotonic()
-        ready = [p for p in self.providers if self._benched.get(p[0], 0) <= now]
-        order = ready + [p for p in self.providers if p not in ready]
-        for i, (model, provider) in enumerate(order):
-            text = provider.complete(prompt, system=JSON_ONLY_SYSTEM_PROMPT)
+        for i, (model, provider) in enumerate(self.providers):
+            for attempt in range(1, MODEL_ATTEMPTS + 1):
+                text = provider.complete(prompt, system=JSON_ONLY_SYSTEM_PROMPT)
+                if text is not None:
+                    break
+                if attempt < MODEL_ATTEMPTS:
+                    self._log(f"   ↪ {model} failed - retrying it "
+                              f"(attempt {attempt + 1} of {MODEL_ATTEMPTS})")
             data = parse_json_response(text)
             if data:
-                self._benched.pop(model, None)
                 return data
-            failed = text is None
-            if failed:
-                self._benched[model] = time.monotonic() + MODEL_COOLDOWN
-            if i + 1 < len(order):
-                nxt = order[i + 1][0]
-                if failed:
-                    self._log(f"   ↪ {model} failed - trying {nxt}; {model} goes to the back "
-                              f"of the queue for {MODEL_COOLDOWN // 60} min")
-                else:
-                    self._log(f"   ↪ {model} gave no usable reply - trying {nxt}")
+            if i + 1 < len(self.providers):
+                nxt = self.providers[i + 1][0]
+                reason = ("failed every attempt" if text is None
+                          else "gave no usable reply")
+                self._log(f"   ↪ {model} {reason} - trying {nxt}")
         return None
 
     def analyze_article(self, company, article, market_is_open, portfolio_tickers=None):

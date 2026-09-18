@@ -23,8 +23,11 @@ stock's normal daily range (14-day ATR):
     already, by at least CONFIRM_ATR_MULT daily ranges its way.
   * Capped: the news pins the stock to a set price (a cash takeover's
     target), so there is nothing left to ride.
-  * Reward vs risk: the stop is sized to the stock's volatility, and the
-    story's expected move has to be at least MIN_REWARD_RISK x that stop.
+  * Too small (rule 'reward_risk'): the story has to be expected to move
+    the stock clearly more than an ordinary day does - at least
+    MIN_MOVE_ATR_MULT daily ranges. Until v4 it had to reach
+    MIN_REWARD_RISK x the stop, i.e. 1.8 daily ranges, which turned down
+    most HIGH-impact stories on anything livelier than a mega-cap.
 
 A refused signal is still followed as if it had been traded
 (shadow_trades.py), so each rule's refusals can be judged.
@@ -50,8 +53,10 @@ import pytz
 import config
 
 # Recorded on every watch and paper trade, so the ledger can compare rule
-# sets instead of blending trades made under different ones.
-STRATEGY_VERSION = "v3"
+# sets instead of blending trades made under different ones. v4: a story
+# has to be big for the stock in daily ranges, not in stops (see
+# config.MIN_MOVE_ATR_MULT).
+STRATEGY_VERSION = "v4"
 LEGACY_STRATEGY = "v1"
 
 # Normal daily range assumed for a stock whose ATR couldn't be worked out.
@@ -270,10 +275,17 @@ def plan_trade(direction, impact, expected_pct, context, needs_confirmation=Fals
             return skip('unconfirmed', f"opinion source, and the price hasn't confirmed it: "
                                        f"{moved * 100:+.1f}% the news's way so far, needs {need * 100:.1f}%")
 
-    if expected < config.MIN_REWARD_RISK * stop:
-        daily_note = f" (normal daily range {atr * 100:.1f}%)" if atr else ""
-        return skip('reward_risk', f"expected move ({expected * 100:.1f}%) too small for the "
-                                   f"{stop * 100:.1f}% stop this stock needs{daily_note}")
+    if atr:
+        need = config.MIN_MOVE_ATR_MULT * atr
+        why = f"a stock whose normal daily range is {atr * 100:.1f}%"
+    else:
+        # No daily range to compare with. The stop is then the widest one
+        # there is, and a story smaller than it isn't worth taking blind.
+        need = config.MIN_REWARD_RISK * stop
+        why = f"the {stop * 100:.1f}% stop used without volatility data"
+    if expected < need:
+        return skip('reward_risk', f"expected move ({expected * 100:.1f}%) too small for {why} "
+                                   f"- needs {need * 100:.1f}%")
 
     plan['ok'] = True
     return plan

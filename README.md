@@ -390,6 +390,7 @@ Edit `config.py`:
 | `EXHAUSTED_ATR_MULT` | `3.0` | Skip a trade once the story has moved the stock this many normal daily ranges *and* past its whole expected move - too late to chase |
 | `AGAINST_NEWS_ATR_MULT` | `0.5` | Skip it when the stock has moved this many daily ranges against the news |
 | `CONFIRM_ATR_MULT` | `0.5` | How far the price must confirm a story from an opinion source (X, Reddit) before it trades |
+| `MIN_MOVE_ATR_MULT` | `1.2` | Skip a trade when the story isn't expected to move the stock at least this many normal daily ranges - no more than an ordinary day |
 | `MAX_OPEN_POSITIONS` | `20` | Most positions open at once (also bounds the watch check's memory) |
 | `MAX_SHADOW_POSITIONS` | `20` | Skipped trades followed at once, to judge the entry rules |
 | `ALLOW_SHORTS` | `True` | Open (and paper-trade) short positions on negative news |
@@ -477,7 +478,10 @@ Expected on CPU. Raise `OLLAMA_NUM_THREADS`, use a smaller model, or set
 **Log shows `HTTP 401` or `HTTP 403` while scraping**
 Some publishers (MarketWatch, Investing.com) block automated access to full
 article text. Those articles are still analysed using their headline and
-summary — just with less to go on. This is expected and not a failure.
+summary — or the headline alone when the feed has no summary, as
+Investing.com's doesn't — just with less to go on. This is expected and not
+a failure. The same goes for "Cookie-consent page instead of the article"
+(Yahoo, from EU addresses).
 
 **Test notification never arrives**
 Confirm the topic in Settings matches exactly what you subscribed to on

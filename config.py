@@ -158,11 +158,22 @@ BREAKEVEN_AT = 0.5
 LET_WINNERS_RUN = True
 TRAIL_AFTER_TARGET_MULT = 0.5
 
-# A trade is skipped when the story's expected move is not at least this
-# many times the stop distance - i.e. when the news is not expected to move
-# the stock clearly more than it moves on an ordinary day anyway. It is also
-# the least a position aims for: no target is set closer than this x the stop.
+# The least a position aims for: no target is set closer than this x the
+# stop. Also the entry bar for a stock whose normal daily range couldn't be
+# fetched - its stop is then the maximum one, and the story has to beat it.
 MIN_REWARD_RISK = 1.2
+
+# A trade is skipped when the story isn't expected to move the stock clearly
+# more than it moves on an ordinary day anyway: its expected move has to be
+# at least this many normal daily ranges (14-day ATR). ATR is the full
+# high-to-low range, gaps included - already wider than a typical day's
+# close-to-close move - so 1.2 of them is a move that stands out.
+#
+# Until strategy v4 the bar was MIN_REWARD_RISK x the stop, which is
+# 1.2 x 1.5 = 1.8 daily ranges: a HIGH story rated at 5% then needed a stock
+# calmer than 2.8% a day - most mega-caps and hardly anything else - and the
+# app went days without a trade.
+MIN_MOVE_ATR_MULT = 1.2
 
 # --- STRATEGY: ENTRIES ---
 # The AI rates its own confidence (0-100) in direction and size. Alerts

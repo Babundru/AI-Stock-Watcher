@@ -63,6 +63,14 @@ target is pinned to the offer price - nothing left to ride). The prompt
 also gets the article's publish time and a calibration paragraph ("most
 news moves a large-cap < 2%").
 
+An article with no text at all - no scraped body and no feed summary -
+is analysed on its headline alone, with `HEADLINE_ONLY` in place of the
+text telling the model so. That is every Investing.com story (its feed has
+no summaries and its pages 403 the scraper) and some Seeking Alpha ones.
+Until Sep 2026 `build_market_prompt` returned None for these, which
+`main.py` takes as "not relevant" and marks processed: they were thrown
+away unread. Only an article without even a headline is skipped.
+
 ### No trade-confirmation call
 
 Until strategy v3 a second call (`build_trade_prompt` / `confirm_trade`,
@@ -119,13 +127,16 @@ engine failure (see above).
 `CloudAnalyzer` builds one provider per model - same `CLOUD_AI_PROVIDER`,
 key and base URL - and `_ask()` sends each request (the article screen and
 the trade check alike) down the list until one returns parseable JSON. A
-model whose call fails outright is benched for `MODEL_COOLDOWN` (5 min):
-moved to the back of the queue, not out of it, so with every model failing
-each is still tried, and once the cooldown ends the preferred model is
-first again. A reply that merely isn't JSON moves only that one request
-on. `AnalysisUnavailable` is raised only when every model has failed.
-Mind the price of what you list second: while the first model is down,
-every article runs on it.
+model whose call fails outright is retried once (`MODEL_ATTEMPTS` = 2)
+before the request moves to the next model - hosted APIs fail transiently,
+and a retry is cheaper than sending the whole scan to a pricier fallback.
+A call that came back is already paid for, so it is never repeated: a
+reply that merely isn't JSON moves that one request straight on. No model
+is ever benched or disabled - every request starts again at the preferred
+model, so one passing error doesn't cost a fallback's tokens for the next
+5 minutes. `AnalysisUnavailable` is raised only when every model has
+failed. Mind the price of what you list second: it runs whenever the
+first model fails twice in a row.
 
 ### Routera specifics - **read this before changing the model**
 

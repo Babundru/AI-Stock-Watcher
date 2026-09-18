@@ -23,7 +23,7 @@ class RulesMixin:
     restores them afterwards."""
 
     SETTINGS = dict(STOP_LOSS_PCT=0.08, STOP_ATR_MULT=1.5, STOP_MIN_PCT=0.02, MIN_REWARD_RISK=1.2,
-                    EXHAUSTED_ATR_MULT=3.0, AGAINST_NEWS_ATR_MULT=0.5, CONFIRM_ATR_MULT=0.5,
+                    MIN_MOVE_ATR_MULT=1.2, EXHAUSTED_ATR_MULT=3.0, AGAINST_NEWS_ATR_MULT=0.5, CONFIRM_ATR_MULT=0.5,
                     MAX_SHADOW_POSITIONS=20, LET_WINNERS_RUN=True, BREAKEVEN_AT=0.5)
 
     def setUp(self):
@@ -117,13 +117,25 @@ class PlanTradeTests(RulesMixin, unittest.TestCase):
     def test_reporting_trades_without_price_data(self):
         # No ATR means the maximum 8% stop, so the story has to be big.
         self.assertTrue(strategy.plan_trade('LONG', 'HIGH', 0.10, {})['ok'])
+        self.assertEqual(strategy.plan_trade('LONG', 'HIGH', 0.09, {})['rule'], 'reward_risk')
 
     def test_capped_news_is_skipped(self):
         self.assertEqual(self.plan(0.0, capped=True)['rule'], 'capped')
 
     def test_story_too_small_for_the_stock(self):
-        # 3% daily range: a 4.5% stop, so the story needs 5.4%.
-        self.assertEqual(self.plan(0.0, atr=0.03, expected=0.05)['rule'], 'reward_risk')
+        # 3% daily range: the story needs 1.2 of them, 3.6%.
+        self.assertEqual(self.plan(0.0, atr=0.03, expected=0.035)['rule'], 'reward_risk')
+        self.assertTrue(self.plan(0.0, atr=0.03, expected=0.037)['ok'])
+
+    def test_a_high_story_on_a_lively_stock_trades(self):
+        # v3 asked for 1.2 x the 6% stop, 7.2%, so a 5% HIGH story on a
+        # stock with a 4% daily range (NVDA, TSLA, AMD in Sep 2026) never
+        # traded.
+        plan = self.plan(0.0, atr=0.04, expected=0.05)
+        self.assertTrue(plan['ok'], plan['reason'])
+        self.assertAlmostEqual(plan['stop_pct'], 0.06)
+        # The target still aims for at least MIN_REWARD_RISK x the stop.
+        self.assertAlmostEqual(plan['target_pct'], 0.072)
 
     def test_short(self):
         self.assertTrue(self.plan(-0.03, expected=0.10, direction='SHORT')['ok'])
