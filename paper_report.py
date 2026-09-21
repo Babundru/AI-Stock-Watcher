@@ -11,7 +11,7 @@ the watcher is running.
 
 import sys
 
-from config import (PAPER_COST_PCT, PAPER_BENCHMARK,
+from config import (PAPER_COST_PCT, PAPER_BENCHMARK, PAPER_BENCHMARK_EU,
                     PAPER_START_CAPITAL, PAPER_POSITION_PCT)
 from paper_trader import PaperTrader
 from shadow_trades import RULE_LABELS, ShadowBook
@@ -90,7 +90,10 @@ def main():
     verdict = "PROFITABLE" if stats['expectancy'] > 0 else "LOSING"
     print(f"  → {verdict} on this sample")
 
-    print(f"\n  vs {PAPER_BENCHMARK}:")
+    # Each trade was measured against its own market's index (markets.
+    # benchmark_for: SPY for a US listing, the European one for a European
+    # listing), so this average blends them when the record spans both.
+    print(f"\n  vs {PAPER_BENCHMARK} / {PAPER_BENCHMARK_EU}:")
     print(f"    Market move over the same windows   {pct(stats['avg_benchmark'])}")
     print(f"    Alpha (market-neutral baseline)     {pct(stats['avg_alpha'])}")
     if stats['avg_alpha'] is not None and stats['avg_alpha'] <= 0 < stats['expectancy']:

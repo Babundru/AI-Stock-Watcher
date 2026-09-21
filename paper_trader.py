@@ -14,11 +14,13 @@ the one produced by the real thing.
 
 Two things are recorded that the watch itself does not keep:
 
-  * **A benchmark.** Every trade stores the market's move (PAPER_BENCHMARK,
-    default SPY) over the identical holding window. Without it a profitable
-    month is unreadable: it could be the analyser working, or it could be
-    that everything went up. The benchmark price is folded into the price
-    call the watch check already makes, so it costs no extra request.
+  * **A benchmark.** Every trade stores its own market's move over the
+    identical holding window - SPY for a US listing, PAPER_BENCHMARK_EU for a
+    European one (markets.benchmark_for), with the symbol used written into
+    the trade. Without it a profitable month is unreadable: it could be the
+    analyser working, or it could be that everything went up. The benchmark
+    price is folded into the price call the watch check already makes, so it
+    costs no extra request.
 
   * **Excursions (MAE/MFE).** On every price check, how far the position has
     run in your favour and against you. Purely observational - it never
@@ -129,8 +131,15 @@ class PaperTrader:
 
     # --- recording -----------------------------------------------------
 
-    def open_trade(self, watch, benchmark_price=None):
-        """Record the entry side of a watch that was just opened."""
+    def open_trade(self, watch, benchmark_price=None, benchmark=None):
+        """Record the entry side of a watch that was just opened.
+
+        `benchmark` names the index this trade's move is compared against -
+        the US one for a US listing, the European one for a European listing
+        (markets.benchmark_for). Stored per trade because the ledger spans
+        both, and a column of alpha figures measured against two different
+        indices is unreadable without knowing which was which.
+        """
         if self._find(watch['id']):
             return None
 
@@ -163,6 +172,7 @@ class PaperTrader:
             "target_pct": watch.get('target_pct'),
             "opened_at": watch['opened_at'],
             "expires_at": watch.get('expires_at'),
+            "benchmark": benchmark or self.benchmark,
             "benchmark_entry": benchmark_price,
             # Excursions, updated on every price check while open. Seeded at
             # zero: at the entry price the position is flat by definition.

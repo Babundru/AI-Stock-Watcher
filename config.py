@@ -40,6 +40,19 @@ TARGET_COMPANIES = []
 # This allows finding opportunities for ANY company.
 GLOBAL_SCAN = True
 
+# Whether European listings are in scope as well as US ones.
+#
+# True  -> the European newswires are polled alongside the US ones, and a
+#          story about a European company can open a position on its local
+#          listing ("BMW.DE", "SHEL.L"), managed on that exchange's session.
+# False -> those feeds are skipped and a European ticker still raises its
+#          alert but never opens a trade - for a broker that can't deal
+#          outside the US.
+#
+# European hours, sessions and the benchmark are in markets.py; only whether
+# to look at all is decided here.
+SCAN_EUROPE = True
+
 # --- LOCAL LLM (OLLAMA) SETTINGS ---
 # True  -> articles are analysed by a local Ollama model (the LLM variant)
 # False -> falls back to the offline weighted-keyword analyzer, which needs
@@ -60,6 +73,15 @@ LOCAL_MODEL_NAME = "gemma3:12b"
 # Threads the model may use. Higher is faster but competes with the rest of
 # the machine; 1 keeps the app unobtrusive at the cost of slow analysis.
 OLLAMA_NUM_THREADS = 1
+
+# Context window, in tokens. Set explicitly because Ollama's default (2048
+# on older builds, 4096 on newer) is smaller than the prompt this app
+# sends: a 5000-character article plus the instruction block runs past
+# 2000 tokens on its own. An over-long prompt is not rejected - it is
+# silently truncated, and the model answers confidently on whatever
+# survived. 8192 leaves headroom for the longest article llm_prompts
+# will pass (_article_text caps the body at 5000 chars) so nothing is cut.
+OLLAMA_NUM_CTX = 8192
 
 # --- CLOUD AI (API KEY) SETTINGS ---
 # True -> articles are analysed via a hosted AI API instead of a local
@@ -117,7 +139,14 @@ PAPER_COST_PCT = 0.002
 # Ticker priced alongside each trade to record what the market did over the
 # same window. Without it there is no telling an analyser that works from a
 # month in which everything went up.
+#
+# One per region (markets.benchmark_for picks by the ticker's exchange): a
+# German stock measured against SPY is measured against an index that was
+# shut for most of its session, which shows up as noise in every alpha
+# figure. ^STOXX is the STOXX Europe 600 - the continent plus the UK and
+# Switzerland, so it covers every venue in markets.py.
 PAPER_BENCHMARK = "SPY"
+PAPER_BENCHMARK_EU = "^STOXX"
 
 # Notional sizing, used only to draw an equity curve and a drawdown figure in
 # the report - the app itself never sizes a position. Each trade puts
@@ -157,6 +186,22 @@ BREAKEVEN_AT = 0.5
 # exit). False closes at the target, as the app used to.
 LET_WINNERS_RUN = True
 TRAIL_AFTER_TARGET_MULT = 0.5
+
+# Whether exits may only fire during the US regular session (09:30-16:00
+# ET). Prices come from the 1-minute chart with extended hours included, so
+# outside those times a "price" can be a handful of shares at a spread no
+# real exit would have crossed. Acting on one writes a fill into the ledger
+# that nobody could have got - which makes the track record a measure of
+# the quote feed rather than of the strategy.
+#
+# Nothing is missed by waiting: an overnight gap is still there at 09:30,
+# and that is the first moment it could have been traded.
+#
+# Turn off only if your broker really would have filled the exit out of
+# hours (some CFD brokers quote extended sessions). Time exits stay gated
+# on the session either way - one fired at 03:00 would close on a stale
+# print regardless of who your broker is.
+EXITS_REGULAR_HOURS_ONLY = True
 
 # The least a position aims for: no target is set closer than this x the
 # stop. Also the entry bar for a stock whose normal daily range couldn't be
@@ -386,6 +431,7 @@ def _MODELS(value):
 
 
 USER_SETTINGS = {
+    "SCAN_EUROPE": _BOOL,
     "NTFY_TOPIC": _STR,
     "NOTIFICATIONS_ENABLED": _BOOL,
     "NOTIFY_OWNERSHIP": _BOOL,
@@ -393,6 +439,7 @@ USER_SETTINGS = {
     "STOP_LOSS_PCT": _FLOAT,
     "STOP_ATR_MULT": _FLOAT,
     "LET_WINNERS_RUN": _BOOL,
+    "EXITS_REGULAR_HOURS_ONLY": _BOOL,
     "MIN_CONFIDENCE": _INT,
     "MAX_OPEN_POSITIONS": _INT,
     "ALLOW_SHORTS": _BOOL,
@@ -404,6 +451,7 @@ USER_SETTINGS = {
     "USE_LOCAL_LLM": _BOOL,
     "LOCAL_MODEL_NAME": _STR,
     "OLLAMA_NUM_THREADS": _INT,
+    "OLLAMA_NUM_CTX": _INT,
     "OLLAMA_URL": _STR,
     "USE_CLOUD_AI": _BOOL,
     "CLOUD_AI_PROVIDER": _STR,
@@ -418,8 +466,8 @@ USER_SETTINGS = {
 
 # Settings whose value must not be emptied by a blank entry: a blank model
 # name or thread count in the dialog means "leave the default", not "none".
-_KEEP_DEFAULT_IF_BLANK = {"LOCAL_MODEL_NAME", "OLLAMA_NUM_THREADS", "OLLAMA_URL",
-                          "CLOUD_AI_PROVIDER", "CLOUD_AI_MODEL"}
+_KEEP_DEFAULT_IF_BLANK = {"LOCAL_MODEL_NAME", "OLLAMA_NUM_THREADS", "OLLAMA_NUM_CTX",
+                          "OLLAMA_URL", "CLOUD_AI_PROVIDER", "CLOUD_AI_MODEL"}
 
 # The shipped defaults, captured before the file is applied, so a key that
 # is later removed from the file (or blanked) falls back to them.

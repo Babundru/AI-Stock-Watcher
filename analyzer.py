@@ -19,7 +19,7 @@ class MarketAnalyzer:
             print("Warning: Local LLM is disabled in config, but Gemini support has been removed.")
 
 
-    def analyze_article(self, company, article, market_is_open, portfolio_tickers=None):
+    def analyze_article(self, company, article, open_markets, portfolio_tickers=None):
         """
         Analyzes a single news article for sentiment and market impact using a single-pass conditional prompt.
         Returns None for an irrelevant article; raises AnalysisUnavailable
@@ -28,7 +28,7 @@ class MarketAnalyzer:
         if not self.use_local:
             raise AnalysisUnavailable("local LLM is turned off in settings")
 
-        prompt = build_market_prompt(company, article, market_is_open, portfolio_tickers)
+        prompt = build_market_prompt(company, article, open_markets, portfolio_tickers)
         if not prompt:
             return None
 
@@ -64,7 +64,12 @@ class MarketAnalyzer:
                 "stream": False,
                 "format": "json",
                 "options": {
-                    "num_thread": config.OLLAMA_NUM_THREADS
+                    "num_thread": config.OLLAMA_NUM_THREADS,
+                    # Explicit, because Ollama's default context is smaller
+                    # than this prompt and an over-long one is silently
+                    # truncated rather than refused - the model then answers
+                    # confidently on a fragment. See config.OLLAMA_NUM_CTX.
+                    "num_ctx": config.OLLAMA_NUM_CTX,
                 }
             }
 

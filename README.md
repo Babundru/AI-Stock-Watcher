@@ -2,7 +2,8 @@
 
 A Windows desktop app that continuously scans financial news, has a **local AI
 model** judge each article's market impact, and pushes a notification to your
-phone when it finds something significant.
+phone when it finds something significant. It covers **US and European
+listings**, each traded and managed on its own exchange's hours.
 
 Everything runs on your machine. There are no API keys, no accounts, and no
 cloud service — news comes from public RSS feeds and your own list of sources,
@@ -238,6 +239,51 @@ MEDIUM alert out for the 5% a HIGH gets would time-stop almost every time.
 > paper record: get enough closed trades at HIGH to compare against, then try a
 > lower setting and see whether expectancy survives.
 
+### Markets covered
+
+The app follows **US and European listings**. Both are scanned by default;
+the **Scan European markets** switch in Settings turns the European half off
+for a broker that can only deal in the US, in which case European stocks still
+raise alerts but never open a position.
+
+What that means in practice:
+
+- **Feeds.** Four European newswires (FT Companies, Yahoo Finance UK, City AM,
+  Euronews Business) are polled alongside the four US ones. The US wires do
+  carry the largest European names, but only once a story is big enough to
+  cross the Atlantic — usually after the move. Each scan takes a fair share
+  from every feed rather than the newest articles overall, so a busy hour on
+  the US wires can't crowd the European stories out.
+- **Tickers.** European positions are held in the stock's *home* listing, not
+  its American depositary receipt: `BMW.DE`, `ASML.AS`, `SHEL.L`, `NESN.SW`,
+  `NOVO-B.CO`. That is where the news is traded and where the volume is. The
+  analyser is asked for the symbol in that form, and `ETR: BMW`-style
+  exchange prefixes are converted to it.
+- **Hours.** Every position is managed on *its own* exchange's session —
+  08:00–16:30 in London, 09:00–17:30 in Frankfurt, Paris, Amsterdam, Milan,
+  Madrid and Zurich, 09:30–16:00 ET in New York, and so on for the Nordic,
+  Irish and Central European venues. Exits and the trailing stop only read
+  prices from that window, so nothing is closed on a thin print from an hour
+  when the stock could not actually be traded.
+- **Time exits** fire a quarter of an hour before that exchange's close
+  (15:45 ET in New York, 17:15 CET in Frankfurt), and the horizon counts that
+  exchange's trading days. The notification shows the time on the exchange's
+  own clock.
+- **Alpha** is measured against the right index: `SPY` for a US listing,
+  `^STOXX` (STOXX Europe 600 — the continent plus the UK and Switzerland) for
+  a European one. Each paper trade records which. No currency conversion is
+  involved anywhere: every figure the app acts on is a percentage of the same
+  stock's own price, so a London price in pence and a Paris price in euros
+  both work out unchanged.
+
+Exchange holidays are not modelled, on either side of the Atlantic. A time
+exit that lands on one simply fires on the next open day.
+
+> Only the exchanges in `markets.py` are modelled. A ticker from anywhere else
+> (`.TO` Toronto, `.AX` Sydney) is still priced and traded if the analyser
+> returns one, but with no session gate — its exits are checked whenever the
+> app is running.
+
 ### Entry and exit alerts
 
 Every alert that passes the filter comes in two parts: the news alert telling
@@ -373,6 +419,7 @@ Edit `config.py`:
 | `WEEKEND_CHECK_INTERVAL` | `1500` | Seconds between scans on Saturdays and Sundays (New York time), when the market is shut. Reddit sources keep their own pace |
 | `LOOKBACK_MINUTES` | `30` | How recent an article must be to be considered - counted back from the previous scan, so a longer gap between scans skips nothing |
 | `GLOBAL_SCAN` | `True` | Scan all market news. Set `False` to watch only `TARGET_COMPANIES` |
+| `SCAN_EUROPE` | `True` | Poll the European newswires too, and let European listings be traded on their own exchange hours (use the in-app switch) |
 | `TARGET_COMPANIES` | `[]` | Company names to track when `GLOBAL_SCAN` is off |
 | `USE_LOCAL_LLM` | `True` | `False` uses the offline keyword scorer instead |
 | `LOCAL_MODEL_NAME` | `gemma3:12b` | Ollama model to run. Must be pulled first |
@@ -382,7 +429,8 @@ Edit `config.py`:
 | `MIN_IMPACT` | `HIGH` | Weakest impact that alerts (use the in-app slider) |
 | `PAPER_TRADING` | `True` | Record every alert's profit/loss to `data/paper_trades.json` |
 | `PAPER_COST_PCT` | `0.002` | Round-trip trading cost, subtracted from every trade |
-| `PAPER_BENCHMARK` | `SPY` | Priced alongside each trade to measure alpha |
+| `PAPER_BENCHMARK` | `SPY` | Priced alongside each US trade to measure alpha |
+| `PAPER_BENCHMARK_EU` | `^STOXX` | The same for a European listing — STOXX Europe 600 |
 | `STOP_LOSS_PCT` | `0.08` | Most any one position may lose. Each stop is sized to the stock's volatility (`STOP_ATR_MULT` x its 14-day ATR) and capped here; `0` = the 8% default. Stops can't be turned off (use the in-app control) |
 | `STOP_ATR_MULT` | `1.5` | Stop distance in multiples of the stock's normal daily range |
 | `LET_WINNERS_RUN` | `True` | At the target, trail the stop instead of selling |

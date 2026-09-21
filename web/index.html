@@ -838,6 +838,14 @@
         </div>
 
         <div class="card">
+          <div class="card-title">Markets</div>
+          <div class="form-grid">
+            <label class="check-row"><span class="txt">Scan European markets<small>Polls the European newswires as well as the US ones, and lets a story about a European company open a position on its home listing (BMW.DE, SHEL.L), managed on that exchange's hours. Off: those feeds are skipped and European stocks alert but never trade.</small></span>
+              <span class="switch"><input type="checkbox" id="st-scan-europe"><span class="track"></span></span></label>
+          </div>
+        </div>
+
+        <div class="card">
           <div class="card-title">Trading strategy</div>
           <div class="form-grid">
             <label class="check-row"><span class="txt">Let winners run<small>At the target, trail the stop close behind the price instead of selling.</small></span>
@@ -1978,6 +1986,7 @@ function renderSettings(s) {
 
   $('#st-cost').value = ((s.PAPER_COST_PCT || 0) * 100).toFixed(2);
 
+  $('#st-scan-europe').checked = s.SCAN_EUROPE !== false;
   $('#st-min-conf').value = s.MIN_CONFIDENCE ?? 60;
   $('#st-let-run').checked = !!s.LET_WINNERS_RUN;
   $('#st-atr-mult').value = s.STOP_ATR_MULT ?? 1.5;
@@ -2035,6 +2044,7 @@ $('#st-save').addEventListener('click', async () => {
     OLLAMA_NUM_THREADS: isFinite(threads) && threads >= 1 ? threads : 1,
     OLLAMA_URL: $('#st-ollama-url').value.trim(),
     PAPER_COST_PCT: cost / 100,
+    SCAN_EUROPE: $('#st-scan-europe').checked,
     MIN_CONFIDENCE: minConf,
     LET_WINNERS_RUN: $('#st-let-run').checked,
     STOP_ATR_MULT: atrMult,

@@ -24,12 +24,20 @@ the first is nil.
 
 import re
 
-# "NASDAQ: TSLA", "NYSE:XOM", "$AAPL" - the forms an LLM (or a headline)
-# tends to hand back instead of a bare symbol.
-_EXCHANGE_PREFIX = re.compile(r'^(?:NASDAQ|NYSE|AMEX|OTC|TSX|LSE)\s*:\s*', re.IGNORECASE)
+import markets
+
+# "NASDAQ: TSLA", "ETR:BMW", "$AAPL" - the forms an LLM (or a headline)
+# tends to hand back instead of a bare symbol. Which exchanges are
+# recognised, and what suffix each one implies, is markets.py's table: a
+# prefix that was merely stripped left "BMW", a bare symbol Yahoo prices on
+# the US market - either nothing at all or an unrelated American company.
+_EXCHANGE_PREFIX = re.compile(
+    r'^(' + '|'.join(sorted(markets.EXCHANGE_PREFIX_SUFFIX, key=len, reverse=True)) + r')\s*:\s*',
+    re.IGNORECASE)
 # Class shares: Yahoo spells "BRK.B" as "BRK-B". Only a single trailing
 # letter after the dot is a class; "BMW.DE" is an exchange suffix and must
-# be left alone.
+# be left alone - and so must "VOD.L", which has a class share's shape but
+# names London, so markets.suffix gets the last word.
 _CLASS_SHARE = re.compile(r'^([A-Z0-9]+)\.([A-Z])$')
 
 # Most tickers to put in a single yfinance call.
@@ -54,6 +62,12 @@ def _chunked(items, size):
         yield items[i:i + size]
 
 
+def _is_class_share(ticker):
+    """Whether the dotted tail of `ticker` is a share class Yahoo spells with
+    a dash ("BRK.B" -> "BRK-B") rather than an exchange ("VOD.L")."""
+    return bool(_CLASS_SHARE.match(ticker or '')) and not markets.suffix(ticker)
+
+
 def normalize_ticker(ticker):
     """Turn whatever the analyser returned into a symbol Yahoo will price,
     or None if nothing usable is left.
@@ -62,10 +76,18 @@ def normalize_ticker(ticker):
     "$tsla", "BRK.B" or "N/A". Each of those used to be looked up verbatim,
     fail, and log "couldn't price" - dropping an alert's watch and paper
     trade for a formatting quibble.
+
+    A European listing keeps (or is given) the Yahoo exchange suffix that
+    prices it: "ETR: BMW" and "BMW" from a German story both want "BMW.DE",
+    and only the suffixed form is a different security from whatever trades
+    as "BMW" in New York. Writing the suffix is the model's job (see
+    llm_prompts); supplying it from an exchange prefix is this function's.
     """
     if not ticker:
         return None
-    raw = _EXCHANGE_PREFIX.sub('', str(ticker).strip()).lstrip('$').strip()
+    raw = str(ticker).strip()
+    exchange = _EXCHANGE_PREFIX.match(raw)
+    raw = _EXCHANGE_PREFIX.sub('', raw).lstrip('$').strip()
     words = raw.split()
     if not words:
         return None
@@ -80,10 +102,18 @@ def normalize_ticker(ticker):
     # "BRK.B" is deliberately left with its dot: Yahoo wants "BRK-B", but a
     # one-letter suffix is also how it spells exchanges ("7203.T", "VOD.L"),
     # so fetch_prices tries the dashed form only when the dotted one fails.
-    # Symbols are letters/digits with an optional .XX exchange suffix or a
-    # -X class; anything else (a sentence, a company name) is not a ticker.
-    if not re.fullmatch(r'[A-Z0-9]{1,6}(?:[.\-][A-Z0-9]{1,4})?', t):
+    # Symbols are letters/digits, optionally a -X share class (Nordic
+    # listings use it: "NOVO-B.CO", "ERIC-B.ST"), optionally a .XX exchange
+    # suffix; anything else (a sentence, a company name) is not a ticker.
+    if not re.fullmatch(r'[A-Z0-9]{1,6}(?:-[A-Z0-9]{1,2})?(?:\.[A-Z0-9]{1,4})?', t):
         return None
+    # An exchange prefix names the listing, so honour it - unless the symbol
+    # already carries a suffix of its own ("ETR: BMW.DE"), in which case
+    # there is nothing to add. US exchanges map to no suffix at all.
+    if exchange and '.' not in t:
+        tail = markets.EXCHANGE_PREFIX_SUFFIX[exchange.group(1).upper()]
+        if tail:
+            t = f"{t}.{tail}"
     return t
 
 
@@ -110,7 +140,7 @@ def fetch_prices(tickers):
     if missing:
         # Class shares: Yahoo spells "BRK.B" as "BRK-B". The dotted form was
         # tried first because the same shape is also an exchange suffix.
-        alternates = {t: t.replace('.', '-') for t in missing if _CLASS_SHARE.match(t)}
+        alternates = {t: t.replace('.', '-') for t in missing if _is_class_share(t)}
         if alternates:
             alt_prices = {}
             for batch in _chunked(list(alternates.values()), MAX_BATCH):
@@ -172,7 +202,8 @@ def fetch_context(ticker, published_at=None, benchmark=None):
       change_5d_pct             ref_close vs the close five sessions earlier
       atr_pct                   14-day average true range / ref_close
       published_in_session      whether `published_at` fell in a regular
-                                US session (absent without one)
+                                session on this ticker's own exchange
+                                (absent without one)
       market_price, market_since_close_pct, market_since_publish_pct
                                 the same for `benchmark` (the market), when
                                 given - what strategy.news_move nets out
@@ -186,35 +217,42 @@ def fetch_context(ticker, published_at=None, benchmark=None):
     `published_at` is an aware datetime or ISO string; naive means UTC.
     """
     ctx = _context_for(ticker, published_at)
-    if not ctx and _CLASS_SHARE.match(ticker or ''):
+    if not ctx and _is_class_share(ticker):
         ctx = _context_for(ticker.replace('.', '-'), published_at)
     if ctx and benchmark:
-        market = _context_for(benchmark, published_at)
-        ctx['market_price'] = market.get('price')
-        ctx['market_since_close_pct'] = market.get('change_since_close_pct')
-        ctx['market_since_publish_pct'] = market.get('change_since_publish_pct')
+        index = _context_for(benchmark, published_at)
+        ctx['market_price'] = index.get('price')
+        ctx['market_since_close_pct'] = index.get('change_since_close_pct')
+        ctx['market_since_publish_pct'] = index.get('change_since_publish_pct')
     if ctx and published_at:
-        in_session = _in_regular_session(published_at)
+        in_session = _in_regular_session(published_at, ticker)
         if in_session is not None:
             ctx['published_in_session'] = in_session
     return ctx
 
 
-def _in_regular_session(when):
+def _in_regular_session(when, ticker=None):
     """Whether `when` (aware datetime or ISO string; naive = UTC) fell in a
-    US regular session, 09:30-16:00 ET on a weekday - holidays not
-    modelled. None if it can't be read."""
+    regular session on `ticker`'s exchange - 09:30-16:00 ET for a US symbol,
+    09:00-17:30 CET for a Frankfurt one, and so on (markets.py; holidays not
+    modelled). None if the time can't be read, or the exchange isn't one the
+    app models. Defaults to the US session when no ticker is given."""
     import pandas as pd
 
+    market = markets.market(ticker) if ticker else markets.MARKETS[markets.US]
+    if market is None:
+        return None
     try:
         ts = pd.Timestamp(when)
         if ts.tzinfo is None:
             ts = ts.tz_localize("UTC")
-        et = ts.tz_convert("America/New_York")
+        local = ts.tz_convert(market.tz.zone)
     except (TypeError, ValueError):
         return None
-    minutes = et.hour * 60 + et.minute
-    return et.weekday() < 5 and 9 * 60 + 30 <= minutes < 16 * 60
+    minutes = local.hour * 60 + local.minute
+    opens = market.open_at.hour * 60 + market.open_at.minute
+    closes = market.close_at.hour * 60 + market.close_at.minute
+    return local.weekday() < 5 and opens <= minutes < closes
 
 
 def _context_for(ticker, published_at):

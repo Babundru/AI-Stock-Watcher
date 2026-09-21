@@ -98,14 +98,14 @@ class CloudAnalyzer:
                 self._log(f"   ↪ {model} {reason} - trying {nxt}")
         return None
 
-    def analyze_article(self, company, article, market_is_open, portfolio_tickers=None):
+    def analyze_article(self, company, article, open_markets, portfolio_tickers=None):
         """The analysis dict, or None if the article isn't relevant (or has
         no text to judge). Raises AnalysisUnavailable when no model gave an
         answer at all, so the article is retried rather than written off."""
         if not self.providers:
             raise AnalysisUnavailable("cloud AI is not set up - check the API key and provider")
 
-        prompt = build_market_prompt(company, article, market_is_open, portfolio_tickers)
+        prompt = build_market_prompt(company, article, open_markets, portfolio_tickers)
         if not prompt:
             return None
 

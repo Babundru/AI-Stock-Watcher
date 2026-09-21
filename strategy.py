@@ -32,18 +32,27 @@ stock's normal daily range (14-day ATR):
 A refused signal is still followed as if it had been traded
 (shadow_trades.py), so each rule's refusals can be judged.
 
-Exit - checked on every watch pass, first match wins:
+Exit - checked on every watch pass, first match wins. Every one of them
+waits for the regular session on the position's own exchange - New York's
+for a US listing, Frankfurt's for a German one (markets.py,
+config.EXITS_REGULAR_HOURS_ONLY): the price feed includes extended hours,
+and a stop "hit" on a thin 3am print is a fill nobody could have got. An
+overnight gap is still there at the open, so waiting costs nothing and the
+exit is priced where it could have traded.
 
   1. Stop. Starts STOP_ATR_MULT x ATR from entry. Ratchets, never loosens:
      it trails the best price by the initial distance, jumps to break-even
      once BREAKEVEN_AT of the target has been gained, and - with
      LET_WINNERS_RUN - tightens to TRAIL_AFTER_TARGET_MULT x the distance
-     once the target is reached.
+     once the target is reached. The ratchet only reads in-session prices
+     too, so an after-hours spike cannot pull the trailing stop up to a
+     level that never traded.
   2. Target (only when LET_WINNERS_RUN is off for this position).
-  3. Time exit, at 15:45 ET on the horizon's last trading day - fired only
-     while the US market is open, so it closes on a live price. There is
-     no postponing a time exit because the position is at a loss: that
-     rule is exactly what kept losers open while winners were being booked.
+  3. Time exit, a quarter of an hour before that exchange's close on the
+     horizon's last trading day (15:45 ET in New York, 17:15 CET in
+     Frankfurt). There is no postponing a time exit because the position is
+     at a loss: that rule is exactly what kept losers open while winners
+     were being booked.
 """
 
 import datetime
@@ -51,12 +60,16 @@ import datetime
 import pytz
 
 import config
+import markets
 
 # Recorded on every watch and paper trade, so the ledger can compare rule
 # sets instead of blending trades made under different ones. v4: a story
 # has to be big for the stock in daily ranges, not in stops (see
-# config.MIN_MOVE_ATR_MULT).
-STRATEGY_VERSION = "v4"
+# config.MIN_MOVE_ATR_MULT). v5: exits (and the stop's ratchet) only read
+# prices from the regular session - before it, an extended-hours print
+# could close a position at a price that never traded, so v4 and earlier
+# results are not comparable with v5 and should not be pooled with them.
+STRATEGY_VERSION = "v5"
 LEGACY_STRATEGY = "v1"
 
 # Normal daily range assumed for a stock whose ATR couldn't be worked out.
@@ -79,10 +92,10 @@ DEFAULT_TARGET_PCT = 0.05
 TARGET_MIN_PCT = 0.015
 TARGET_MAX_PCT = 0.20
 
-# Time exits in US trading days after the session the position opened in.
-# Weekends are skipped; exchange holidays are not modelled (a time exit that
-# lands on one simply fires on the next open day, when the market-open gate
-# lets it).
+# Time exits in trading days after the session the position opened in - the
+# position's own exchange's sessions, not New York's. Weekends are skipped;
+# exchange holidays are not modelled (a time exit that lands on one simply
+# fires on the next open day, when the market-open gate lets it).
 HORIZON_TRADING_DAYS = {
     "INTRADAY": 0,
     "DAYS": 3,
@@ -91,10 +104,6 @@ HORIZON_TRADING_DAYS = {
 DEFAULT_HORIZON = "DAYS"
 
 ET = pytz.timezone("US/Eastern")
-TIME_EXIT_ET = datetime.time(15, 45)
-# A position opened after this (or at a weekend) counts from the next
-# session: an INTRADAY trade opened at 15:30 should not be closed at 15:45.
-SESSION_CUTOFF_ET = datetime.time(12, 0)
 
 
 # --- parsing the model's numbers ------------------------------------------
@@ -291,18 +300,26 @@ def plan_trade(direction, impact, expected_pct, context, needs_confirmation=Fals
     return plan
 
 
-def time_exit_at(opened_at, horizon):
+def time_exit_at(opened_at, horizon, ticker=None):
     """When a position opened at `opened_at` (tz-aware) hits its time exit:
-    15:45 ET on the horizon's last trading day, in opened_at's timezone."""
+    a quarter of an hour before the close on the horizon's last trading day,
+    on `ticker`'s own exchange, returned in opened_at's timezone.
+
+    For a US listing that is the 15:45 ET it has always been; for a Frankfurt
+    one it is 17:15 CET, which is the last moment that position can actually
+    be closed - counting its horizon in New York sessions would have held it
+    past two more Frankfurt closes.
+    """
+    market = markets.market(ticker) or markets.MARKETS[markets.US]
     days = HORIZON_TRADING_DAYS.get(horizon, HORIZON_TRADING_DAYS[DEFAULT_HORIZON])
-    et = opened_at.astimezone(ET)
-    day = et.date()
-    if et.weekday() > 4 or et.time() >= SESSION_CUTOFF_ET:
+    local = opened_at.astimezone(market.tz)
+    day = local.date()
+    if local.weekday() > 4 or local.time() >= market.session_cutoff:
         day = _next_trading_day(day)
     for _ in range(days):
         day = _next_trading_day(day)
-    exit_et = ET.localize(datetime.datetime.combine(day, TIME_EXIT_ET))
-    return exit_et.astimezone(opened_at.tzinfo)
+    exit_local = market.tz.localize(datetime.datetime.combine(day, market.time_exit_at))
+    return exit_local.astimezone(opened_at.tzinfo)
 
 
 def _next_trading_day(day):
@@ -316,6 +333,18 @@ def us_market_open(now=None):
     """NYSE/Nasdaq regular session (holidays not modelled)."""
     now = (now or datetime.datetime.now(pytz.utc)).astimezone(ET)
     return now.weekday() < 5 and datetime.time(9, 30) <= now.time() < datetime.time(16, 0)
+
+
+def market_open(ticker, now=None):
+    """Whether `ticker`'s own exchange is in its regular session: True,
+    False, or None when the exchange isn't one markets.py models.
+
+    The exit gate (config.EXITS_REGULAR_HOURS_ONLY) reads this rather than
+    the US session, so a London position is managed between 08:00 and 16:30
+    London time - during which New York is shut for more than half - and a
+    New York one is still managed 09:30-16:00 ET exactly as before.
+    """
+    return markets.session_open(ticker, now)
 
 
 # --- exit ------------------------------------------------------------------

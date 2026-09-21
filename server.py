@@ -181,7 +181,7 @@ def api_engine():
 # the API key and dashboard password come out as "is one set" flags only,
 # and a blank value on save means "leave it as it is".
 _SETTINGS_PUBLIC = (
-    "NTFY_TOPIC", "NOTIFY_OWNERSHIP",
+    "NTFY_TOPIC", "NOTIFY_OWNERSHIP", "SCAN_EUROPE",
     "USE_CLOUD_AI", "CLOUD_AI_PROVIDER", "CLOUD_AI_MODEL", "CLOUD_AI_BASE_URL",
     "USE_LOCAL_LLM", "LOCAL_MODEL_NAME", "OLLAMA_NUM_THREADS", "OLLAMA_URL",
     "PAPER_COST_PCT", "DASHBOARD_USERNAME",

@@ -133,7 +133,7 @@ class WatchManager:
             "article_url": article_url,
             "article_headline": article_headline,
             "opened_at": opened_at.isoformat(),
-            "expires_at": strategy.time_exit_at(opened_at, horizon).isoformat(),
+            "expires_at": strategy.time_exit_at(opened_at, horizon, ticker).isoformat(),
             "status": "OPEN",
             "reason": None,
             "exit_price": None,

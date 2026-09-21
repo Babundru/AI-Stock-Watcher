@@ -695,6 +695,16 @@ class StockAppGUI(ctk.CTk):
         let_run_var = add_check("Let winners run (trail the stop at the target)",
                                 getattr(config, 'LET_WINNERS_RUN', True))
 
+        ctk.CTkLabel(scroll, text="Markets", font=UI(16, "bold"),
+                    text_color=COLOR_ACCENT).pack(pady=(20, 0))
+        scan_europe_var = add_check("Scan European markets as well as US ones",
+                                    getattr(config, 'SCAN_EUROPE', True))
+        ctk.CTkLabel(scroll,
+                    text="ℹ️ Adds the European newswires, and lets a European company's\n"
+                         "home listing (BMW.DE, SHEL.L) be traded on its own exchange hours.\n"
+                         "Off: those stocks still alert, but never open a position.",
+                    text_color=COLOR_TEXT_MUTE, font=UI(9), justify="left").pack(anchor="w", padx=20, pady=(5, 20))
+
         ctk.CTkLabel(scroll, text="Short selling", font=UI(16, "bold"),
                     text_color=COLOR_ACCENT).pack(pady=(20, 0))
         allow_shorts_var = add_check("Open short positions on negative news (paper trading)",
@@ -817,6 +827,7 @@ class StockAppGUI(ctk.CTk):
                     "MIN_CONFIDENCE": min_conf,
                     "MAX_OPEN_POSITIONS": max_pos,
                     "LET_WINNERS_RUN": let_run_var.get(),
+                    "SCAN_EUROPE": scan_europe_var.get(),
                     "ALLOW_SHORTS": allow_shorts_var.get(),
                     "NOTIFY_SHORTS": notify_shorts_var.get(),
                     "REDDIT_COMMENTS_PER_POST": reddit_comments,

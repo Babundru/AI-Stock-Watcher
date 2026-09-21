@@ -1,7 +1,10 @@
 import datetime
-import pytz
 import sys
 import unicodedata
+
+import pytz
+
+import markets
 
 # Windows console encoding fix
 try:
@@ -46,20 +49,20 @@ class Notifier:
         return self.enabled
 
     def is_market_open(self):
+        """Whether any exchange the app follows is in its regular session.
+
+        Not the US market alone any more: European venues open hours before
+        New York and close before its afternoon, so for most of a European
+        trading day this used to report "closed" while the stock in the
+        story was changing hands. See open_markets for which ones.
         """
-        Checks if the US stock market (NYSE/Nasdaq) is currently open.
-        """
-        now = datetime.datetime.now(self.timezone)
-        
-        # 0 = Monday, 4 = Friday
-        if now.weekday() > 4:
-            return False
-            
-        # Market hours: 9:30 AM - 4:00 PM ET
-        start_time = now.replace(hour=9, minute=30, second=0, microsecond=0)
-        end_time = now.replace(hour=16, minute=0, second=0, microsecond=0)
-        
-        return start_time <= now <= end_time
+        return markets.any_open()
+
+    @staticmethod
+    def open_markets():
+        """Names of the exchanges trading right now - for the scan log and
+        for the analysis prompt's market-status line."""
+        return markets.open_markets()
 
     def notify_system(self, title, message):
         """
@@ -170,8 +173,13 @@ class Notifier:
             exit_text = ""
             if d.get('expires_at'):
                 try:
-                    when = datetime.datetime.fromisoformat(d['expires_at']).astimezone(self.timezone)
-                    exit_text = f"\nTime exit: {when:%a %d %b %H:%M} ET at the latest"
+                    # On the exchange's own clock, which is the one the exit
+                    # is set by: 17:15 CEST for a Frankfurt position, not the
+                    # small-hours ET time that works out to.
+                    tz = markets.timezone(d.get('ticker'))
+                    when = datetime.datetime.fromisoformat(d['expires_at']).astimezone(tz)
+                    exit_text = (f"\nTime exit: {when:%a %d %b %H:%M} "
+                                 f"{markets.tz_label(d.get('ticker'))} at the latest")
                 except (TypeError, ValueError):
                     pass
             follow = "BUY BACK" if is_short else "SELL"

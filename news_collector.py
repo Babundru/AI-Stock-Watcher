@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from source_manager import SourceManager, source_trust, OPINION
 from reddit_source import RedditPoller, is_reddit_url, parse_subreddit
 from config import LOOKBACK_MINUTES
+import config
 import feedparser
 
 # Suppress warnings when parsing XML/RSS with html.parser (intended behavior for robustness)
@@ -117,6 +118,35 @@ ARTICLE_STRAINER = SoupStrainer('p')
 # time turns "N articles * ~1-3s each" into roughly the slowest single fetch.
 MAX_SCRAPE_WORKERS = 6
 
+# Articles taken from the built-in feeds per scan, across all of them. Each
+# one costs a page fetch, a parse and an LLM call, so this is what bounds a
+# cycle's cost; the ones left behind are not marked processed and are still
+# offered next cycle, while they remain inside the lookback window.
+MAX_ARTICLES_PER_SCAN = 24
+
+
+def _interleave_newest(groups, limit):
+    """Up to `limit` articles taken a round at a time - each group's newest
+    unused article, then each group's next - so every feed is represented
+    before any feed gets a second helping. Within a round the newest goes
+    first; the result is sorted newest-first overall.
+
+    Ties and short feeds look after themselves: a group that runs out simply
+    stops contributing, and the remaining quota goes to the others.
+    """
+    queues = [sorted(g, key=lambda a: a['_pub_dt'], reverse=True) for g in groups if g]
+    picked = []
+    while queues and len(picked) < limit:
+        round_ = []
+        for queue in queues:
+            if queue:
+                round_.append(queue.pop(0))
+        round_.sort(key=lambda a: a['_pub_dt'], reverse=True)
+        picked.extend(round_[:limit - len(picked)])
+        queues = [q for q in queues if q]
+    picked.sort(key=lambda a: a['_pub_dt'], reverse=True)
+    return picked
+
 
 def is_public_url(url):
     """Whether a URL points at a public host.
@@ -141,13 +171,39 @@ def is_public_url(url):
 
 
 class NewsCollector:
-    # Major financial news RSS feeds (free, no API key needed)
-    MARKET_RSS_FEEDS = [
+    # Major financial news RSS feeds (free, no API key needed).
+    US_RSS_FEEDS = [
         ('https://www.cnbc.com/id/100003114/device/rss/rss.html', 'CNBC Top News'),
         ('https://feeds.content.dowjones.io/public/rss/mw_topstories', 'MarketWatch'),
         ('https://finance.yahoo.com/news/rssindex', 'Yahoo Finance'),
         ('https://www.investing.com/rss/news.rss', 'Investing.com')
     ]
+
+    # European coverage (config.SCAN_EUROPE). The US wires above do report
+    # the largest European names, but only once a story is big enough to
+    # cross the Atlantic - which is usually after the move. These carry the
+    # same stories hours earlier, and the mid-caps not at all.
+    #
+    # English-language on purpose: the analysis prompt is in English, and a
+    # local model reads a German or French article visibly less well than an
+    # English one. A national feed (Handelsblatt, Les Echos, Borsa Italiana)
+    # can still be added as a custom source by anyone running a model that
+    # handles it - see the README.
+    EU_RSS_FEEDS = [
+        ('https://www.ft.com/companies?format=rss', 'FT Companies'),
+        ('https://uk.finance.yahoo.com/news/rssindex', 'Yahoo Finance UK'),
+        ('https://www.cityam.com/feed/', 'City AM'),
+        ('https://www.euronews.com/rss?level=theme&name=business', 'Euronews Business'),
+    ]
+
+    @property
+    def MARKET_RSS_FEEDS(self):
+        """The built-in feeds to poll this cycle. Read live from config, so
+        turning Europe off in settings takes effect on the next scan."""
+        feeds = list(self.US_RSS_FEEDS)
+        if getattr(config, 'SCAN_EUROPE', True):
+            feeds += self.EU_RSS_FEEDS
+        return feeds
 
     def __init__(self, source_mgr=None):
         # Shared with the UI when one is passed in, so a source added there
@@ -253,10 +309,17 @@ class NewsCollector:
         """
         Fetches top business headlines from major news RSS feeds (no APIs needed).
 
-        Feeds are polled in parallel, and only the freshest 20 articles across
-        all of them are scraped. Scraping every candidate and only afterwards
-        slicing to the top 20 (the previous behaviour) meant paying for up to
-        80 full-page fetches that were immediately discarded.
+        Feeds are polled in parallel, and only the freshest MAX_ARTICLES_PER_SCAN
+        articles across all of them are scraped. Scraping every candidate and only
+        afterwards slicing to that number (the previous behaviour) meant paying
+        for dozens of full-page fetches that were immediately discarded.
+
+        The survivors are picked a round at a time, newest first from each
+        feed in turn, rather than by taking the newest N overall. With one
+        region's wires that was the same thing; with two it is not - a busy
+        hour on the US wires would fill the whole quota and the European
+        stories, which are the point of polling those feeds, would be
+        dropped every cycle they arrived in.
         """
         # A built-in feed the user has also added as a custom source was
         # being downloaded twice per cycle; the custom copy runs first, so
@@ -266,7 +329,7 @@ class NewsCollector:
         if not feeds:
             return []
 
-        all_articles = []
+        by_feed = {}
         with ThreadPoolExecutor(max_workers=len(feeds)) as pool:
             futures = {
                 pool.submit(self._fetch_from_rss, feed_url, source_name, 25, None, False): source_name
@@ -276,12 +339,11 @@ class NewsCollector:
                 source_name = futures[future]
                 try:
                     print(f"Fetching from {source_name}...")
-                    all_articles.extend(future.result())
+                    by_feed.setdefault(source_name, []).extend(future.result())
                 except Exception as e:
                     print(f"Error fetching {source_name}: {e}")
 
-        all_articles.sort(key=lambda a: a['_pub_dt'], reverse=True)
-        top_articles = all_articles[:20]
+        top_articles = _interleave_newest(by_feed.values(), MAX_ARTICLES_PER_SCAN)
         self._scrape_many(top_articles)
         for article in top_articles:
             article.pop('_pub_dt', None)

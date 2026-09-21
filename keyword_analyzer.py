@@ -125,14 +125,16 @@ class KeywordAnalyzer:
             # position; with no vocabulary there is simply nothing to find.
             self._combined_pattern = None
 
-    def analyze_article(self, company, article, market_is_open, portfolio_tickers=None):
+    def analyze_article(self, company, article, open_markets, portfolio_tickers=None):
         """
         Analyze a news article using the weighted keyword algorithm.
 
         Args:
             company: Company name or ticker hint for this article
             article: Article dictionary with title, description, content
-            market_is_open: Boolean indicating if market is open
+            open_markets: whether any exchange is trading - the list of open
+                markets (markets.open_markets()), or a plain bool; only its
+                truth matters here
             portfolio_tickers: List of tickers in user's portfolio
 
         Returns:
@@ -173,7 +175,7 @@ class KeywordAnalyzer:
 
         sentiment = self._classify_sentiment(total_score)
         impact = self._classify_impact(total_score)
-        prediction = self._generate_prediction(sentiment, market_is_open)
+        prediction = self._generate_prediction(sentiment, open_markets)
         horizon = self._generate_horizon(impact)
 
         found_positive = sorted(
@@ -313,12 +315,16 @@ class KeywordAnalyzer:
             return "MEDIUM"
         return "LOW"
 
-    def _generate_prediction(self, sentiment: str, market_is_open: bool) -> str:
-        """Generate price prediction based on sentiment and market status."""
+    def _generate_prediction(self, sentiment, open_markets) -> str:
+        """Generate price prediction based on sentiment and market status.
+
+        `open_markets` is the list of exchanges currently trading (or a
+        bool): with something open the move is a RALLY/DROP now, with
+        everything shut it is a gap at the next open."""
         if sentiment == "POSITIVE":
-            return "RALLY" if market_is_open else "GAP UP"
+            return "RALLY" if open_markets else "GAP UP"
         elif sentiment == "NEGATIVE":
-            return "DROP" if market_is_open else "GAP DOWN"
+            return "DROP" if open_markets else "GAP DOWN"
         return "FLAT"
 
     def _generate_horizon(self, impact: str) -> str:

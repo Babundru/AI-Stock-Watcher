@@ -106,7 +106,8 @@ class WaitTest(unittest.TestCase):
         self.backend.collector = mock.Mock()
         self.backend.collector.fetch_reddit_posts.return_value = []
         self.backend.notifier = mock.Mock()
-        self.backend.notifier.is_market_open.return_value = False
+        # Nothing trading: a weekend, which is what this suite is about.
+        self.backend.notifier.open_markets.return_value = []
         self.backend._process_article = mock.Mock()
 
     def test_weekday_wait_polls_nothing_extra(self):
@@ -127,7 +128,7 @@ class WaitTest(unittest.TestCase):
         self.backend.collector.fetch_reddit_posts.side_effect = [[], [post]] + [[]] * 30
         self.backend._wait(config.WEEKEND_CHECK_INTERVAL, 1)
         self.backend._process_article.assert_called_once_with(
-            "Custom Source News", post, False, is_discovery=True)
+            "Custom Source News", post, [], is_discovery=True)
 
     def test_countdown_runs_while_waiting_only(self):
         seen = []

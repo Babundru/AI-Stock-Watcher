@@ -23,6 +23,7 @@ import os
 import uuid
 
 import config
+import markets
 import strategy
 from local_time import now_local
 
@@ -136,7 +137,8 @@ class ShadowBook:
             "let_run": bool(config.LET_WINNERS_RUN),
             "trailing": False,
             "opened_at": opened_at.isoformat(),
-            "expires_at": strategy.time_exit_at(opened_at, horizon).isoformat(),
+            "expires_at": strategy.time_exit_at(opened_at, horizon, ticker).isoformat(),
+            "benchmark": markets.benchmark_for(ticker),
             "benchmark_entry": benchmark_price,
             "mae_pct": 0.0,
             "mfe_pct": 0.0,

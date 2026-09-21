@@ -14,6 +14,7 @@ from watch_manager import WatchManager
 from paper_trader import PaperTrader
 from shadow_trades import ShadowBook
 from source_manager import article_trust, OPINION
+import markets
 import price_lookup
 import reddit_source
 import strategy
@@ -361,11 +362,11 @@ class StockAppBackend:
         """Analyse whatever Reddit posts have become ready. Returns how many."""
         posts = self.collector.fetch_reddit_posts()
         if posts:
-            market_open = self.notifier.is_market_open()
+            open_now = self.notifier.open_markets()
             for article in posts:
                 if not self._alive(generation):
                     break
-                self._process_article("Custom Source News", article, market_open, is_discovery=True)
+                self._process_article("Custom Source News", article, open_now, is_discovery=True)
         return len(posts)
 
     def _run_loop(self, generation):
@@ -396,9 +397,12 @@ class StockAppBackend:
                 # Each scan gives an engine that failed last time a new chance.
                 self._engine_down = False
                 
-                market_open = self.notifier.is_market_open()
-                status_msg = "OPEN" if market_open else "CLOSED"
-                self.log(f"Market Status: {status_msg}")
+                # Which exchanges are trading, not just New York's: this is
+                # what the analysis prompt is told, and it decides whether a
+                # story gaps a stock at the next open or moves it now.
+                open_now = self.notifier.open_markets()
+                self.log("Market Status: "
+                         + (f"OPEN - {', '.join(open_now)}" if open_now else "CLOSED"))
 
                 # --- CUSTOM SOURCES (Priority) ---
                 # First, check custom user-defined sources
@@ -413,7 +417,7 @@ class StockAppBackend:
                 # no longer exist, and made a cycle outlast CHECK_INTERVAL.
                 for article in custom_articles:
                     if not self._alive(generation): break
-                    self._process_article("Custom Source News", article, market_open, is_discovery=True)
+                    self._process_article("Custom Source News", article, open_now, is_discovery=True)
 
 
                 # --- GLOBAL SCAN vs WATCHLIST ---
@@ -425,7 +429,7 @@ class StockAppBackend:
                     for article in articles:
                         if not self._alive(generation): break
                         # Hint "General Market" so the analyzer identifies the entity itself
-                        self._process_article("General Market News", article, market_open, is_discovery=True)
+                        self._process_article("General Market News", article, open_now, is_discovery=True)
 
                 # We can also still check specific targets if they might not show up in top headlines?
                 # For rate limit safety, if Global Scan is on, we might skip the targeted specific loop
@@ -437,7 +441,7 @@ class StockAppBackend:
                         articles = self.collector.fetch_news(company)
                         for article in articles:
                             if not self._alive(generation): break
-                            self._process_article(company, article, market_open)
+                            self._process_article(company, article, open_now)
 
                 if not self._alive(generation):
                     break
@@ -528,7 +532,7 @@ class StockAppBackend:
         self.log(f"   ⚠ Analysis failed ({error}) - retrying on the next scan "
                  f"(attempt {attempts}/{MAX_ANALYSIS_ATTEMPTS}); other new articles wait too")
 
-    def _process_article(self, company_hint, article, market_is_open, is_discovery=False):
+    def _process_article(self, company_hint, article, open_markets, is_discovery=False):
         url = article.get('url')
         title = article.get('title', 'No Title')
         
@@ -557,7 +561,7 @@ class StockAppBackend:
         self.log(f"   🔍 Analyzing with {self.engine_name()}...")
         self.status(f"Analyzing: {title[:48]}")
         try:
-            analysis = self.analyzer.analyze_article(company_hint, article, market_is_open, portfolio_tickers)
+            analysis = self.analyzer.analyze_article(company_hint, article, open_markets, portfolio_tickers)
         except AnalysisUnavailable as e:
             self._analysis_failed(url, e)
             self.status("Idle")
@@ -709,7 +713,11 @@ class StockAppBackend:
         still shows its setup in the notification). A signal the price rules
         refuse is followed as a skipped trade (shadow_trades.py).
         """
-        decision = {'opened': False, 'direction': direction, 'reason': None, 'watch': None}
+        # 'ticker' rides along so the notification can show the time exit on the
+        # exchange's own clock - 17:15 CET for a Frankfurt position, not its ET
+        # equivalent in the small hours of the user's evening.
+        decision = {'opened': False, 'direction': direction, 'ticker': ticker,
+                    'reason': None, 'watch': None}
 
         def no(reason):
             decision['reason'] = reason
@@ -719,6 +727,10 @@ class StockAppBackend:
             return no("no tradable ticker")
         if not self._may_trade_on(article):
             return no("Reddit posts only raise alerts (trading on them is off in settings)")
+        if markets.is_european(ticker) and not config.SCAN_EUROPE:
+            # The alert still went out; only the position is refused, for a
+            # broker that can't deal outside the US.
+            return no(f"{ticker} is listed in Europe, which is off in settings")
         if direction == SHORT:
             if not config.ALLOW_SHORTS and not config.NOTIFY_SHORTS:
                 return no("short selling is off in settings")
@@ -731,8 +743,13 @@ class StockAppBackend:
             return no(f"position limit reached ({config.MAX_OPEN_POSITIONS} open)")
 
         self.status(f"Checking price action: {ticker}")
+        # The index this listing is judged against - SPY for a US symbol,
+        # the European one for a European listing (markets.benchmark_for).
+        # Netting a Frankfurt stock's move against an index that was shut
+        # for most of its session is noise, not the market's move.
+        benchmark = markets.benchmark_for(ticker)
         context = price_lookup.fetch_context(ticker, article.get('published_ts'),
-                                             benchmark=PAPER_BENCHMARK)
+                                             benchmark=benchmark)
         self.log(f"   📈 {_describe_context(context)}")
         trust = article_trust(article)
         horizon = analysis.get('horizon')
@@ -748,7 +765,7 @@ class StockAppBackend:
 
         # Entry priced the same way every watch check prices it, with the
         # benchmark riding along in the same batched call.
-        wanted = [ticker] + ([PAPER_BENCHMARK] if self.paper else [])
+        wanted = [ticker] + ([benchmark] if self.paper else [])
         prices = price_lookup.fetch_prices(wanted)
         entry = prices.get(ticker) or context.get('price')
         if not entry:
@@ -782,7 +799,7 @@ class StockAppBackend:
         if not watch:
             return no(f"already holding a position in {ticker}")
         if self.paper:
-            self.paper.open_trade(watch, prices.get(PAPER_BENCHMARK))
+            self.paper.open_trade(watch, prices.get(benchmark), benchmark=benchmark)
         decision.update(opened=True, watch=watch, expires_at=watch['expires_at'])
         return decision
 
@@ -811,7 +828,8 @@ class StockAppBackend:
         for watch in self.watch_mgr.get_open_watches():
             if watch['ticker'] != ticker or watch.get('direction', LONG) == direction:
                 continue
-            wanted = [ticker] + ([PAPER_BENCHMARK] if self.paper else [])
+            benchmark = markets.benchmark_for(ticker)
+            wanted = [ticker] + ([benchmark] if self.paper else [])
             prices = price_lookup.fetch_prices(wanted)
             price = prices.get(ticker)
             if not price:
@@ -821,7 +839,7 @@ class StockAppBackend:
             self.log(f"  ↩ New {'positive' if direction == LONG else 'negative'} news contradicts "
                      f"the open {watch['direction']} on {ticker} - closing it at {price:.2f}")
             self._close_position(watch, 'news_reversal', price,
-                                 prices.get(PAPER_BENCHMARK), now_local())
+                                 prices.get(benchmark), now_local())
 
     def _close_position(self, watch, reason, price, benchmark_price, now):
         """Close a watch, record the paper trade and send the exit signal."""
@@ -881,12 +899,13 @@ class StockAppBackend:
         watch = next((w for w in self.watch_mgr.get_open_watches() if w['id'] == watch_id), None)
         if not watch:
             return None
-        wanted = [watch['ticker']] + ([PAPER_BENCHMARK] if self.paper else [])
+        benchmark = markets.benchmark_for(watch['ticker'])
+        wanted = [watch['ticker']] + ([benchmark] if self.paper else [])
         prices = price_lookup.fetch_prices(wanted)
         price = prices.get(watch['ticker'])
         if not price:
             return None
-        self._close_position(watch, 'manual', price, prices.get(PAPER_BENCHMARK), now_local())
+        self._close_position(watch, 'manual', price, prices.get(benchmark), now_local())
         return price
 
     def _check_watches(self):
@@ -899,18 +918,37 @@ class StockAppBackend:
         if not open_watches and not skipped:
             return
 
+        # Each position is gated on its own exchange's session, not on New
+        # York's: a London holding is managed 08:00-16:30 London time, of
+        # which New York is open for barely an hour and a half.
+        sessions = {t: strategy.market_open(t)
+                    for t in {w['ticker'] for w in open_watches} | {s['ticker'] for s in skipped}}
         if open_watches:
-            self.log(f"👀 Checking {len(open_watches)} open watch(es) for exit signals...")
-        # One batched price call for both: skipped trades ride along with
-        # the real positions instead of costing requests of their own.
-        tickers = list({w['ticker'] for w in open_watches} | {s['ticker'] for s in skipped})
-        if self.paper:
-            tickers.append(PAPER_BENCHMARK)
+            # Said plainly, because "checking for exit signals" overnight
+            # would read as "no exit was due" when in fact none could fire.
+            live = sum(1 for w in open_watches
+                       if not (config.EXITS_REGULAR_HOURS_ONLY and sessions[w['ticker']] is False))
+            if live == len(open_watches):
+                state = "checking for exit signals..."
+            elif live:
+                state = (f"checking {live} for exit signals - the rest are marked only, "
+                         f"their exchanges being shut")
+            else:
+                state = "marking prices only - exits wait for the open"
+            self.log(f"👀 {len(open_watches)} open watch(es): {state}")
+        # One batched price call for all of it: skipped trades ride along
+        # with the real positions instead of costing requests of their own,
+        # and so does each market's benchmark - two at most, and only the
+        # ones an open position is actually measured against.
+        tickers = list(sessions)
+        benchmarks = {t: markets.benchmark_for(t) for t in tickers} if self.paper else {}
+        tickers += sorted(set(benchmarks.values()))
         prices = price_lookup.fetch_prices(tickers)
-        benchmark_price = prices.get(PAPER_BENCHMARK) if self.paper else None
         now = now_local()
-        market_open = strategy.us_market_open()
         cost = self.paper.cost_pct if self.paper else config.PAPER_COST_PCT
+
+        def benchmark_price_for(ticker):
+            return prices.get(benchmarks[ticker]) if self.paper else None
 
         for watch in open_watches:
             price = prices.get(watch['ticker'])
@@ -924,23 +962,26 @@ class StockAppBackend:
             if self.paper:
                 self.paper.mark_price(watch['id'], price)
 
-            reason, target_reached = self._exit_reason(watch, price, now, market_open, cost)
+            reason, target_reached = self._exit_reason(
+                watch, price, now, sessions[watch['ticker']], cost)
             if reason == 'max_age':
                 self.log(f"  📅 {watch['company']} ({watch['ticker']}) open past the age "
                          f"limit - closing at {price:.2f}")
             if target_reached and not reason:
                 self._notify_target_reached(watch, price)
             if reason:
-                self._close_position(watch, reason, price, benchmark_price, now)
+                self._close_position(watch, reason, price,
+                                     benchmark_price_for(watch['ticker']), now)
 
         for record in skipped:
             price = prices.get(record['ticker'])
             if not price:
                 continue
             self.shadows.mark_price(record, price)
-            reason, _ = self._exit_reason(record, price, now, market_open, cost)
+            reason, _ = self._exit_reason(record, price, now, sessions[record['ticker']], cost)
             if reason:
-                self.shadows.close(record, reason, price, benchmark_price, now)
+                self.shadows.close(record, reason, price,
+                                   benchmark_price_for(record['ticker']), now)
                 self.log(f"  👻 Skipped trade {record['ticker']} ({record['skip_rule']}) would have "
                          f"closed at {price:.2f}: {record['net_pct'] * 100:+.2f}% after costs ({reason})")
 
@@ -967,12 +1008,35 @@ class StockAppBackend:
         if any: (reason or None, target_just_reached). The same rules for a
         real position and a skipped trade.
 
-        Time exits wait for the regular session: fired at 3am they would
-        close on a stale after-hours print nobody could trade at. Price
-        exits (stops) fire whenever a price is there.
+        `market_open` is this position's own exchange's session - True,
+        False, or None when the exchange isn't one markets.py models, in
+        which case there is nothing to wait for and the exits run as they
+        did before any of them were gated.
+
+        Every exit waits for that regular session - see
+        config.EXITS_REGULAR_HOURS_ONLY. Prices come from the 1-minute
+        chart with prepost=True, so outside it (09:30-16:00 ET in New York,
+        09:00-17:30 CET in Frankfurt) they are prints - often a handful of
+        shares at a spread no real exit would have crossed. Acting on one
+        records a fill nobody could have got: a stop "hit" at 3am on a
+        single thin print goes into the ledger as fact, and the ledger then
+        measures the quote feed rather than the strategy.
+
+        Nothing is lost by waiting. An overnight gap is still there at the
+        open, and that is the first moment it could have been traded, so
+        the first in-session check exits at the price the position would
+        really have got. The stop's ratchet is held back along with the
+        exit, not merely the exit itself: letting an after-hours spike
+        raise peak_gain would pull the trailing stop up to a level that
+        never traded, and stop the position out against it at the open.
+
+        Time exits are gated on the session whoever your broker is - one
+        fired at 03:00 would close on a stale print either way.
         """
+        if config.EXITS_REGULAR_HOURS_ONLY and market_open is False:
+            return None, False
         reason, target_reached = strategy.update_exit(position, price, cost)
-        if not reason and market_open:
+        if not reason and market_open is not False:
             if WatchManager.over_age_limit(position, now):
                 reason = 'max_age'
             elif now >= _parse_time(position.get('expires_at'), now):
