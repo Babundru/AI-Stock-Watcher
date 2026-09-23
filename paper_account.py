@@ -7,9 +7,8 @@ with config.PAPER_BUDGET, sizes every trade by risk, ties the cash up while
 the position is open, and refuses a trade the cash can't cover.
 
 Everything here is computed from the ledger on request rather than stored,
-which is what makes it cheap to run the same trades through several accounts
-at once (config.PAPER_RISK_LEVELS - one graph each) and to re-size the old
-trades under the current rules: nothing about an account is written down
+which is what makes it cheap to re-size the old trades under the current
+rules: nothing about an account is written down
 anywhere except the trades themselves and their price marks.
 
 Sizing (position_size)
@@ -70,9 +69,8 @@ def settings(risk_pct=None):
 
 
 def risk_levels():
-    """The risk levels drawn as graphs: PAPER_RISK_LEVELS plus the one that
-    trades, lowest first."""
-    return sorted({float(r) for r in config.PAPER_RISK_LEVELS} | {float(config.PAPER_RISK_PCT)})
+    """The risk levels drawn as graphs: just the one that trades."""
+    return [float(config.PAPER_RISK_PCT)]
 
 
 def position_size(account, cash, stop_pct, confidence, impact, s):
@@ -180,6 +178,8 @@ def replay(trades, cost_pct, risk_pct=None, marks=(), prices=None, now=None, cur
             cash -= got['size']
             held[wid] = {'size': got['size'], 'trade': t, 'pct': -cost_pct}
             point(ts, 'open', ticker=t.get('ticker'), dir=t.get('direction'), size=got['size'])
+            if curve:
+                held[wid]['point'] = points[-1]
         elif wid in held:
             p = held.pop(wid)
             pnl = p['size'] * t['net_pct']
@@ -196,6 +196,12 @@ def replay(trades, cost_pct, risk_pct=None, marks=(), prices=None, now=None, cur
             p['pct'] = strategy.pct_move(t['direction'], t['entry_price'], price) - cost_pct
     if events:
         point(max(now_ts, events[-1][0]), 'now', open=len(held))
+    # The entries of the positions still open, flagged with where they
+    # stand now, so the graph can mark them apart from the closed ones.
+    for p in held.values():
+        if 'point' in p:
+            p['point'].update(still_open=True, now_pct=round(p['pct'], 6),
+                              now_pnl=round(p['size'] * p['pct'], 2))
 
     invested = sum(p['size'] for p in held.values())
     unrealised = sum(p['size'] * p['pct'] for p in held.values())

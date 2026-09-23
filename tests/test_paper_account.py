@@ -34,7 +34,7 @@ def trade(wid, opened, closed=None, net=None, stop=0.04, confidence=80, impact="
     return t
 
 
-SETTINGS = dict(PAPER_BUDGET=1000.0, PAPER_RISK_PCT=0.01, PAPER_RISK_LEVELS=(0.01, 0.02),
+SETTINGS = dict(PAPER_BUDGET=1000.0, PAPER_RISK_PCT=0.01,
                 PAPER_MAX_POSITION_PCT=0.25, PAPER_MIN_POSITION=20.0)
 
 
@@ -131,11 +131,17 @@ class LedgerTest(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.paper = PaperTrader(filename=os.path.join(tmp.name, 'paper_trades.json'), cost_pct=0.002)
 
-    def test_both_accounts_and_the_trading_one_flagged(self):
+    def test_only_the_trading_account(self):
         self.paper.trades = [trade("a", 0, 2, 0.05)]
         accts = self.paper.accounts()
-        self.assertEqual([a['risk_pct'] for a in accts], [0.01, 0.02])
-        self.assertEqual([a['primary'] for a in accts], [True, False])
+        self.assertEqual([a['risk_pct'] for a in accts], [0.01])
+        self.assertEqual([a['primary'] for a in accts], [True])
+
+    def test_open_entries_flagged_on_the_curve(self):
+        self.paper.trades = [trade("a", 0, 2, 0.05, ticker="A"), trade("b", 1, ticker="B")]
+        opens = [p for p in self.paper.accounts()[0]['curve'] if p['kind'] == 'open']
+        self.assertEqual([p['ticker'] for p in opens if p.get('still_open')], ["B"])
+        self.assertIn('now_pct', [p for p in opens if p.get('still_open')][0])
 
     def test_new_trade_sized_from_the_account_as_it_stands(self):
         self.paper.trades = [trade(str(i), 0, None, stop=0.02) for i in range(3)]   # 750 in
@@ -170,7 +176,7 @@ class LedgerTest(unittest.TestCase):
         pos = data['positions'][0]
         self.assertEqual(pos['position_usd'], 250.0)
         self.assertAlmostEqual(pos['unrealised_usd'], round(250 * (0.04 - 0.002), 2))
-        self.assertEqual(len(data['accounts']), 2)
+        self.assertEqual(len(data['accounts']), 1)
         self.assertNotIn('sizes', data['accounts'][0])
 
 

@@ -146,9 +146,12 @@ card on the Alerts tab (open watches only) - see `ui.md`.
 The ledger records trades in percentages; `paper_account.replay` turns them
 into money by running them through an account that starts with
 `PAPER_BUDGET` ($1,000). Nothing about the account is stored - it is
-replayed from the ledger on every request - which is why several accounts
-can be drawn side by side (`PAPER_RISK_LEVELS`, 1% and 2%: one dashboard
-graph each) and why old trades are re-sized under the current rules.
+replayed from the ledger on every request - which is why old trades are
+re-sized under the current rules. The dashboard draws one graph, the
+trading account (`PAPER_RISK_PCT`): closed trades as green/red dots, entries
+as rings, and the positions still open as filled blue rings (the curve's
+`open` points carry `still_open`, `now_pct`, `now_pnl`). A refresh button
+on the card re-fetches `/api/paper`.
 
 - **Size** = account x risk % x conviction / stop distance. The stop comes
   from the stock's ATR, so a jumpy stock gets a smaller position and every

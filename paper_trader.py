@@ -374,9 +374,9 @@ class PaperTrader:
     # --- the account ---------------------------------------------------
 
     def accounts(self, prices=None, curve=True):
-        """The ledger run through a paper account at each risk level
-        (paper_account.risk_levels), marked to `prices` now - one graph each.
-        The trading level (config.PAPER_RISK_PCT) is flagged 'primary'."""
+        """The ledger run through the paper account (paper_account.risk_levels:
+        the trading level, config.PAPER_RISK_PCT), marked to `prices` now -
+        the dashboard's graph. The trading level is flagged 'primary'."""
         primary = paper_account.settings()['risk_pct']
         out = []
         for risk in paper_account.risk_levels():

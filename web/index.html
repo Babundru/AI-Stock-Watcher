@@ -479,6 +479,15 @@
   .eq-chart { height: 220px; touch-action: pan-y; cursor: crosshair; }
   .eq-range { margin-top: 10px; }
   .eq-foot { font-size: 12px; color: var(--text-3); margin-top: 6px; }
+  .eq-legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11px; color: var(--text-3); margin-top: 6px; }
+  .eq-legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .eq-legend i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .eq-legend .k-win { background: var(--up); }
+  .eq-legend .k-loss { background: var(--down); }
+  .eq-legend .k-entry { border: 1.5px solid var(--text-3); width: 6px; height: 6px; }
+  .eq-legend .k-open { background: var(--info); box-shadow: 0 0 0 2px var(--info-soft); }
+  .icon-btn.spin svg.i { animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
   .eq-range button { height: 30px; font-size: 12px; }
   @media (min-width: 1024px) { .eq-chart { height: 280px; } }
   #pf-chart { height: 150px; margin-top: 14px; }
@@ -929,7 +938,7 @@
           <div class="field">
             <label for="st-risk">Risk per trade %</label>
             <input id="st-risk" type="number" min="0.1" max="5" step="0.1" inputmode="decimal" style="max-width:180px;">
-            <div class="hint">How much of the account a trade may lose if its stop is hit. Positions are sized from it — smaller for jumpy stocks, whose stops are wider — and the phone alerts quote that size. The 1% and 2% graphs are always drawn for comparison.</div>
+            <div class="hint">How much of the account a trade may lose if its stop is hit. Positions are sized from it — smaller for jumpy stocks, whose stops are wider — and the phone alerts quote that size.</div>
           </div>
         </div>
 
@@ -1668,8 +1677,8 @@ async function loadPaper() {
 
   renderSkipped(d.skipped);
 
-  // One chart per paper account (risk level) - only once something has
-  // been traded, or there is nothing to draw.
+  // The paper account's chart - only once something has been traded, or
+  // there is nothing to draw.
   renderAccounts((d.accounts || []).filter(a => a.curve && a.curve.length > 1));
 }
 
@@ -1699,13 +1708,14 @@ function renderSkipped(k) {
     : `<div class="empty">${s.open ? `None closed yet — ${s.open} being followed.` : 'Nothing skipped yet.'}</div>`;
 }
 
-// --- Paper accounts: one equity chart each -----------------------------------
-// Each account (paper_account.py) is the same trades run through a budget at
-// one risk level. Drawn the way a quote app draws a price: the return in %
+// --- Paper account: its equity chart ------------------------------------------
+// The account (paper_account.py) is the trades run through a budget at the
+// trading risk level. Drawn the way a quote app draws a price: the return in %
 // from the start of the chosen range, a 0% baseline, green above it and red
 // below, a % axis on the right, and a crosshair that reads out any point.
 // Open positions are marked to market (the account's value, not just what
-// has closed). Between two snapshots less than half an hour apart the line
+// has closed), and each position is marked where it opened: a ring, filled
+// in blue while the position is still open. Between two snapshots less than half an hour apart the line
 // is drawn straight; everywhere else it holds its value until the next
 // event - a sloped line would show money moving when nothing was traded or
 // priced (overnight, weekends, before snapshots were kept).
@@ -1727,13 +1737,19 @@ function renderAccounts(accounts) {
       const card = document.createElement('div');
       card.className = 'card';
       card.innerHTML = `
-        <div class="card-title"><span class="acct-name"></span> <span class="sub acct-sub"></span></div>
+        <div class="card-title"><span class="acct-name"></span> <span class="sub acct-sub"></span>
+          <span class="end"><button class="icon-btn sm eq-refresh" title="Refresh graph" aria-label="Refresh graph"><svg class="i"><use href="#i-refresh"/></svg></button></span>
+        </div>
         <div class="eq-head">
           <div class="eq-value num">—</div>
           <div class="eq-change num"></div>
           <div class="eq-when"></div>
         </div>
         <canvas class="chart eq-chart" role="img"></canvas>
+        <div class="eq-legend" aria-hidden="true">
+          <span><i class="k-win"></i>Closed, won</span><span><i class="k-loss"></i>Closed, lost</span>
+          <span><i class="k-entry"></i>Opened</span><span><i class="k-open"></i>Still open</span>
+        </div>
         <div class="eq-foot num"></div>
         <div class="seg eq-range" role="group" aria-label="Chart range">
           ${[7, 30, 90, 365, 0].map(r => `<button data-range="${r}">${{7: '1W', 30: '1M', 90: '3M', 365: '1Y', 0: 'All'}[r]}</button>`).join('')}
@@ -1747,11 +1763,9 @@ function renderAccounts(accounts) {
   accounts.forEach((a, i) => {
     const c = ppCharts[i];
     c.acct = a;
-    c.el.querySelector('.acct-name').innerHTML =
-      `${+(a.risk_pct * 100).toFixed(2)}% risk per trade` +
-      (a.primary ? ' <span class="chip sm pos">Trading</span>' : '');
+    c.el.querySelector('.acct-name').textContent = 'Paper account';
     c.el.querySelector('.acct-sub').textContent =
-      `${a.taken} taken · ${a.skipped_cash} skipped for cash · max drawdown -${(a.max_drawdown * 100).toFixed(1)}%`;
+      `${+(a.risk_pct * 100).toFixed(2)}% risk per trade · ${a.taken} taken · ${a.skipped_cash} skipped for cash · max drawdown -${(a.max_drawdown * 100).toFixed(1)}%`;
     const open = a.open ? ` (${a.open} open, ${moneySigned(a.unrealised_pnl)})` : '';
     c.el.querySelector('.eq-foot').textContent =
       `Cash ${fmtMoney(a.cash)} · Invested ${fmtMoney(a.invested)}${open} · Started with ${fmtMoney(a.budget)}`;
@@ -1817,7 +1831,8 @@ function describePoint(p) {
   const side = p.dir === 'SHORT' ? 'Short' : 'Long';
   switch (p.kind) {
     case 'close': return `${when} · ${p.ticker} ${side} closed ${pctText(p.net_pct)} (${moneySigned(p.pnl)} on ${fmtMoney(p.size)})`;
-    case 'open': return `${when} · Opened ${p.ticker} ${side} · ${fmtMoney(p.size)}`;
+    case 'open': return `${when} · Opened ${p.ticker} ${side} · ${fmtMoney(p.size)}` +
+      (p.still_open ? ` · still open, ${moneySigned(p.now_pnl)} (${pctText(p.now_pct)})` : '');
     case 'mark': return `${when} · ${p.open} open position${p.open === 1 ? '' : 's'} at market`;
     case 'start': return `Start · ${when}`;
     default: return `Now · ${when}`;
@@ -1931,16 +1946,29 @@ function drawAccountChart(chart) {
   ctx.beginPath(); ctx.moveTo(pl, Math.round(y0) + 0.5); ctx.lineTo(w - pr + 4, Math.round(y0) + 0.5); ctx.stroke();
   ctx.setLineDash([]);
 
-  // Each closed trade as a dot in its own result's colour, while they fit.
-  const closes = series.filter(p => p.kind === 'close');
-  if (closes.length && plotW / closes.length >= 6) {
-    series.forEach((p, i) => {
-      if (p.kind !== 'close') return;
-      ctx.beginPath(); ctx.arc(x(p.ts), y(pct[i]), 2.5, 0, Math.PI * 2);
+  // Each closed trade as a dot in its own result's colour, and each entry
+  // as a ring, while they fit. The positions still open are always marked:
+  // a filled blue ring where they opened.
+  const trades = series.filter(p => p.kind === 'close' || p.kind === 'open');
+  const fits = trades.length && plotW / trades.length >= 6;
+  series.forEach((p, i) => {
+    const px = x(p.ts), py = y(pct[i]);
+    if (p.kind === 'open' && p.still_open) {
+      ctx.beginPath(); ctx.arc(px, py, 6, 0, Math.PI * 2);
+      ctx.fillStyle = rgba(tok('--info'), 0.22); ctx.fill();
+      ctx.beginPath(); ctx.arc(px, py, 3.5, 0, Math.PI * 2);
+      ctx.fillStyle = tok('--info'); ctx.fill();
+      ctx.lineWidth = 1.5; ctx.strokeStyle = tok('--surface'); ctx.stroke();
+    } else if (fits && p.kind === 'open') {
+      ctx.beginPath(); ctx.arc(px, py, 2.5, 0, Math.PI * 2);
+      ctx.fillStyle = tok('--surface'); ctx.fill();
+      ctx.lineWidth = 1.5; ctx.strokeStyle = tok('--text-3'); ctx.stroke();
+    } else if (fits && p.kind === 'close') {
+      ctx.beginPath(); ctx.arc(px, py, 2.5, 0, Math.PI * 2);
       ctx.fillStyle = p.pnl >= 0 ? UP : DOWN; ctx.fill();
       ctx.lineWidth = 1.5; ctx.strokeStyle = tok('--surface'); ctx.stroke();
-    });
-  }
+    }
+  });
 
   // Dates along the bottom.
   ctx.fillStyle = tok('--text-3');
@@ -1994,6 +2022,12 @@ function bindChart(chart) {
   canvas.addEventListener('pointerleave', clear);
   canvas.addEventListener('pointercancel', clear);
   canvas.addEventListener('pointerup', e => { if (e.pointerType !== 'mouse') clear(); });
+  const refresh = chart.el.querySelector('.eq-refresh');
+  refresh.addEventListener('click', async () => {
+    if (refresh.disabled) return;
+    refresh.disabled = true; refresh.classList.add('spin');
+    try { await loadPaper(); } finally { refresh.disabled = false; refresh.classList.remove('spin'); }
+  });
   chart.el.querySelectorAll('.eq-range button').forEach(b => b.addEventListener('click', () => {
     chart.range = Number(b.dataset.range);
     chart.el.querySelectorAll('.eq-range button').forEach(o => o.classList.toggle('on', o === b));

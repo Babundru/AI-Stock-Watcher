@@ -166,14 +166,9 @@ PAPER_BUDGET = 1000.0
 # AI's confidence and the story's impact (paper_account.conviction) - a
 # nudge, not more, until the record shows its confidence means anything.
 #
-# This is the account that opens (or refuses) positions and whose amounts
-# the phone alerts quote.
+# This is the account that opens (or refuses) positions, whose amounts the
+# phone alerts quote, and whose graph the dashboard draws.
 PAPER_RISK_PCT = 0.01
-
-# The risk levels drawn as graphs side by side, each as its own account
-# replayed over the same trades - so the cost of a bolder setting can be
-# seen before it is used. PAPER_RISK_PCT is always drawn too.
-PAPER_RISK_LEVELS = (0.01, 0.02)
 
 # Largest single position, as a fraction of the account. Without it a very
 # calm stock's tight stop would size one position at most of the account.
