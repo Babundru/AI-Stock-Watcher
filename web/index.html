@@ -478,10 +478,10 @@
   .eq-when { font-size: 12px; color: var(--text-3); margin-top: 2px; min-height: 16px; }
   .eq-chart { height: 220px; touch-action: pan-y; cursor: crosshair; }
   .eq-range { margin-top: 10px; }
+  .eq-foot { font-size: 12px; color: var(--text-3); margin-top: 6px; }
   .eq-range button { height: 30px; font-size: 12px; }
   @media (min-width: 1024px) { .eq-chart { height: 280px; } }
   #pf-chart { height: 150px; margin-top: 14px; }
-  #pp-chart { height: 150px; }
 
   /* ---- Tablet --------------------------------------------------------- */
   @media (min-width: 640px) {
@@ -500,7 +500,6 @@
     .hero-value { font-size: 38px; }
     .stat .n { font-size: 24px; }
     #pf-chart { height: 190px; }
-    #pp-chart { height: 180px; }
   }
 
   /* ---- Desktop: sidebar ---------------------------------------------- */
@@ -706,22 +705,7 @@
             <div class="stat"><div class="n" id="pp-stat-open">—</div><div class="l">Open positions</div></div>
           </div>
           <div class="note" id="pp-warn" style="display:none;"></div>
-          <div class="card" id="pp-chart-card" style="display:none;">
-            <div class="card-title">Equity curve <span id="pp-chart-sub" class="sub"></span></div>
-            <div class="eq-head">
-              <div class="eq-value num" id="pp-eq-value">—</div>
-              <div class="eq-change num" id="pp-eq-change"></div>
-              <div class="eq-when" id="pp-eq-when"></div>
-            </div>
-            <canvas id="pp-chart" class="chart eq-chart" role="img" aria-label="Paper trading return over time"></canvas>
-            <div class="seg eq-range" id="pp-range" role="group" aria-label="Chart range">
-              <button data-range="7">1W</button>
-              <button data-range="30">1M</button>
-              <button data-range="90">3M</button>
-              <button data-range="365">1Y</button>
-              <button data-range="0" class="on">All</button>
-            </div>
-          </div>
+          <div id="pp-accounts"></div>
           <div class="card flush">
             <div class="card-title">Open positions <span class="sub">marked to live prices, not yet in the record</span></div>
             <div class="rows" id="pp-open-body"></div>
@@ -937,6 +921,16 @@
             <input id="st-cost" type="number" min="0" max="99" step="0.01" inputmode="decimal" style="max-width:180px;">
             <div class="hint">Spread on both sides plus commission and financing. Subtracted from every paper trade; set it to your broker's real figure before reading the record.</div>
           </div>
+          <div class="field">
+            <label for="st-budget">Paper account budget ($)</label>
+            <input id="st-budget" type="number" min="50" step="50" inputmode="decimal" style="max-width:180px;">
+            <div class="hint">The cash the paper account starts with. Every position ties some of it up until it closes; a signal that arrives when too little is left is skipped. Past trades are re-sized from it too.</div>
+          </div>
+          <div class="field">
+            <label for="st-risk">Risk per trade %</label>
+            <input id="st-risk" type="number" min="0.1" max="5" step="0.1" inputmode="decimal" style="max-width:180px;">
+            <div class="hint">How much of the account a trade may lose if its stop is hit. Positions are sized from it — smaller for jumpy stocks, whose stops are wider — and the phone alerts quote that size. The 1% and 2% graphs are always drawn for comparison.</div>
+          </div>
         </div>
 
         <div class="card">
@@ -1071,10 +1065,10 @@ window.addEventListener('scroll', () => $('#topbar').classList.toggle('scrolled'
 
 // Charts are sized to their box, so redraw them when the box changes
 // (rotating a phone, resizing a window).
-let lastPfHistory = null, lastPaperCurve = null;
+let lastPfHistory = null;
 function redrawCharts() {
   if (lastPfHistory && !$('#pane-holdings').hidden) drawPortfolioChart(lastPfHistory);
-  if (lastPaperCurve && !$('#paper-section').hidden) drawPaperChart(lastPaperCurve);
+  if (!$('#paper-section').hidden) redrawAccountCharts();
 }
 let resizeTimer;
 window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(redrawCharts, 120); });
@@ -1627,12 +1621,13 @@ async function loadPaper() {
       ${avatar(p.ticker)}
       <div class="row-main">
         <div class="row-title"><span class="name">${esc(p.ticker)}</span><span class="chip sm ${isShort ? 'short' : 'long'}">${isShort ? 'Short' : 'Long'}</span></div>
-        <div class="row-sub">Entry ${fmtPrice(p.entry_price)} · ${esc(fmtTime(p.opened_at))}</div>
+        <div class="row-sub">${p.position_usd ? esc(fmtMoney(p.position_usd)) + ' · ' : ''}Entry ${fmtPrice(p.entry_price)} · ${esc(fmtTime(p.opened_at))}</div>
+        ${p.skipped_reason ? `<div class="row-sub muted">Not in the paper account: ${esc(p.skipped_reason)}</div>` : ''}
         ${prog}
       </div>
       <div class="row-end">
-        <div class="v ${pctClass(p.unrealised_pct)}">${pctText(p.unrealised_pct)}</div>
-        <div class="s">${p.current_price ? 'now ' + fmtPrice(p.current_price) : '—'}</div>
+        <div class="v ${pctClass(p.unrealised_pct)}">${p.unrealised_usd !== null && p.unrealised_usd !== undefined ? esc(moneySigned(p.unrealised_usd)) : pctText(p.unrealised_pct)}</div>
+        <div class="s">${p.unrealised_usd !== null && p.unrealised_usd !== undefined ? pctText(p.unrealised_pct) + ' · ' : ''}${p.current_price ? 'now ' + fmtPrice(p.current_price) : '—'}</div>
       </div>
       <button class="btn ghost sm" data-sell="${esc(p.watch_id)}" title="Sell at the current price" aria-label="Sell ${esc(p.ticker)}">Sell</button>
     </div>`;
@@ -1665,25 +1660,17 @@ async function loadPaper() {
         <div class="row-sub">${esc(REASONS[t.reason] || t.reason || '')} · ${esc(fmtTime(t.closed_at))}</div>
       </div>
       <div class="row-end">
-        <div class="v ${pctClass(t.net_pct)}">${pctText(t.net_pct)}</div>
-        <div class="s">${fmtPrice(t.entry_price)} → ${t.exit_price !== null && t.exit_price !== undefined ? fmtPrice(t.exit_price) : '—'}</div>
+        <div class="v ${pctClass(t.net_pct)}">${t.pnl_usd !== null && t.pnl_usd !== undefined ? esc(moneySigned(t.pnl_usd)) : pctText(t.net_pct)}</div>
+        <div class="s">${t.pnl_usd !== null && t.pnl_usd !== undefined ? pctText(t.net_pct) + ' · ' : ''}${fmtPrice(t.entry_price)} → ${t.exit_price !== null && t.exit_price !== undefined ? fmtPrice(t.exit_price) : '—'}</div>
       </div>
     </div>`;
   }).join('') : '<div class="empty">No closed trades yet.</div>';
 
   renderSkipped(d.skipped);
 
-  // Equity curve.
-  const card = $('#pp-chart-card');
-  if (s && s.equity_curve && s.equity_curve.length > 1) {
-    card.style.display = 'block';
-    $('#pp-chart-sub').textContent =
-      `${s.trades} trades · max drawdown -${(s.max_drawdown * 100).toFixed(1)}%`;
-    lastPaperCurve = s.equity_curve;
-    drawPaperChart(s.equity_curve);
-  } else {
-    card.style.display = 'none';
-  }
+  // One chart per paper account (risk level) - only once something has
+  // been traded, or there is nothing to draw.
+  renderAccounts((d.accounts || []).filter(a => a.curve && a.curve.length > 1));
 }
 
 // Signals the entry rules turned down, followed as if traded, split by the
@@ -1691,7 +1678,7 @@ async function loadPaper() {
 // trades would have made money is keeping the app out of winners.
 const SKIP_RULES = {against: 'Moved against the news', exhausted: 'Move already spent',
   unconfirmed: 'Opinion source, unconfirmed', capped: 'Price capped by the news',
-  reward_risk: 'Story too small for the stock'};
+  reward_risk: 'Story too small for the stock', cash: 'Not enough cash in the paper account'};
 function renderSkipped(k) {
   const card = $('#pp-skip-card');
   if (!k) { card.style.display = 'none'; return; }
@@ -1712,31 +1699,86 @@ function renderSkipped(k) {
     : `<div class="empty">${s.open ? `None closed yet — ${s.open} being followed.` : 'Nothing skipped yet.'}</div>`;
 }
 
-// --- Equity curve ------------------------------------------------------------
-// Drawn the way a quote app draws a price: the return in % from the start of
-// the chosen range, a 0% baseline, green above it and red below, a % axis on
-// the right, and a crosshair that reads out any point. The ledger's equity
-// only changes when a trade closes, so the line is stepped - a sloped line
-// would show gains accruing between trades that never happened.
-let ppRange = 0;      // days shown; 0 = since the first trade
-let ppHover = null;   // index into the drawn series under the pointer
-let ppView = null;    // geometry of the last draw, for hit-testing
+// --- Paper accounts: one equity chart each -----------------------------------
+// Each account (paper_account.py) is the same trades run through a budget at
+// one risk level. Drawn the way a quote app draws a price: the return in %
+// from the start of the chosen range, a 0% baseline, green above it and red
+// below, a % axis on the right, and a crosshair that reads out any point.
+// Open positions are marked to market (the account's value, not just what
+// has closed). Between two snapshots less than half an hour apart the line
+// is drawn straight; everywhere else it holds its value until the next
+// event - a sloped line would show money moving when nothing was traded or
+// priced (overnight, weekends, before snapshots were kept).
 const PP_RANGE_LABEL = {0: 'All time', 7: 'Past week', 30: 'Past month', 90: 'Past 3 months', 365: 'Past year'};
+const PP_DIRECT_GAP = 30 * 60 * 1000;
+const ppCharts = [];   // {key, el, range, hover, view, acct}
 
-// The curve (start point, then one point per closed trade) cut to the range,
-// starting at the equity the range opened with and running on to now.
-function paperSeries(curve, days) {
-  const pts = curve.map(p => ({t: new Date(p.closed_at).getTime(), eq: Number(p.equity),
-    ticker: p.ticker, net: p.net_pct, dir: p.direction}))
-    .filter(p => !isNaN(p.t) && !isNaN(p.eq))
-    .sort((a, b) => a.t - b.t);
-  const end = Math.max(Date.now(), pts[pts.length - 1].t);
-  const from = Math.max(pts[0].t, days ? end - days * 864e5 : pts[0].t);
+function renderAccounts(accounts) {
+  const box = $('#pp-accounts');
+  accounts = accounts || [];
+  const keys = accounts.map(a => String(a.risk_pct));
+  if (ppCharts.map(c => c.key).join() !== keys.join()) {
+    // Rebuilt only when the set of accounts changes; a range picked on a
+    // chart survives the dashboard's polling.
+    const ranges = Object.fromEntries(ppCharts.map(c => [c.key, c.range]));
+    ppCharts.length = 0;
+    box.innerHTML = '';
+    keys.forEach(key => {
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.innerHTML = `
+        <div class="card-title"><span class="acct-name"></span> <span class="sub acct-sub"></span></div>
+        <div class="eq-head">
+          <div class="eq-value num">—</div>
+          <div class="eq-change num"></div>
+          <div class="eq-when"></div>
+        </div>
+        <canvas class="chart eq-chart" role="img"></canvas>
+        <div class="eq-foot num"></div>
+        <div class="seg eq-range" role="group" aria-label="Chart range">
+          ${[7, 30, 90, 365, 0].map(r => `<button data-range="${r}">${{7: '1W', 30: '1M', 90: '3M', 365: '1Y', 0: 'All'}[r]}</button>`).join('')}
+        </div>`;
+      box.appendChild(card);
+      const chart = {key, el: card, range: ranges[key] ?? 0, hover: null, view: null, acct: null};
+      bindChart(chart);
+      ppCharts.push(chart);
+    });
+  }
+  accounts.forEach((a, i) => {
+    const c = ppCharts[i];
+    c.acct = a;
+    c.el.querySelector('.acct-name').innerHTML =
+      `${+(a.risk_pct * 100).toFixed(2)}% risk per trade` +
+      (a.primary ? ' <span class="chip sm pos">Trading</span>' : '');
+    c.el.querySelector('.acct-sub').textContent =
+      `${a.taken} taken · ${a.skipped_cash} skipped for cash · max drawdown -${(a.max_drawdown * 100).toFixed(1)}%`;
+    const open = a.open ? ` (${a.open} open, ${moneySigned(a.unrealised_pnl)})` : '';
+    c.el.querySelector('.eq-foot').textContent =
+      `Cash ${fmtMoney(a.cash)} · Invested ${fmtMoney(a.invested)}${open} · Started with ${fmtMoney(a.budget)}`;
+    c.el.querySelectorAll('.eq-range button').forEach(b =>
+      b.classList.toggle('on', Number(b.dataset.range) === c.range));
+    drawAccountChart(c);
+  });
+}
+
+function redrawAccountCharts() {
+  ppCharts.forEach(c => { if (c.acct) drawAccountChart(c); });
+}
+
+// The account's curve cut to the range: it starts at the value the range
+// opened with and runs on to now.
+function accountSeries(curve, days) {
+  const pts = (curve || []).map(p => ({...p, ts: new Date(p.t).getTime(), eq: Number(p.equity)}))
+    .filter(p => !isNaN(p.ts) && !isNaN(p.eq))
+    .sort((a, b) => a.ts - b.ts);
+  if (!pts.length) return null;
+  const end = Math.max(Date.now(), pts[pts.length - 1].ts);
+  const from = Math.max(pts[0].ts, days ? end - days * 864e5 : pts[0].ts);
   let base = pts[0].eq;
-  for (const p of pts) if (p.t <= from) base = p.eq;
-  const inRange = pts.filter(p => p.t > from);
-  const lastEq = inRange.length ? inRange[inRange.length - 1].eq : base;
-  const series = [{t: from, eq: base, start: true}, ...inRange, {t: end, eq: lastEq, now: true}];
+  for (const p of pts) if (p.ts <= from) base = p.eq;
+  const series = [{kind: 'start', ts: from, eq: base}, ...pts.filter(p => p.ts > from)];
+  const last = series[series.length - 1];
+  if (last.kind !== 'now') series.push({kind: 'now', ts: end, eq: last.eq});
   return {series, base, from, end};
 }
 
@@ -1766,36 +1808,42 @@ function axisDate(t, span) {
 }
 
 function moneySigned(n) {
+  n = Number(n) || 0;
   return (n >= 0 ? '+' : '-') + fmtMoney(Math.abs(n));
 }
 
-function renderPaperHeader(view) {
-  const {series, base} = view;
-  const i = ppHover === null ? series.length - 1 : ppHover;
-  const p = series[i];
-  const change = p.eq - base, pct = base ? p.eq / base - 1 : 0;
-  $('#pp-eq-value').textContent = fmtMoney(p.eq);
-  const ch = $('#pp-eq-change');
-  ch.textContent = `${moneySigned(change)} (${pctText(pct)})`;
-  ch.className = 'eq-change num ' + (Math.abs(change) < 0.005 ? 'muted' : change > 0 ? 'up' : 'down');
-  let when;
-  if (ppHover === null) {
-    when = PP_RANGE_LABEL[ppRange] || 'All time';
-  } else if (p.ticker) {
-    const side = p.dir === 'SHORT' ? 'Short' : 'Long';
-    when = `${fmtTime(new Date(p.t).toISOString())} · ${p.ticker} ${side} closed ${pctText(p.net)}`;
-  } else {
-    when = (p.start ? 'Start · ' : 'Now · ') + fmtTime(new Date(p.t).toISOString());
+function describePoint(p) {
+  const when = fmtTime(new Date(p.ts).toISOString());
+  const side = p.dir === 'SHORT' ? 'Short' : 'Long';
+  switch (p.kind) {
+    case 'close': return `${when} · ${p.ticker} ${side} closed ${pctText(p.net_pct)} (${moneySigned(p.pnl)} on ${fmtMoney(p.size)})`;
+    case 'open': return `${when} · Opened ${p.ticker} ${side} · ${fmtMoney(p.size)}`;
+    case 'mark': return `${when} · ${p.open} open position${p.open === 1 ? '' : 's'} at market`;
+    case 'start': return `Start · ${when}`;
+    default: return `Now · ${when}`;
   }
-  $('#pp-eq-when').textContent = when;
 }
 
-function drawPaperChart(curve) {
-  const canvas = $('#pp-chart');
+function renderAccountHeader(chart) {
+  const {series, base} = chart.view;
+  const p = series[chart.hover === null ? series.length - 1 : chart.hover];
+  const change = p.eq - base, pct = base ? p.eq / base - 1 : 0;
+  const el = chart.el;
+  el.querySelector('.eq-value').textContent = fmtMoney(p.eq);
+  const ch = el.querySelector('.eq-change');
+  ch.textContent = `${moneySigned(change)} (${pctText(pct)})`;
+  ch.className = 'eq-change num ' + (Math.abs(change) < 0.005 ? 'muted' : change > 0 ? 'up' : 'down');
+  el.querySelector('.eq-when').textContent =
+    chart.hover === null ? (PP_RANGE_LABEL[chart.range] || 'All time') : describePoint(p);
+}
+
+function drawAccountChart(chart) {
+  const canvas = chart.el.querySelector('canvas');
   const ctx = canvas.getContext('2d');
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.clientWidth, h = canvas.clientHeight || 220;
-  if (!w) return;   // hidden - redrawCharts() draws it once shown
+  const data = accountSeries(chart.acct.curve, chart.range);
+  if (!w || !data) return;   // hidden (redrawn once shown), or no trades yet
   canvas.width = w * dpr; canvas.height = h * dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
@@ -1808,8 +1856,8 @@ function drawPaperChart(curve) {
     return `rgba(${n >> 16 & 255}, ${n >> 8 & 255}, ${n & 255}, ${a})`;
   };
 
-  const {series, base, from, end} = paperSeries(curve, ppRange);
-  if (ppHover !== null && ppHover >= series.length) ppHover = null;
+  const {series, base, from, end} = data;
+  if (chart.hover !== null && chart.hover >= series.length) chart.hover = null;
   const pct = series.map(p => base ? p.eq / base - 1 : 0);
 
   // Axis: always includes 0%, with a little air above and below the line.
@@ -1829,7 +1877,7 @@ function drawPaperChart(curve) {
   const x = t => pl + (end > from ? (t - from) / (end - from) : 0) * plotW;
   const y = v => pt + (1 - (v - lo) / (hi - lo)) * plotH;
   const y0 = y(0);
-  ppView = {series, base, x, pl, pr, w};
+  chart.view = {series, base, x};
 
   // Grid and % labels on the right, as on a quote chart.
   ctx.textBaseline = 'middle';
@@ -1845,29 +1893,29 @@ function drawPaperChart(curve) {
     ctx.fillText(axisPct(v, step), w - pr + 8, yy);
   });
 
-  // The step path: flat until a trade closes, then straight to its result.
   const trace = () => {
-    ctx.moveTo(x(series[0].t), y(pct[0]));
+    ctx.moveTo(x(series[0].ts), y(pct[0]));
     for (let i = 1; i < series.length; i++) {
-      ctx.lineTo(x(series[i].t), y(pct[i - 1]));
-      ctx.lineTo(x(series[i].t), y(pct[i]));
+      const a = series[i - 1], b = series[i];
+      const direct = a.kind === 'mark' && b.kind === 'mark' && b.ts - a.ts <= PP_DIRECT_GAP;
+      if (!direct) ctx.lineTo(x(b.ts), y(pct[i - 1]));
+      ctx.lineTo(x(b.ts), y(pct[i]));
     }
   };
   // Gains above the baseline in green, losses below it in red: each half is
   // drawn through a clip, so a curve that crosses 0% changes colour there.
-  const halves = [
+  [
     {clip: [0, 0, w, y0], color: UP, grad: [y(hi), y0]},
     {clip: [0, y0, w, h - y0], color: DOWN, grad: [y(lo), y0]},
-  ];
-  halves.forEach(({clip, color, grad}) => {
+  ].forEach(({clip, color, grad}) => {
     ctx.save();
     ctx.beginPath(); ctx.rect(...clip); ctx.clip();
     const g = ctx.createLinearGradient(0, grad[0], 0, grad[1]);
     g.addColorStop(0, rgba(color, 0.32));
     g.addColorStop(1, rgba(color, 0.02));
     ctx.beginPath(); trace();
-    ctx.lineTo(x(series[series.length - 1].t), y0);
-    ctx.lineTo(x(series[0].t), y0);
+    ctx.lineTo(x(series[series.length - 1].ts), y0);
+    ctx.lineTo(x(series[0].ts), y0);
     ctx.closePath();
     ctx.fillStyle = g; ctx.fill();
     ctx.beginPath(); trace();
@@ -1883,13 +1931,13 @@ function drawPaperChart(curve) {
   ctx.beginPath(); ctx.moveTo(pl, Math.round(y0) + 0.5); ctx.lineTo(w - pr + 4, Math.round(y0) + 0.5); ctx.stroke();
   ctx.setLineDash([]);
 
-  // Each trade as a dot in its own result's colour, while they stay legible.
-  const trades = series.filter(p => p.ticker);
-  if (trades.length && plotW / trades.length >= 6) {
+  // Each closed trade as a dot in its own result's colour, while they fit.
+  const closes = series.filter(p => p.kind === 'close');
+  if (closes.length && plotW / closes.length >= 6) {
     series.forEach((p, i) => {
-      if (!p.ticker) return;
-      ctx.beginPath(); ctx.arc(x(p.t), y(pct[i]), 2.5, 0, Math.PI * 2);
-      ctx.fillStyle = p.net >= 0 ? UP : DOWN; ctx.fill();
+      if (p.kind !== 'close') return;
+      ctx.beginPath(); ctx.arc(x(p.ts), y(pct[i]), 2.5, 0, Math.PI * 2);
+      ctx.fillStyle = p.pnl >= 0 ? UP : DOWN; ctx.fill();
       ctx.lineWidth = 1.5; ctx.strokeStyle = tok('--surface'); ctx.stroke();
     });
   }
@@ -1904,59 +1952,55 @@ function drawPaperChart(curve) {
     ctx.fillText(axisDate(from + f * (end - from), end - from), pl + f * plotW, h - 6);
   }
 
-  // Crosshair on the point under the pointer.
-  if (ppHover !== null) {
-    const p = series[ppHover], px = Math.round(x(p.t)) + 0.5, py = y(pct[ppHover]);
+  // Crosshair on the point under the pointer, or a dot on the latest value.
+  const i = chart.hover === null ? series.length - 1 : chart.hover;
+  const px = Math.round(x(series[i].ts)) + 0.5, py = y(pct[i]);
+  if (chart.hover !== null) {
     ctx.strokeStyle = tok('--text-2');
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(px, pt); ctx.lineTo(px, pt + plotH); ctx.stroke();
-    ctx.beginPath(); ctx.arc(px, py, 5, 0, Math.PI * 2);
-    ctx.fillStyle = pct[ppHover] >= 0 ? UP : DOWN; ctx.fill();
-    ctx.lineWidth = 2; ctx.strokeStyle = tok('--text'); ctx.stroke();
-  } else {
-    const last = series.length - 1;
-    ctx.beginPath(); ctx.arc(x(series[last].t), y(pct[last]), 3.5, 0, Math.PI * 2);
-    ctx.fillStyle = pct[last] >= 0 ? UP : DOWN; ctx.fill();
   }
+  ctx.beginPath(); ctx.arc(px, py, chart.hover === null ? 3.5 : 5, 0, Math.PI * 2);
+  ctx.fillStyle = pct[i] >= 0 ? UP : DOWN; ctx.fill();
+  if (chart.hover !== null) { ctx.lineWidth = 2; ctx.strokeStyle = tok('--text'); ctx.stroke(); }
 
-  const total = pct[pct.length - 1];
   canvas.setAttribute('aria-label',
-    `Paper trading return, ${(PP_RANGE_LABEL[ppRange] || 'all time').toLowerCase()}: ${pctText(total)}`);
-  renderPaperHeader(ppView);
+    `Paper account at ${+(chart.acct.risk_pct * 100).toFixed(2)}% risk, ` +
+    `${(PP_RANGE_LABEL[chart.range] || 'all time').toLowerCase()}: ${pctText(pct[pct.length - 1])}`);
+  renderAccountHeader(chart);
 }
 
 // Crosshair: the point nearest the pointer. pan-y on the canvas keeps
 // vertical page scrolling working on a phone while a sideways drag scrubs.
-(function () {
-  const canvas = $('#pp-chart');
+function bindChart(chart) {
+  const canvas = chart.el.querySelector('canvas');
   const pick = e => {
-    if (!ppView || !lastPaperCurve) return;
+    if (!chart.view) return;
     const px = e.clientX - canvas.getBoundingClientRect().left;
     let best = 0, dist = Infinity;
-    ppView.series.forEach((p, i) => {
-      const d = Math.abs(ppView.x(p.t) - px);
+    chart.view.series.forEach((p, i) => {
+      const d = Math.abs(chart.view.x(p.ts) - px);
       if (d <= dist) { dist = d; best = i; }   // <= : the later of two at one spot
     });
-    if (best !== ppHover) { ppHover = best; drawPaperChart(lastPaperCurve); }
+    if (best !== chart.hover) { chart.hover = best; drawAccountChart(chart); }
   };
   const clear = () => {
-    if (ppHover === null) return;
-    ppHover = null;
-    if (lastPaperCurve) drawPaperChart(lastPaperCurve);
+    if (chart.hover === null) return;
+    chart.hover = null;
+    drawAccountChart(chart);
   };
   canvas.addEventListener('pointermove', pick);
   canvas.addEventListener('pointerdown', pick);
   canvas.addEventListener('pointerleave', clear);
   canvas.addEventListener('pointercancel', clear);
   canvas.addEventListener('pointerup', e => { if (e.pointerType !== 'mouse') clear(); });
-
-  $('#pp-range').querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
-    ppRange = Number(b.dataset.range);
-    $('#pp-range').querySelectorAll('button').forEach(o => o.classList.toggle('on', o === b));
-    ppHover = null;
-    if (lastPaperCurve) drawPaperChart(lastPaperCurve);
+  chart.el.querySelectorAll('.eq-range button').forEach(b => b.addEventListener('click', () => {
+    chart.range = Number(b.dataset.range);
+    chart.el.querySelectorAll('.eq-range button').forEach(o => o.classList.toggle('on', o === b));
+    chart.hover = null;
+    drawAccountChart(chart);
   }));
-})();
+}
 
 async function loadPortfolioSummary() {
   try {
@@ -2201,6 +2245,8 @@ function renderSettings(s) {
   $('#st-ollama-url').value = s.OLLAMA_URL || '';
 
   $('#st-cost').value = ((s.PAPER_COST_PCT || 0) * 100).toFixed(2);
+  $('#st-budget').value = s.PAPER_BUDGET ?? 1000;
+  $('#st-risk').value = +(((s.PAPER_RISK_PCT ?? 0.01) * 100).toFixed(2));
 
   $('#st-scan-europe').checked = s.SCAN_EUROPE !== false;
   $('#st-min-conf').value = s.MIN_CONFIDENCE ?? 60;
@@ -2233,6 +2279,10 @@ $('#st-save').addEventListener('click', async () => {
   const choice = currentEngineChoice();
   const cost = Number($('#st-cost').value);
   if (!isFinite(cost) || cost < 0 || cost >= 100) { setSettingsMsg('Cost % must be between 0 and 100.', 'err'); return; }
+  const budget = Number($('#st-budget').value);
+  if (!isFinite(budget) || budget < 50) { setSettingsMsg('The paper budget must be at least $50.', 'err'); return; }
+  const risk = Number($('#st-risk').value);
+  if (!isFinite(risk) || risk < 0.1 || risk > 5) { setSettingsMsg('Risk per trade must be between 0.1% and 5%.', 'err'); return; }
   const threads = parseInt($('#st-threads').value, 10);
   const minConf = parseInt($('#st-min-conf').value, 10);
   if (!isFinite(minConf) || minConf < 0 || minConf > 100) { setSettingsMsg('Minimum confidence must be between 0 and 100.', 'err'); return; }
@@ -2260,6 +2310,8 @@ $('#st-save').addEventListener('click', async () => {
     OLLAMA_NUM_THREADS: isFinite(threads) && threads >= 1 ? threads : 1,
     OLLAMA_URL: $('#st-ollama-url').value.trim(),
     PAPER_COST_PCT: cost / 100,
+    PAPER_BUDGET: budget,
+    PAPER_RISK_PCT: risk / 100,
     SCAN_EUROPE: $('#st-scan-europe').checked,
     MIN_CONFIDENCE: minConf,
     LET_WINNERS_RUN: $('#st-let-run').checked,

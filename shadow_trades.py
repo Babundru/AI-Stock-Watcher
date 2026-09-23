@@ -41,6 +41,7 @@ RULE_LABELS = {
     'unconfirmed': "opinion source, unconfirmed",
     'capped': "price capped by the news",
     'reward_risk': "story too small for the stock",
+    'cash': "not enough cash in the paper account",
 }
 
 

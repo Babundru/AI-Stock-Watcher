@@ -944,6 +944,25 @@ class StockAppBackend:
         if not tracked:
             return no("shorts aren't paper-traded (off in settings), so no cover signal will follow")
 
+        # How much to put in, from the paper account as it stands - and
+        # whether its cash covers it at all (paper_account.position_size).
+        # A signal the cash can't cover is followed as a skipped trade, like
+        # one the price rules refused, so the cost of the limit shows up.
+        extra_sizing = {}
+        if self.paper:
+            sizing = self.paper.size_new_trade(plan['stop_pct'], confidence, impact)
+            if sizing['size'] is None:
+                self._follow_skipped(ticker, company, direction, impact, horizon, confidence,
+                                     trust, title, url, context,
+                                     dict(plan, rule='cash', reason=sizing['reason']))
+                return no(sizing['reason'])
+            decision.update(position_usd=sizing['size'], risk_usd=sizing['risk_usd'],
+                            account_usd=sizing['account'])
+            self.log(f"   💵 Size ${sizing['size']:,.2f} of a ${sizing['account']:,.2f} account "
+                     f"(risking ${sizing['risk_usd']:,.2f}, conviction x{sizing['conviction']}, "
+                     f"${sizing['cash']:,.2f} cash free)")
+            extra_sizing = {'position_usd': sizing['size'], 'risk_usd': sizing['risk_usd']}
+
         watch = self.watch_mgr.add_watch(
             ticker, company, entry, impact, horizon, prediction,
             article_url=url, article_headline=title, direction=direction,
@@ -956,6 +975,7 @@ class StockAppBackend:
                 'moved_from': plan['moved_from'],
                 'market_move_pct': plan['market_move_pct'],
                 'atr_pct': plan['atr_pct'],
+                **extra_sizing,
             },
         )
         if not watch:
@@ -1026,6 +1046,8 @@ class StockAppBackend:
                 watch['entry_price'], price, watch['target_price'],
                 article_url=watch.get('article_url'),
                 direction=direction,
+                position_usd=watch.get('position_usd'),
+                cost_pct=self.paper.cost_pct if self.paper else config.PAPER_COST_PCT,
             )
 
         if self.alert_callback:
@@ -1112,10 +1134,15 @@ class StockAppBackend:
         def benchmark_price_for(ticker):
             return prices.get(benchmarks[ticker]) if self.paper else None
 
+        # This pass's in-session prices of the open positions, for the paper
+        # account's marked-to-market graph (PaperTrader.record_marks).
+        marks = {}
         for watch in open_watches:
             price = prices.get(watch['ticker'])
             if not price:
                 continue
+            if sessions[watch['ticker']] is not False:
+                marks[watch['id']] = price
 
             # Note how far this position has run either way before deciding
             # whether it resolves - the worst point a trade passed through is
@@ -1154,6 +1181,8 @@ class StockAppBackend:
             self.watch_mgr.save()
             if self.paper:
                 self.paper.save()
+                if self.paper.record_marks(marks, now):
+                    self.paper.save_marks()
         if skipped:
             self.shadows.save()
 

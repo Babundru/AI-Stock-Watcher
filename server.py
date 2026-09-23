@@ -184,7 +184,7 @@ _SETTINGS_PUBLIC = (
     "NTFY_TOPIC", "NOTIFY_OWNERSHIP", "SCAN_EUROPE",
     "USE_CLOUD_AI", "CLOUD_AI_PROVIDER", "CLOUD_AI_MODEL", "CLOUD_AI_BASE_URL",
     "USE_LOCAL_LLM", "LOCAL_MODEL_NAME", "OLLAMA_NUM_THREADS", "OLLAMA_URL",
-    "PAPER_COST_PCT", "DASHBOARD_USERNAME",
+    "PAPER_COST_PCT", "PAPER_BUDGET", "PAPER_RISK_PCT", "DASHBOARD_USERNAME",
     "ALLOW_SHORTS", "NOTIFY_SHORTS", "SHORT_MIN_IMPACT",
     "MIN_CONFIDENCE", "LET_WINNERS_RUN",
     "MAX_OPEN_POSITIONS", "STOP_ATR_MULT",
@@ -231,6 +231,10 @@ def api_settings():
                 return jsonify({"error": "OLLAMA_NUM_THREADS must be at least 1"}), 400
             if "PAPER_COST_PCT" in updates and not (0 <= float(updates["PAPER_COST_PCT"]) < 1):
                 return jsonify({"error": "PAPER_COST_PCT must be a fraction between 0 and 1"}), 400
+            if "PAPER_BUDGET" in updates and not (50 <= float(updates["PAPER_BUDGET"]) <= 10_000_000):
+                return jsonify({"error": "PAPER_BUDGET must be between 50 and 10,000,000"}), 400
+            if "PAPER_RISK_PCT" in updates and not (0.001 <= float(updates["PAPER_RISK_PCT"]) <= 0.05):
+                return jsonify({"error": "PAPER_RISK_PCT must be between 0.1% and 5%"}), 400
             if "MIN_CONFIDENCE" in updates and not (0 <= int(updates["MIN_CONFIDENCE"]) <= 100):
                 return jsonify({"error": "MIN_CONFIDENCE must be between 0 and 100"}), 400
             # Capped for the 1GB VM: every open position is priced on every
@@ -467,11 +471,9 @@ def api_paper():
     paper = backend.paper
     tickers = paper.tickers_open()
     prices = fetch_prices(tickers) if tickers else {}
-    data = paper.overview(
-        prices,
-        start_capital=config.PAPER_START_CAPITAL,
-        position_pct=config.PAPER_POSITION_PCT,
-    )
+    # The accounts (one per risk level, paper_account.py) are replayed from
+    # the ledger here, on request - nothing about them is kept in memory.
+    data = paper.overview(prices)
     # Signals the entry rules turned down, followed as if traded - shown
     # beside the record, never mixed into it (shadow_trades.py). Marked at
     # the last watch check's prices, so this costs no extra price call.

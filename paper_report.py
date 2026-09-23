@@ -11,8 +11,7 @@ the watcher is running.
 
 import sys
 
-from config import (PAPER_COST_PCT, PAPER_BENCHMARK, PAPER_BENCHMARK_EU,
-                    PAPER_START_CAPITAL, PAPER_POSITION_PCT)
+from config import PAPER_COST_PCT, PAPER_BENCHMARK, PAPER_BENCHMARK_EU
 from paper_trader import PaperTrader
 from shadow_trades import RULE_LABELS, ShadowBook
 
@@ -47,8 +46,7 @@ def main():
     args = set(sys.argv[1:])
     paper = PaperTrader(cost_pct=PAPER_COST_PCT, benchmark=PAPER_BENCHMARK)
 
-    stats = paper.stats(start_capital=PAPER_START_CAPITAL,
-                        position_pct=PAPER_POSITION_PCT)
+    stats = paper.stats()
     if not stats:
         n_open = len(paper.open_trades())
         print("No closed paper trades yet.")
@@ -100,16 +98,22 @@ def main():
         print("    ⚠  Profitable, but not beating the market - the gains look "
               "like\n       drift rather than the analyser picking winners.")
 
-    print(f"\n  Equity curve ({PAPER_POSITION_PCT * 100:.0f}% of capital per trade):")
-    print(f"    {PAPER_START_CAPITAL:,.0f} → {stats['final_equity']:,.0f}   "
-          f"({pct(stats['total_return'])})")
-    print(f"    Max drawdown  -{stats['max_drawdown'] * 100:.2f}%")
+    # Open positions valued at their entry here (no price call): this
+    # report never touches the network.
+    print("\n  Paper accounts (sized by risk, open positions at entry):")
+    for acct in paper.accounts(curve=False):
+        flag = "  <- trades" if acct['primary'] else ""
+        print(f"    {acct['risk_pct'] * 100:.1f}% risk   ${acct['budget']:,.0f} → "
+              f"${acct['equity']:,.2f}  ({pct(acct['total_return'])}), "
+              f"max drawdown -{acct['max_drawdown'] * 100:.2f}%, "
+              f"{acct['taken']} taken, {acct['skipped_cash']} skipped for cash{flag}")
 
     for label, key in (("By strategy version", "by_strategy"),
                        ("By direction", "by_direction"),
                        ("By impact", "by_impact"),
                        ("By horizon", "by_horizon"),
-                       ("By exit reason", "by_reason")):
+                       ("By exit reason", "by_reason"),
+                       ("By AI confidence", "by_confidence")):
         print(f"\n  {label}:")
         for name, row in stats[key].items():
             print(f"    {name:<18} {row['trades']:>3} trades  "

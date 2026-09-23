@@ -14,8 +14,7 @@ from portfolio_manager import PortfolioManager
 from paper_trader import PaperTrader
 from shadow_trades import RULE_LABELS, ShadowBook
 import config
-from config import (PAPER_COST_PCT, PAPER_BENCHMARK,
-                    PAPER_START_CAPITAL, PAPER_POSITION_PCT)
+from config import PAPER_COST_PCT, PAPER_BENCHMARK
 from source_manager import SourceManager, source_trust, OPINION, REPORTING
 from keyword_manager import KeywordManager
 
@@ -1304,10 +1303,11 @@ class StockAppGUI(ctk.CTk):
             self.after(0, self.refresh_paper_view)
 
     def _render_paper(self, prices, pending=False):
-        data = self.paper.overview(prices,
-                                   start_capital=PAPER_START_CAPITAL,
-                                   position_pct=PAPER_POSITION_PCT)
+        data = self.paper.overview(prices)
         stats = data['stats']
+        # Drawdown is the trading account's (paper_account.py), in money
+        # terms - the ledger's own stats are per trade.
+        account = next((a for a in data['accounts'] if a['primary']), None)
 
         def pct(v, places=2):
             return "—" if v is None else f"{v * 100:+.{places}f}%"
@@ -1324,7 +1324,7 @@ class StockAppGUI(ctk.CTk):
             lbl['alpha'].configure(text=pct(stats['avg_alpha']))
             tint(lbl['alpha'], stats['avg_alpha'])
             lbl['trades'].configure(text=str(stats['trades']), text_color=COLOR_TEXT)
-            lbl['drawdown'].configure(text=f"-{stats['max_drawdown'] * 100:.1f}%",
+            lbl['drawdown'].configure(text=f"-{(account or {}).get('max_drawdown', 0) * 100:.1f}%",
                                       text_color=COLOR_TEXT_DIM)
         else:
             for key in ('expectancy', 'win_rate', 'alpha', 'trades', 'drawdown'):

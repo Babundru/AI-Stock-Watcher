@@ -148,11 +148,40 @@ PAPER_COST_PCT = 0.002
 PAPER_BENCHMARK = "SPY"
 PAPER_BENCHMARK_EU = "^STOXX"
 
-# Notional sizing, used only to draw an equity curve and a drawdown figure in
-# the report - the app itself never sizes a position. Each trade puts
-# PAPER_POSITION_PCT of the current capital to work.
-PAPER_START_CAPITAL = 10000.0
-PAPER_POSITION_PCT = 0.10
+# --- PAPER ACCOUNT (position sizing) ---
+# The paper record is run as a real account: it starts with PAPER_BUDGET in
+# cash, every position ties up its size until it closes, and a signal that
+# arrives when there isn't enough cash left is refused ("not enough cash")
+# and followed as a skipped trade instead. See paper_account.py.
+PAPER_BUDGET = 1000.0
+
+# How much of the account a trade may lose if its stop-loss is hit - the
+# number each position is sized from:
+#
+#   size = account x PAPER_RISK_PCT x conviction / stop distance
+#
+# The stop distance comes from the stock's own volatility (STOP_ATR_MULT x
+# ATR), so a jumpy stock gets a smaller position than a calm one and every
+# trade that goes wrong costs about the same. "conviction" nudges it by the
+# AI's confidence and the story's impact (paper_account.conviction) - a
+# nudge, not more, until the record shows its confidence means anything.
+#
+# This is the account that opens (or refuses) positions and whose amounts
+# the phone alerts quote.
+PAPER_RISK_PCT = 0.01
+
+# The risk levels drawn as graphs side by side, each as its own account
+# replayed over the same trades - so the cost of a bolder setting can be
+# seen before it is used. PAPER_RISK_PCT is always drawn too.
+PAPER_RISK_LEVELS = (0.01, 0.02)
+
+# Largest single position, as a fraction of the account. Without it a very
+# calm stock's tight stop would size one position at most of the account.
+PAPER_MAX_POSITION_PCT = 0.25
+
+# Positions smaller than this are not worth opening; a signal that can only
+# be given less (the cash is nearly all tied up) is refused instead.
+PAPER_MIN_POSITION = 20.0
 
 # --- STRATEGY: RISK PER TRADE (stop-loss) ---
 # Every position has a stop-loss; there is no "off" any more. The old rules
@@ -474,6 +503,8 @@ USER_SETTINGS = {
     "DASHBOARD_PASSWORD": _STR,
     "PAPER_TRADING": _BOOL,
     "PAPER_COST_PCT": _FLOAT,
+    "PAPER_BUDGET": _FLOAT,
+    "PAPER_RISK_PCT": _FLOAT,
 }
 
 # Settings whose value must not be emptied by a blank entry: a blank model

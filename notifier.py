@@ -170,6 +170,14 @@ class Notifier:
                       f"Stop {stop:.2f} ({(stop - entry) / entry * 100:+.1f}%)")
         if d.get('opened'):
             verb = "SHORT (open a short CFD)" if is_short else "BUY (open a long CFD)"
+            size = ""
+            if d.get('position_usd'):
+                # What the paper account put in - the amount to copy, scaled
+                # to your own account if it isn't the same size.
+                size = f"\nSize: ~${d['position_usd']:,.2f}"
+                if d.get('risk_usd') and d.get('account_usd'):
+                    size += (f" (risking ~${d['risk_usd']:,.2f} of ${d['account_usd']:,.2f} "
+                             f"if the stop is hit)")
             exit_text = ""
             if d.get('expires_at'):
                 try:
@@ -183,7 +191,7 @@ class Notifier:
                 except (TypeError, ValueError):
                     pass
             follow = "BUY BACK" if is_short else "SELL"
-            return (f"Action: {verb} at ~{entry:.2f}\n{levels}{exit_text}\n"
+            return (f"Action: {verb} at ~{entry:.2f}{size}\n{levels}{exit_text}\n"
                     f"A {follow} alert follows when to close.")
         if entry:
             side = "Short" if is_short else "Long"
@@ -210,7 +218,8 @@ class Notifier:
         return self._send_ntfy(title, message, priority='default', url=article_url)
 
     def notify_sell(self, ticker, company, reason, entry_price, current_price,
-                    target_price, article_url=None, direction="LONG"):
+                    target_price, article_url=None, direction="LONG",
+                    position_usd=None, cost_pct=0.0):
         """
         Sends an exit-signal notification for a watch closed by
         _check_watches (main.py): either the alerted-on move played out, or
@@ -227,6 +236,9 @@ class Notifier:
             target_price: Price that would have counted as the move "playing out"
             article_url: Link back to the article that opened the watch
             direction: "LONG" (close by selling) or "SHORT" (close by buying back)
+            position_usd: What the paper account put in (None for a position
+                opened before sizing existed) - the result is then also
+                given in money, after `cost_pct` costs.
         """
         is_short = (direction or "LONG").upper() == "SHORT"
         price_change = ((current_price - entry_price) / entry_price * 100) if entry_price else 0.0
@@ -271,6 +283,10 @@ class Notifier:
             f"Entry: {entry_price:.2f} -> Now: {current_price:.2f} "
             f"({price_change:+.1f}% price, {position_pct:+.1f}% on the position)"
         )
+        if position_usd:
+            pnl = position_usd * (position_pct / 100 - (cost_pct or 0))
+            message += (f"\nResult: {'+' if pnl >= 0 else '-'}${abs(pnl):,.2f} on "
+                        f"${position_usd:,.2f}, after costs")
 
         print("\n" + "="*50)
         print(f"TITLE: {title} {emoji}")

@@ -110,6 +110,7 @@ main.py              StockAppBackend - the scan loop, orchestrates everything be
 ├── watch_manager.py       Long/short exit watches opened after an alert (data/watches.json)
 ├── strategy.py            Entry and exit rules, pure functions (plan_trade, update_exit)
 ├── paper_trader.py        Paper-trading ledger of every watch's round trip (data/paper_trades.json)
+│   └── paper_account.py     The ledger replayed as a $ account per risk level: sizing, cash, graphs
 ├── shadow_trades.py       Skipped trades: refused signals followed as if traded (data/shadow_trades.json)
 ├── price_lookup.py        Batched yfinance quote lookup, shared by watch-checking + portfolio summary
 └── portfolio_history.py  Reconstructs daily portfolio value history via yfinance (server.py only)
@@ -147,6 +148,7 @@ tickers/sources/keywords/watches, single-process access).
 | `data/portfolio.json` | `portfolio_manager.py` | No - personal holdings |
 | `data/watches.json` | `watch_manager.py` | No - personal |
 | `data/paper_trades.json` | `paper_trader.py` | No - personal, never trimmed |
+| `data/paper_marks.json` | `paper_trader.py` | No - open-position price snapshots, thinned with age |
 | `data/shadow_trades.json` | `shadow_trades.py` | No - runtime, newest 1000 closed |
 | `data/processed_urls.json` | `main.py` directly | No - runtime cache |
 | `data/stats.json` | `main.py` directly | No - runtime counters |

@@ -141,6 +141,35 @@ without a trade. It is now `MIN_MOVE_ATR_MULT` (1.2) daily ranges, the
 Dashboard surface: `GET /api/watches` (`server.py`) backs the "Watching"
 card on the Alerts tab (open watches only) - see `ui.md`.
 
+## Paper account (`paper_account.py`, `data/paper_marks.json`)
+
+The ledger records trades in percentages; `paper_account.replay` turns them
+into money by running them through an account that starts with
+`PAPER_BUDGET` ($1,000). Nothing about the account is stored - it is
+replayed from the ledger on every request - which is why several accounts
+can be drawn side by side (`PAPER_RISK_LEVELS`, 1% and 2%: one dashboard
+graph each) and why old trades are re-sized under the current rules.
+
+- **Size** = account x risk % x conviction / stop distance. The stop comes
+  from the stock's ATR, so a jumpy stock gets a smaller position and every
+  stopped-out trade costs about the same. Conviction is a small nudge:
+  confidence 60 -> x0.75 .. 100 -> x1.25, CRITICAL x1.15. Capped at
+  `PAPER_MAX_POSITION_PCT` (25%) of the account and at the free cash;
+  under `PAPER_MIN_POSITION` ($20) the trade is refused.
+- **Cash**: a position ties its size up until it closes. `main._decide_trade`
+  sizes every new trade from the trading account (`PAPER_RISK_PCT`) and, if
+  the cash can't cover it, refuses it and follows it as a skipped trade
+  (rule `cash`). The other accounts are replays and may skip different ones.
+- **Costs** are charged at entry, so an open position is worth
+  size x (1 + move - cost) and a closed one size x (1 + net_pct).
+- **Marks**: each watch check snapshots the open positions' in-session prices
+  (`PaperTrader.record_marks`), so the graphs are marked to market. Thinned
+  as they age (every check for a day, hourly for a month, daily after).
+- The entry alert quotes the size and the risk; the exit alert the result in
+  money. `py paper_report.py` prints each account.
+- A replay is only as good as the ledger: trades from before sizing existed
+  had no cash limit, so a replay can skip some of them for cash.
+
 ## Skipped trades (`shadow_trades.py`, `data/shadow_trades.json`)
 
 A signal `strategy.plan_trade` refuses is followed as if it had been

@@ -24,6 +24,8 @@ data/settings.json
 data/watches.json
 data/stats.json
 data/paper_trades.json
+data/paper_marks.json
+data/paper_marks.json.tmp
 data/shadow_trades.json
 data/reddit_state.json
 data/alerts_history.json

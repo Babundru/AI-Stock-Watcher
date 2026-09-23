@@ -38,9 +38,20 @@ import json
 import os
 import datetime
 
+import paper_account
 from local_time import now_local
 
 LEDGER_FILE = "data/paper_trades.json"
+
+# Prices of the open positions, snapshotted on every watch check, so the
+# account can be drawn marked to market over time and not only at the
+# moments trades close. Kept apart from the ledger: it is a chart's raw
+# material, not the record. Thinned as it ages - every check for a day,
+# hourly for a month, daily after that - which keeps a year of it to a few
+# thousand snapshots of at most MAX_OPEN_POSITIONS prices each.
+MARKS_FILE = "data/paper_marks.json"
+MARKS_FULL_SECONDS = 24 * 3600
+MARKS_HOURLY_SECONDS = 30 * 24 * 3600
 
 LONG = "LONG"
 SHORT = "SHORT"
@@ -62,8 +73,11 @@ def _pct_move(direction, entry, price):
 
 
 class PaperTrader:
-    def __init__(self, filename=LEDGER_FILE, cost_pct=0.0, benchmark="SPY"):
+    def __init__(self, filename=LEDGER_FILE, cost_pct=0.0, benchmark="SPY", marks_file=None):
         self.filename = filename
+        # Beside the ledger, wherever that is (a test's temp dir included).
+        self.marks_file = marks_file or os.path.join(os.path.dirname(filename) or '.',
+                                                     os.path.basename(MARKS_FILE))
         # Round-trip trading cost as a fraction (spread + commission +
         # financing), subtracted from every trade's gross return. Defaults to
         # zero so an unconfigured ledger reports raw price moves rather than
@@ -75,8 +89,44 @@ class PaperTrader:
         # called for every open watch on every check, so a linear scan of
         # the whole history each time would grow with the record's age.
         self._by_id = {t['watch_id']: t for t in self.trades if 'watch_id' in t}
+        # [(epoch seconds, {watch_id: price})], oldest first.
+        self.marks = self._load_marks()
 
     # --- storage -------------------------------------------------------
+
+    def _load_marks(self):
+        try:
+            with open(self.marks_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            return [(float(ts), m) for ts, m in data if isinstance(m, dict)]
+        except (OSError, ValueError, TypeError):
+            return []
+
+    def save_marks(self):
+        try:
+            os.makedirs(os.path.dirname(self.marks_file) or '.', exist_ok=True)
+            tmp = self.marks_file + '.tmp'
+            with open(tmp, 'w', encoding='utf-8') as f:
+                # Compact: this is rewritten every watch check.
+                json.dump([[int(ts), m] for ts, m in self.marks], f, separators=(',', ':'))
+            os.replace(tmp, self.marks_file)
+        except OSError as e:
+            print(f"Error saving paper marks: {e}")
+
+    def record_marks(self, prices_by_watch, now=None):
+        """Snapshot the open positions' prices ({watch_id: price}) - once per
+        watch check, only for positions whose exchange is in its regular
+        session (an out-of-hours print is not a price the position could be
+        valued at, which is also why exits wait for the session). Not saved
+        here; the watch check calls save_marks() once per pass."""
+        marks = {wid: round(float(p), 4) for wid, p in (prices_by_watch or {}).items()
+                 if p and wid in self._by_id and self._by_id[wid]['status'] == 'OPEN'}
+        if not marks:
+            return False
+        ts = (now or now_local()).timestamp()
+        self.marks.append((ts, marks))
+        self.marks = _thin_marks(self.marks, ts)
+        return True
 
     def _load(self):
         if not os.path.exists(self.filename):
@@ -110,6 +160,7 @@ class PaperTrader:
         """
         self.trades = self._load()
         self._by_id = {t['watch_id']: t for t in self.trades if 'watch_id' in t}
+        self.marks = self._load_marks()
 
     def _find(self, watch_id):
         return self._by_id.get(watch_id)
@@ -168,6 +219,9 @@ class PaperTrader:
             "headline": watch.get('article_headline'),
             "url": watch.get('article_url'),
             "entry_price": watch['entry_price'],
+            # What the trading account put in when it opened (informational:
+            # the accounts re-size every trade from the ledger on replay).
+            "position_usd": watch.get('position_usd'),
             "target_price": watch.get('target_price'),
             "target_pct": watch.get('target_pct'),
             "opened_at": watch['opened_at'],
@@ -270,15 +324,10 @@ class PaperTrader:
     def open_trades(self):
         return [t for t in self.trades if t['status'] == 'OPEN']
 
-    def stats(self, start_capital=10000.0, position_pct=0.10):
-        """Summarise the ledger. Returns None until something has closed.
-
-        The equity curve compounds a fixed fraction of current capital into
-        each trade, in the order the trades closed. That is a modelling
-        choice, not something the app decides - it has no notion of position
-        size - but some sizing rule is needed before "max drawdown" means
-        anything, and fixed-fraction is the least arbitrary one.
-        """
+    def stats(self):
+        """Summarise the ledger, trade by trade, in percentages. Returns None
+        until something has closed. What the trades did to an account - in
+        money, with sizes and a cash limit - is accounts()."""
         trades = sorted(self.closed(), key=lambda t: t['closed_at'] or '')
         if not trades:
             return None
@@ -286,23 +335,6 @@ class PaperTrader:
         rets = [t['net_pct'] for t in trades]
         wins = [r for r in rets if r > 0]
         losses = [r for r in rets if r <= 0]
-
-        equity = start_capital
-        peak = start_capital
-        max_dd = 0.0
-        # Starts at the capital itself, dated when the first trade opened, so
-        # a chart of it starts from 0% like a quote chart starts from the
-        # previous close. Each later point is one trade closing, carrying the
-        # trade so the chart can say which one moved it.
-        curve = [{"closed_at": trades[0].get('opened_at') or trades[0]['closed_at'],
-                  "equity": round(start_capital, 2)}]
-        for t in trades:
-            equity *= (1 + t['net_pct'] * position_pct)
-            peak = max(peak, equity)
-            max_dd = max(max_dd, (peak - equity) / peak)
-            curve.append({"closed_at": t['closed_at'], "equity": round(equity, 2),
-                          "ticker": t.get('ticker'), "direction": t.get('direction'),
-                          "net_pct": t['net_pct']})
 
         alphas = [t['alpha_pct'] for t in trades if t.get('alpha_pct') is not None]
         benches = [t['benchmark_pct'] for t in trades if t.get('benchmark_pct') is not None]
@@ -327,9 +359,6 @@ class PaperTrader:
             "expectancy": sum(rets) / len(rets),
             "best": max(rets),
             "worst": min(rets),
-            "total_return": (equity - start_capital) / start_capital,
-            "final_equity": equity,
-            "max_drawdown": max_dd,
             "avg_benchmark": (sum(benches) / len(benches)) if benches else None,
             "avg_alpha": (sum(alphas) / len(alphas)) if alphas else None,
             "avg_holding_hours": _avg([t['holding_hours'] for t in trades
@@ -339,8 +368,35 @@ class PaperTrader:
             "by_impact": _group(trades, lambda t: t.get('impact') or '?'),
             "by_horizon": _group(trades, lambda t: t.get('horizon') or '?'),
             "by_reason": _group(trades, lambda t: t.get('reason') or '?'),
-            "equity_curve": curve,
+            "by_confidence": _group(trades, _confidence_bucket),
         }
+
+    # --- the account ---------------------------------------------------
+
+    def accounts(self, prices=None, curve=True):
+        """The ledger run through a paper account at each risk level
+        (paper_account.risk_levels), marked to `prices` now - one graph each.
+        The trading level (config.PAPER_RISK_PCT) is flagged 'primary'."""
+        primary = paper_account.settings()['risk_pct']
+        out = []
+        for risk in paper_account.risk_levels():
+            acct = paper_account.replay(self.trades, self.cost_pct, risk_pct=risk,
+                                        marks=self.marks, prices=prices, curve=curve)
+            acct['primary'] = abs(risk - primary) < 1e-12
+            out.append(acct)
+        return out
+
+    def size_new_trade(self, stop_pct, confidence, impact):
+        """Size a trade about to open, in the trading account as it stands:
+        {'size', 'risk_usd', 'conviction', 'account', 'cash', 'budget'}, or
+        {'size': None, 'reason', ...} when the cash can't cover it."""
+        acct = paper_account.replay(self.trades, self.cost_pct, curve=False)
+        s = paper_account.settings()
+        got = paper_account.position_size(s['budget'] + acct['realised_pnl'], acct['cash'],
+                                          stop_pct, confidence, impact, s)
+        got.update(account=round(s['budget'] + acct['realised_pnl'], 2), cash=acct['cash'],
+                   budget=s['budget'])
+        return got
 
     def live_positions(self, prices=None):
         """Open positions marked to the prices given, for the Portfolio view.
@@ -378,7 +434,7 @@ class PaperTrader:
         """Tickers with an open position, for a single batched price call."""
         return list({t['ticker'] for t in self.open_trades()})
 
-    def overview(self, prices=None, start_capital=10000.0, position_pct=0.10):
+    def overview(self, prices=None):
         """Everything the Portfolio view needs in one object: the realised
         record, the open positions marked to market, and the two totals.
 
@@ -387,8 +443,28 @@ class PaperTrader:
         evaporate before its signal fires, and blending the two produces a
         number that flatters whatever the market did this week.
         """
-        stats = self.stats(start_capital=start_capital, position_pct=position_pct)
+        stats = self.stats()
         positions = self.live_positions(prices)
+        accounts = self.accounts(prices)
+        # Each open position's size in the trading account, and what that
+        # is worth now - or why that account couldn't take it.
+        primary = next((a for a in accounts if a['primary']), None)
+        for p in positions:
+            size = primary['sizes'].get(p['watch_id']) if primary else None
+            p['position_usd'] = size
+            p['skipped_reason'] = primary['skipped'].get(p['watch_id']) if primary else None
+            p['unrealised_usd'] = (round(size * p['unrealised_pct'], 2)
+                                   if size and p['unrealised_pct'] is not None else None)
+        # The same for closed trades: what each made or lost in money.
+        closed_recent = []
+        for t in sorted(self.closed(), key=lambda t: t['closed_at'] or '', reverse=True)[:50]:
+            size = primary['sizes'].get(t['watch_id']) if primary else None
+            closed_recent.append(dict(t, position_usd=size,
+                                      pnl_usd=round(size * t['net_pct'], 2) if size else None))
+        for a in accounts:
+            # Per-trade detail only the rows above need.
+            a.pop('skipped', None)
+            a.pop('sizes', None)
 
         marked = [p['unrealised_pct'] for p in positions
                   if p['unrealised_pct'] is not None]
@@ -397,12 +473,11 @@ class PaperTrader:
             "cost_pct": self.cost_pct,
             "benchmark": self.benchmark,
             "stats": stats,
+            "accounts": accounts,
             "positions": positions,
             "open_count": len(positions),
             "open_avg_pct": (sum(marked) / len(marked)) if marked else None,
-            "closed_recent": sorted(self.closed(),
-                                    key=lambda t: t['closed_at'] or '',
-                                    reverse=True)[:50],
+            "closed_recent": closed_recent,
         }
 
     def stop_loss_study(self, levels=(0.02, 0.03, 0.05, 0.08, 0.10)):
@@ -446,6 +521,33 @@ def _parse_time(value):
         return datetime.datetime.fromisoformat(value)
     except (TypeError, ValueError):
         return None
+
+
+def _thin_marks(marks, now_ts):
+    """Keep every snapshot from the last day, the last of each hour for the
+    month before, and the last of each day before that."""
+    kept, seen = [], set()
+    for ts, m in reversed(marks):
+        age = now_ts - ts
+        if age <= MARKS_FULL_SECONDS:
+            kept.append((ts, m))
+            continue
+        bucket = ('h', int(ts // 3600)) if age <= MARKS_HOURLY_SECONDS else ('d', int(ts // 86400))
+        if bucket not in seen:
+            seen.add(bucket)
+            kept.append((ts, m))
+    kept.reverse()
+    return kept
+
+
+def _confidence_bucket(trade):
+    """"60-69", "70-79", ... - for checking whether the model's confidence
+    means anything before the position sizing leans on it harder."""
+    c = trade.get('confidence')
+    if c is None:
+        return '?'
+    low = min(int(c) // 10 * 10, 90)
+    return f"{low}-{low + 9 if low < 90 else 100}"
 
 
 def _avg(values):
