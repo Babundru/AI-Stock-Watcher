@@ -2,6 +2,7 @@ import json
 import os
 import uuid
 from typing import Dict, List, Optional
+from urllib.parse import urlparse
 
 import reddit_source
 
@@ -253,11 +254,19 @@ class SourceManager:
                 raise ValueError(f"r/{subreddit} is already a source")
         return subreddit
 
+    @staticmethod
+    def _twitter_host(url: str) -> str:
+        u = (url or '').strip().lower()
+        return urlparse(u if '://' in u else 'https://' + u).hostname or ''
+
     def _is_twitter_url(self, url: str) -> bool:
-        """Check if URL is a Twitter/X URL."""
-        url_lower = url.lower()
-        return ('twitter.com/' in url_lower or 'x.com/' in url_lower) and 'nitter' not in url_lower
-    
+        """Check if URL is a Twitter/X URL. Matched on the host name: a
+        substring test took vox.com/ and fedex.com/ for x.com/."""
+        host = self._twitter_host(url)
+        if host.startswith(('www.', 'mobile.')):
+            host = host.split('.', 1)[1]
+        return host in ('twitter.com', 'x.com')
+
     def _convert_to_nitter(self, twitter_url: str) -> str:
         """Convert Twitter/X URL to Nitter URL."""
         # List of Nitter instances (in order of preference)
@@ -267,20 +276,12 @@ class SourceManager:
             'nitter.net',
             'nitter.lunar.icu'
         ]
-        
-        # Extract username from Twitter URL
-        # Handles: twitter.com/username, x.com/username, twitter.com/@username
-        url = twitter_url.replace('https://', '').replace('http://', '')
-        url = url.replace('twitter.com', '').replace('x.com', '')
-        url = url.strip('/')
-        
-        # Remove @ if present
-        if url.startswith('@'):
-            url = url[1:]
-        
-        # Extract just the username (before any / or ?)
-        username = url.split('/')[0].split('?')[0]
-        
+
+        # Handles: twitter.com/username, www.x.com/username, twitter.com/@username
+        u = twitter_url.strip()
+        path = urlparse(u if '://' in u else 'https://' + u).path
+        username = path.strip('/').split('/')[0].lstrip('@')
+
         # Use first Nitter instance (user can manually change if needed)
         nitter_url = f"https://{nitter_instances[0]}/{username}"
         

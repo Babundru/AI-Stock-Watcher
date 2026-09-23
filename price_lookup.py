@@ -216,11 +216,14 @@ def fetch_context(ticker, published_at=None, benchmark=None):
 
     `published_at` is an aware datetime or ISO string; naive means UTC.
     """
-    ctx = _context_for(ticker, published_at)
+    # Every close is picked by the stock's own exchange's closing time - the
+    # benchmark's too, so both are measured over the same window.
+    session = markets.market(ticker) or markets.MARKETS[markets.US]
+    ctx = _context_for(ticker, published_at, session)
     if not ctx and _is_class_share(ticker):
-        ctx = _context_for(ticker.replace('.', '-'), published_at)
+        ctx = _context_for(ticker.replace('.', '-'), published_at, session)
     if ctx and benchmark:
-        index = _context_for(benchmark, published_at)
+        index = _context_for(benchmark, published_at, session)
         ctx['market_price'] = index.get('price')
         ctx['market_since_close_pct'] = index.get('change_since_close_pct')
         ctx['market_since_publish_pct'] = index.get('change_since_publish_pct')
@@ -255,7 +258,7 @@ def _in_regular_session(when, ticker=None):
     return local.weekday() < 5 and opens <= minutes < closes
 
 
-def _context_for(ticker, published_at):
+def _context_for(ticker, published_at, session=None):
     import yfinance as yf
     import pandas as pd
 
@@ -279,7 +282,6 @@ def _context_for(ticker, published_at):
         if daily is None or daily.empty:
             return ctx
         daily = daily[["High", "Low", "Close"]].dropna()
-        tz = daily.index.tz
 
         pub = None
         if published_at:
@@ -287,16 +289,21 @@ def _context_for(ticker, published_at):
             if pub.tzinfo is None:
                 pub = pub.tz_localize("UTC")
         ref_time = pub if pub is not None else pd.Timestamp.now(tz="UTC")
-        if tz is not None:
-            ref_time = ref_time.tz_convert(tz)
+        session = session or markets.MARKETS[markets.US]
+        # On the exchange's own clock, whatever the frame's index is in (the
+        # European benchmark's daily bars are not on London time, say).
+        ref_time = ref_time.tz_convert(session.tz.zone)
 
         # The close the news is measured against: that day's if the news
-        # came after the 16:00 close (after-hours earnings), otherwise the
-        # previous session's. The daily bar for a session still in progress
-        # is partial, so it is excluded either way before 16:00.
+        # came after the exchange's close (after-hours earnings), otherwise
+        # the previous session's. The daily bar for a session still in
+        # progress is partial, so it is excluded either way before the close.
+        # The close is the exchange's own: a hard-coded 16:00 counted a
+        # Frankfurt session that runs to 17:30 as finished.
         ref_date = ref_time.date()
         dates = daily.index.date
-        done = daily[dates <= ref_date] if ref_time.hour >= 16 else daily[dates < ref_date]
+        after_close = ref_time.time() >= session.close_at
+        done = daily[dates <= ref_date] if after_close else daily[dates < ref_date]
         if done.empty:
             return ctx
 

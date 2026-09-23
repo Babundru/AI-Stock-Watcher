@@ -108,6 +108,8 @@ class WaitTest(unittest.TestCase):
         self.backend.notifier = mock.Mock()
         # Nothing trading: a weekend, which is what this suite is about.
         self.backend.notifier.open_markets.return_value = []
+        self.backend._init_pipeline_state()
+        self.backend.processed_set = set()
         self.backend._process_article = mock.Mock()
 
     def test_weekday_wait_polls_nothing_extra(self):

@@ -403,7 +403,19 @@ SETTINGS_FILE = "data/settings.json"
 # so a typo in the file (or a stray key posted to the dashboard) can never
 # shadow an unrelated module global.
 _STR = lambda v: str(v)
-_BOOL = lambda v: bool(v)
+def _BOOL(v):
+    """bool("false") is True - a hand-edited file can hold strings."""
+    if isinstance(v, str):
+        s = v.strip().lower()
+        if s in ("true", "yes", "on", "1"):
+            return True
+        if s in ("false", "no", "off", "0", ""):
+            return False
+        raise ValueError(f"not a yes/no value: {v!r}")
+    return bool(v)
+
+
+
 _INT = lambda v: int(v)
 _FLOAT = lambda v: float(v)
 _IMPACT = lambda v: str(v).upper() if str(v).upper() in IMPACT_LEVELS else MIN_IMPACT
@@ -506,8 +518,11 @@ def reload_from_disk(verbose=True):
                     print(f"Ignoring invalid {key} in {SETTINGS_FILE}: {raw!r}")
         globals()[key] = value
     if verbose and user_settings:
-        # Never log the API key itself.
-        print(f"Loaded custom settings: Topic={NTFY_TOPIC}, Model={LOCAL_MODEL_NAME}, "
+        # Never log the API key or the topic itself: the topic is the only
+        # thing keeping a public ntfy channel private, and stdout is journald
+        # on the VM.
+        print(f"Loaded custom settings: Topic={'set' if NTFY_TOPIC else 'none'}, "
+              f"Model={LOCAL_MODEL_NAME}, "
               f"CloudAI={'on (' + CLOUD_AI_PROVIDER + '/' + CLOUD_AI_MODEL + ')' if USE_CLOUD_AI else 'off'}")
 
 

@@ -21,15 +21,35 @@ Runs in a daemon thread, started by `.start()`. Every `CHECK_INTERVAL`
 (60s, `config.py`) - `WEEKEND_CHECK_INTERVAL` (25 min) on Saturdays and
 Sundays, New York time:
 
-1. Fetch custom sources (`news_collector.py: fetch_from_custom_sources`)
-2. If `GLOBAL_SCAN` (default on): fetch top business headlines from 4
-   hardcoded RSS feeds (`NewsCollector.MARKET_RSS_FEEDS`)
-3. If `GLOBAL_SCAN` is off instead: fetch news per `TARGET_COMPANIES`
-4. Every article goes through `_process_article`: dedup check (last 120
-   processed URLs, `data/processed_urls.json`) -> analyze
-   (`self.analyzer.analyze_article`, one of three interchangeable engines,
-   see `ai_engines.md`; the URL is marked processed only once the engine
-   has actually judged it - a failed call leaves it for the next scan) ->
+1. Fetch custom sources (`news_collector.py: fetch_from_custom_sources`).
+   A custom source that is just a copy of a built-in feed with the same
+   "reporting" trust is skipped; the built-in copy (with the per-scan cap)
+   is used instead
+2. If `GLOBAL_SCAN` (default on): fetch top business headlines from the
+   built-in RSS feeds (`NewsCollector.MARKET_RSS_FEEDS`, US plus Europe
+   when `SCAN_EUROPE`)
+3. If `GLOBAL_SCAN` is off instead: fetch news for `TARGET_COMPANIES`
+   (`fetch_company_news` - each feed downloaded once for all companies)
+
+   The collector drops, before scraping: already-analysed URLs (tracking
+   parameters like `?mod=`/`utm_*` stripped first, `clean_url`), headlines
+   already analysed under another URL (`title_key`), and noise formats the
+   prompt calls irrelevant anyway (`is_noise_headline` - transcripts,
+   conference notices, buy lists, market wraps). Scraped text is capped at
+   `MAX_CONTENT_CHARS` and kept in a 64-entry cache, so an article waiting
+   on a retry isn't downloaded again every scan
+4. All of it is analysed in one pass (`_run_pass`). Every article goes
+   through `_process_article`: dedup check (last 500 processed URLs,
+   `data/processed_urls.json`, plus the last 500 headlines in memory) ->
+   analyze (`self.analyzer.analyze_article`, one of three interchangeable
+   engines, see `ai_engines.md`; the URL is marked processed only once the
+   engine has actually judged it - a failed call leaves it for a later
+   pass). Two failures in a row end the pass ("engine down"); a failure is
+   charged to the article (`MAX_ANALYSIS_ATTEMPTS`) only if the engine
+   answered for another article in the same pass, otherwise it counts as an
+   outage strike (`MAX_OUTAGE_STRIKES`). Previously failed articles go to the
+   back of the pass. A Reddit post that isn't analysed goes into
+   `_reddit_backlog` (the poller hands each post out once) ->
    alert if POSITIVE/NEGATIVE + impact at least
    `MIN_IMPACT` + not FLAT + confidence at least `MIN_CONFIDENCE` + new,
    company-specific news -> close any open position the news contradicts
@@ -37,7 +57,9 @@ Sundays, New York time:
    `strategy.plan_trade`) opens a watch (LONG for POSITIVE, SHORT for
    NEGATIVE), or records why not and follows the refused signal as a
    skipped trade (`shadow_trades.py`) -> notify
-5. Every `WATCH_CHECK_INTERVAL` (5 min): `_check_watches` prices every
+5. Every `WATCH_CHECK_INTERVAL` (5 min) - checked between articles as
+   well as after the pass, so a long pass doesn't hold exits back:
+   `_check_watches` prices every
    open watch and skipped trade in one call, ratchets their stops and
    closes any whose stop, target or time exit fired - notifying for
    watches only (see `strategy.py` and `portfolio_and_notifications.md`),
@@ -152,7 +174,8 @@ It already got tight once - see `incidents.md`. Rules that came out of it:
   or tickers must be chunked or capped.** That was the bug: one unbounded
   `yf.download` over a set that only ever grew.
 - Everything else in the process is deliberately bounded - `DashboardState`
-  deques (`MAX_LOG_LINES=2000`, `MAX_ALERTS=500`), 120 processed URLs, the
+  deques (`MAX_LOG_LINES=2000`, `MAX_ALERTS=500`), 500 processed URLs and 500
+  headlines, the 64-entry scrape cache, the 60-post Reddit backlog, the
   3MB download cap and `SoupStrainer('p')` + `decompose()` in
   `news_collector.py`, lazy yfinance/pandas imports. Keep new state the
   same way.

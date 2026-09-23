@@ -290,12 +290,19 @@ class PaperTrader:
         equity = start_capital
         peak = start_capital
         max_dd = 0.0
-        curve = []
+        # Starts at the capital itself, dated when the first trade opened, so
+        # a chart of it starts from 0% like a quote chart starts from the
+        # previous close. Each later point is one trade closing, carrying the
+        # trade so the chart can say which one moved it.
+        curve = [{"closed_at": trades[0].get('opened_at') or trades[0]['closed_at'],
+                  "equity": round(start_capital, 2)}]
         for t in trades:
             equity *= (1 + t['net_pct'] * position_pct)
             peak = max(peak, equity)
             max_dd = max(max_dd, (peak - equity) / peak)
-            curve.append({"closed_at": t['closed_at'], "equity": round(equity, 2)})
+            curve.append({"closed_at": t['closed_at'], "equity": round(equity, 2),
+                          "ticker": t.get('ticker'), "direction": t.get('direction'),
+                          "net_pct": t['net_pct']})
 
         alphas = [t['alpha_pct'] for t in trades if t.get('alpha_pct') is not None]
         benches = [t['benchmark_pct'] for t in trades if t.get('benchmark_pct') is not None]

@@ -2,7 +2,7 @@ import config
 from config import (CHECK_INTERVAL, WEEKEND_CHECK_INTERVAL, WATCH_CHECK_INTERVAL,
                     TARGET_COMPANIES, PAPER_TRADING, PAPER_COST_PCT, PAPER_BENCHMARK)
 from local_time import now_local
-from news_collector import NewsCollector
+from news_collector import NewsCollector, clean_url, title_key
 from analyzer import MarketAnalyzer
 from cloud_analyzer import CloudAnalyzer
 from keyword_analyzer import KeywordAnalyzer
@@ -33,6 +33,26 @@ import os
 # the article, so it is retried - but not forever, in case it is the article
 # (too long for the model, say).
 MAX_ANALYSIS_ATTEMPTS = 3
+
+# Only a failure while the engine is known to be working counts as one of
+# those attempts - see _analysis_failed. A failure in a pass where nothing
+# succeeded is put down to an outage instead, and an article is given up on
+# only after this many of those (about an hour of one-minute scans), so one
+# the engine can never read doesn't wait forever either.
+MAX_OUTAGE_STRIKES = 60
+
+# A pass over the articles stops after this many failures in a row: the
+# second one tells an outage (both fail) apart from one unreadable article
+# (the next one goes through).
+FAILURES_BEFORE_ENGINE_DOWN = 2
+
+# Reddit posts that couldn't be analysed yet, kept for the next pass. The
+# poller hands each post out once, so without this a post that met a failing
+# engine was gone for good.
+MAX_REDDIT_BACKLOG = 60
+
+# Recent headlines remembered, to catch one story under a second URL.
+MAX_STORED_TITLES = 500
 
 
 def _process_rss_mb():
@@ -140,15 +160,32 @@ class StockAppBackend:
         self.urls_lock = threading.Lock()
         # Let the collector skip re-downloading articles we've already analysed
         self.collector.is_seen = self.processed_set.__contains__
-        # url -> failed analysis attempts, for articles waiting on a retry.
-        self._failed_attempts = {}
-        # Set once the engine fails during a scan, cleared when the next scan
-        # starts. See _analysis_failed.
-        self._engine_down = False
+        self._init_pipeline_state()
+        self.collector.is_seen_title = self.processed_titles_set.__contains__
         # (time.time() the next scan starts at, seconds in the whole wait)
         # while the loop waits between scans, else None. One tuple, so the
         # UIs' countdown (next_scan_countdown) never reads half of an update.
         self.next_scan = None
+
+    def _init_pipeline_state(self):
+        """Per-article bookkeeping of the scan loop - retries, the Reddit
+        backlog, recent headlines. Separate from __init__ so a test can build
+        a bare backend with just this."""
+        # url -> failed analysis attempts, for articles waiting on a retry.
+        self._failed_attempts = {}
+        # url -> passes it failed in while nothing else succeeded either.
+        self._outage_strikes = {}
+        # State of the current pass over the articles (a scan, or a Reddit
+        # poll between scans) - see _begin_pass and _analysis_failed.
+        self._engine_down = False
+        self._pass_success = False
+        self._consecutive_failures = 0
+        self._uncharged = []
+        # url -> Reddit article waiting for a working engine.
+        self._reddit_backlog = collections.OrderedDict()
+        # title_key()s of recently analysed articles, oldest evicted first.
+        self.processed_titles = collections.deque(maxlen=MAX_STORED_TITLES)
+        self.processed_titles_set = set()
 
     @staticmethod
     def engine_name():
@@ -215,7 +252,12 @@ class StockAppBackend:
                     # If data is a list, load directly
                     if isinstance(data, list):
                         # Keep only the most recent max_stored_urls
-                        urls = collections.deque(data[-self.max_stored_urls:], maxlen=self.max_stored_urls)
+                        # Stored before tracking parameters were stripped, some
+                        # of these still carry them; cleaned, they match the
+                        # URLs the collector hands out now.
+                        urls = collections.deque((clean_url(u) for u in data[-self.max_stored_urls:]
+                                                  if isinstance(u, str)),
+                                                 maxlen=self.max_stored_urls)
                         self.log(f"Loaded {len(urls)} previously processed URLs")
                         return urls
                     
@@ -223,16 +265,15 @@ class StockAppBackend:
                     elif isinstance(data, dict):
                         # Sort by timestamp and take most recent
                         sorted_urls = sorted(data.items(), key=lambda x: x[1])
-                        urls = [url for url, _ in sorted_urls[-self.max_stored_urls:]]
+                        urls = [clean_url(url) for url, _ in sorted_urls[-self.max_stored_urls:]]
                         urls_deque = collections.deque(urls, maxlen=self.max_stored_urls)
                         self.log(f"Loaded {len(urls_deque)} previously processed URLs (converted from old format)")
                         return urls_deque
                     
             except Exception as e:
                 self.log(f"Error loading processed URLs: {e}")
-                return collections.deque(maxlen=self.max_stored_urls)
-        else:
-            return collections.deque(maxlen=self.max_stored_urls)
+        # No file, an unreadable one, or JSON of neither shape.
+        return collections.deque(maxlen=self.max_stored_urls)
     
     def _load_stats(self):
         """Load persisted scan/alert/skip counters from disk (survives a restart)."""
@@ -359,15 +400,78 @@ class StockAppBackend:
         return max(0.0, deadline - time.time()), total
 
     def _poll_reddit(self, generation):
-        """Analyse whatever Reddit posts have become ready. Returns how many."""
+        """Analyse whatever Reddit posts have become ready, plus any still
+        waiting from a pass the engine failed in. Returns how many were new.
+        Each poll is a pass of its own: an engine that failed during the
+        scan gets a fresh chance here, as it would at the next scan."""
         posts = self.collector.fetch_reddit_posts()
-        if posts:
-            open_now = self.notifier.open_markets()
-            for article in posts:
+        if posts or self._reddit_backlog:
+            items = [("Custom Source News", article, True) for article in posts]
+            self._run_pass(items, generation, self.notifier.open_markets())
+        return len(posts)
+
+    def _run_pass(self, items, generation, open_now, check_watches=False):
+        """Analyse (company_hint, article, is_discovery) `items` in one pass.
+
+        Reddit posts left over from an earlier pass go first. Articles that
+        failed before go last, behind the fresh ones: if the engine is up,
+        a fresh article proves it before a suspect one is charged an
+        attempt; if it is down, the pass stops without one article taking
+        every hit (see _analysis_failed).
+
+        A Reddit post that isn't analysed - the engine down, or a stop in the
+        middle - goes back into the backlog: the poller won't offer it again.
+        """
+        self._begin_pass()
+        backlog = [("Custom Source News", a, True) for a in self._reddit_backlog.values()]
+        self._reddit_backlog.clear()
+        backlog_urls = {b[1].get('url') for b in backlog}
+        queued = backlog + [i for i in items if i[1].get('url') not in backlog_urls]
+        queued.sort(key=lambda i: (i[1].get('url') in self._failed_attempts
+                                   or i[1].get('url') in self._outage_strikes))
+        done = 0
+        try:
+            for hint, article, discovery in queued:
                 if not self._alive(generation):
                     break
-                self._process_article("Custom Source News", article, open_now, is_discovery=True)
-        return len(posts)
+                # Counted before it runs: a post whose processing raises is
+                # not put back, or it would abort every pass after this one.
+                done += 1
+                if discovery:
+                    result = self._process_article(hint, article, open_now, is_discovery=True)
+                else:
+                    result = self._process_article(hint, article, open_now)
+                if result is False:
+                    self._defer_reddit(article)
+                if check_watches:
+                    # A pass can take many minutes - an analysis is up to two
+                    # minutes a model - and stops and targets shouldn't wait
+                    # for it to finish. Its own failure mustn't end the pass.
+                    try:
+                        self._maybe_check_watches()
+                    except Exception as e:
+                        self.log(f"Error checking watches: {e}")
+        finally:
+            # A stop, or an error, part-way through: the Reddit posts not
+            # reached yet would never be offered again.
+            for _, left, _ in queued[done:]:
+                self._defer_reddit(left)
+            self._end_pass()
+
+    def _defer_reddit(self, article):
+        """Keep a Reddit post that wasn't analysed for the next pass."""
+        url = article.get('url')
+        if not url or not reddit_source.is_reddit_article(article) or url in self.processed_set:
+            return
+        self._reddit_backlog[url] = article
+        while len(self._reddit_backlog) > MAX_REDDIT_BACKLOG:
+            self._reddit_backlog.popitem(last=False)
+
+    def _maybe_check_watches(self):
+        """Run the watch check if WATCH_CHECK_INTERVAL has passed since the last."""
+        if time.time() - self._last_watch_check >= WATCH_CHECK_INTERVAL:
+            self._check_watches()
+            self._last_watch_check = time.time()
 
     def _run_loop(self, generation):
         self.log("Stocks Watcher Started...")
@@ -394,8 +498,6 @@ class StockAppBackend:
                     prev_scan_start - datetime.timedelta(minutes=config.LOOKBACK_MINUTES)
                     if prev_scan_start else None)
                 self.log(f"\nScanning for news at {now_local().strftime('%H:%M:%S')}...")
-                # Each scan gives an engine that failed last time a new chance.
-                self._engine_down = False
                 
                 # Which exchanges are trading, not just New York's: this is
                 # what the analysis prompt is told, and it decides whether a
@@ -411,37 +513,24 @@ class StockAppBackend:
                 custom_articles = self.collector.fetch_from_custom_sources()
                 self.log(f"   Found {len(custom_articles)} articles from custom sources")
                 
-                # No pacing delay needed here: fetching and scraping already
-                # happened inside the collector, so this loop is pure local
-                # keyword analysis. The old sleeps paced Gemini/API calls that
-                # no longer exist, and made a cycle outlast CHECK_INTERVAL.
-                for article in custom_articles:
-                    if not self._alive(generation): break
-                    self._process_article("Custom Source News", article, open_now, is_discovery=True)
-
+                # Everything is fetched first and analysed in one pass (see
+                # _run_pass), custom sources first.
+                items = [("Custom Source News", a, True) for a in custom_articles]
 
                 # --- GLOBAL SCAN vs WATCHLIST ---
                 if GLOBAL_SCAN and self._alive(generation):
                     self.log("Running Global Market Scan...")
-                    # 1. Fetch General News
                     self.status("Fetching market news")
-                    articles = self.collector.fetch_general_market_news()
-                    for article in articles:
-                        if not self._alive(generation): break
-                        # Hint "General Market" so the analyzer identifies the entity itself
-                        self._process_article("General Market News", article, open_now, is_discovery=True)
+                    # Hint "General Market" so the analyzer identifies the entity itself
+                    items += [("General Market News", a, True)
+                              for a in self.collector.fetch_general_market_news()]
+                elif not GLOBAL_SCAN and self._alive(generation):
+                    # Every feed downloaded once for all the companies.
+                    self.status("Fetching company news")
+                    for company, articles in self.collector.fetch_company_news(TARGET_COMPANIES).items():
+                        items += [(company, a, False) for a in articles]
 
-                # We can also still check specific targets if they might not show up in top headlines?
-                # For rate limit safety, if Global Scan is on, we might skip the targeted specific loop
-                # OR we just rely on Global Scan finding them.
-                # Let's keep specific checks ONLY if Global Scan is OFF or if list is small.
-                if not GLOBAL_SCAN:
-                    for company in TARGET_COMPANIES:
-                        if not self._alive(generation): break
-                        articles = self.collector.fetch_news(company)
-                        for article in articles:
-                            if not self._alive(generation): break
-                            self._process_article(company, article, open_now)
+                self._run_pass(items, generation, open_now, check_watches=True)
 
                 if not self._alive(generation):
                     break
@@ -453,9 +542,7 @@ class StockAppBackend:
                 # Coarser cadence than the news scan - price doesn't need to
                 # be polled every minute, and it's a batched API call per
                 # open watch.
-                if time.time() - self._last_watch_check >= WATCH_CHECK_INTERVAL:
-                    self._check_watches()
-                    self._last_watch_check = time.time()
+                self._maybe_check_watches()
 
                 # --- RECLAIM MEMORY ---
                 # A cycle churns through a lot of short-lived HTML and parse
@@ -492,9 +579,18 @@ class StockAppBackend:
                 # sleep here made Stop take up to a minute after an error.
                 self._sleep(60, generation)
 
-    def _mark_processed(self, url):
-        """Record `url` as analysed, so it is neither fetched nor analysed again."""
+    def _mark_processed(self, url, title=None):
+        """Record `url` as analysed, so it is neither fetched nor analysed
+        again - nor, when `title` is given, the same headline under another
+        URL."""
         self._failed_attempts.pop(url, None)
+        self._outage_strikes.pop(url, None)
+        key = title_key(title)
+        if key and key not in self.processed_titles_set:
+            if len(self.processed_titles) == self.processed_titles.maxlen:
+                self.processed_titles_set.discard(self.processed_titles[0])
+            self.processed_titles.append(key)
+            self.processed_titles_set.add(key)
         # Add to processed deque (automatically capped at max_stored_urls).
         # Once the deque is full, appending evicts the oldest entry - drop that
         # from the mirror set too so the two stay in sync.
@@ -512,14 +608,64 @@ class StockAppBackend:
             self._save_stats()
             self.articles_since_save = 0
 
-    def _analysis_failed(self, url, error):
-        """The engine couldn't analyse an article. Leave it unmarked so the
-        next scan retries it, up to MAX_ANALYSIS_ATTEMPTS, and hold the rest
-        of this scan's articles back rather than failing on each in turn."""
-        self._engine_down = True
+    def _begin_pass(self):
+        """A new pass over the articles: whatever failed last time gets a
+        new chance."""
+        self._engine_down = False
+        self._pass_success = False
+        self._consecutive_failures = 0
+        self._uncharged = []
+
+    def _end_pass(self):
+        """Settle a pass. Failures in a pass where nothing succeeded were
+        most likely an outage and cost no attempt - but each is a strike,
+        and MAX_OUTAGE_STRIKES of them give the article up all the same."""
+        for url, title in self._uncharged:
+            strikes = self._outage_strikes.pop(url, 0) + 1
+            if strikes >= MAX_OUTAGE_STRIKES:
+                self._mark_processed(url, title)
+                self.log(f"   ✗ Giving up on an article that failed in {strikes} scans in a row: "
+                         f"{(title or url)[:60]}")
+                continue
+            self._outage_strikes[url] = strikes
+            if len(self._outage_strikes) > self.max_stored_urls:
+                del self._outage_strikes[next(iter(self._outage_strikes))]
+        self._uncharged = []
+
+    def _analysis_succeeded(self):
+        """The engine answered: it is up, so whatever failed earlier in this
+        pass failed on its own account and is charged an attempt now."""
+        self._pass_success = True
+        self._consecutive_failures = 0
+        uncharged, self._uncharged = self._uncharged, []
+        for url, title in uncharged:
+            self._charge_attempt(url, title, "failed while the engine was working")
+
+    def _analysis_failed(self, url, error, title=None):
+        """The engine couldn't analyse an article. Leave it unmarked so a
+        later pass retries it.
+
+        Only a failure the article can be blamed for counts towards
+        MAX_ANALYSIS_ATTEMPTS: one in a pass where the engine has answered
+        for another article. Charging every failure made a three-minute
+        outage write off whichever article happened to be first in each of
+        three scans. After FAILURES_BEFORE_ENGINE_DOWN in a row the rest of
+        the pass is held back rather than failing on each in turn."""
+        self._consecutive_failures += 1
+        if self._pass_success:
+            self._charge_attempt(url, title, error)
+        else:
+            self._uncharged.append((url, title))
+            self.log(f"   ⚠ Analysis failed ({error}) - will retry")
+        if self._consecutive_failures >= FAILURES_BEFORE_ENGINE_DOWN:
+            self._engine_down = True
+            self.log("   ⚠ The engine looks down - the rest of this pass's new articles "
+                     "wait for the next one")
+
+    def _charge_attempt(self, url, title, error):
         attempts = self._failed_attempts.pop(url, 0) + 1
         if attempts >= MAX_ANALYSIS_ATTEMPTS:
-            self._mark_processed(url)
+            self._mark_processed(url, title)
             self.log(f"   ✗ Analysis failed ({error}) - giving up on this article "
                      f"after {attempts} attempts")
             return
@@ -530,25 +676,36 @@ class StockAppBackend:
         if len(self._failed_attempts) > self.max_stored_urls:
             del self._failed_attempts[next(iter(self._failed_attempts))]
         self.log(f"   ⚠ Analysis failed ({error}) - retrying on the next scan "
-                 f"(attempt {attempts}/{MAX_ANALYSIS_ATTEMPTS}); other new articles wait too")
+                 f"(attempt {attempts}/{MAX_ANALYSIS_ATTEMPTS})")
 
     def _process_article(self, company_hint, article, open_markets, is_discovery=False):
+        """Analyse one article and act on the verdict. Returns False when it
+        was left for a later pass (the engine down or failing), True
+        otherwise."""
         url = article.get('url')
         title = article.get('title', 'No Title')
-        
+
         if not url:
             self.log(f"⊘ Skipping article (no URL): {title[:60]}...")
-            return
-        
+            return True
+
         # Check if already processed
         if url in self.processed_set:
             self.log(f"⊘ Already processed: {title[:60]}...")
-            return  # Already processed
+            return True  # Already processed
 
         if self._engine_down:
-            # The engine already failed earlier in this scan. Left unmarked,
-            # the article comes back on the next scan instead of failing too.
-            return
+            # The engine already failed earlier in this pass. Left unmarked,
+            # the article comes back on the next one instead of failing too.
+            return False
+
+        key = title_key(title)
+        if key and key in self.processed_titles_set:
+            # The same story from another feed, or with other tracking
+            # parameters: already analysed (and alerted on, if it was news).
+            self.log(f"⊘ Same story already analysed under another link: {title[:60]}...")
+            self._mark_processed(url)
+            return True
 
         self.log(f"\n📰 Processing article: {title}")
         self.log(f"   URL: {url[:80]}...")
@@ -563,14 +720,15 @@ class StockAppBackend:
         try:
             analysis = self.analyzer.analyze_article(company_hint, article, open_markets, portfolio_tickers)
         except AnalysisUnavailable as e:
-            self._analysis_failed(url, e)
+            self._analysis_failed(url, e, title)
             self.status("Idle")
-            return
+            return False
+        self._analysis_succeeded()
 
         # Marked only once the engine has actually judged the article.
         # Marking it before the call wrote off every article that arrived
         # during an outage - the collector never offers a seen URL again.
-        self._mark_processed(url)
+        self._mark_processed(url, title)
         self.stats['scanned'] += 1
         if not analysis:
             self.log(f"   ⊘ No analysis results (article may not match criteria)")
@@ -763,11 +921,15 @@ class StockAppBackend:
                                      trust, title, url, context, plan)
             return no(plan['reason'])
 
-        # Entry priced the same way every watch check prices it, with the
-        # benchmark riding along in the same batched call.
-        wanted = [ticker] + ([benchmark] if self.paper else [])
-        prices = price_lookup.fetch_prices(wanted)
-        entry = prices.get(ticker) or context.get('price')
+        # The context was fetched seconds ago from the same 1-minute,
+        # extended-hours chart the watch checks price from, for the stock and
+        # the benchmark alike - so its prices are the entry. Downloading both
+        # again here cost two more Yahoo requests per trade for nothing.
+        entry = context.get('price')
+        benchmark_entry = context.get('market_price')
+        if not entry:
+            prices = price_lookup.fetch_prices([ticker] + ([benchmark] if self.paper else []))
+            entry, benchmark_entry = prices.get(ticker), prices.get(benchmark)
         if not entry:
             return no(f"couldn't price {ticker}")
 
@@ -799,7 +961,7 @@ class StockAppBackend:
         if not watch:
             return no(f"already holding a position in {ticker}")
         if self.paper:
-            self.paper.open_trade(watch, prices.get(benchmark), benchmark=benchmark)
+            self.paper.open_trade(watch, benchmark_entry, benchmark=benchmark)
         decision.update(opened=True, watch=watch, expires_at=watch['expires_at'])
         return decision
 

@@ -470,6 +470,16 @@
 
   /* ---- Charts --------------------------------------------------------- */
   .chart { width: 100%; display: block; }
+
+  /* Equity curve: quote-app layout - value, change, chart, range tabs. */
+  .eq-head { margin: 2px 0 10px; min-height: 64px; }
+  .eq-value { font-size: 28px; font-weight: 800; letter-spacing: -.02em; line-height: 1.15; }
+  .eq-change { font-size: 14px; font-weight: 700; margin-top: 2px; }
+  .eq-when { font-size: 12px; color: var(--text-3); margin-top: 2px; min-height: 16px; }
+  .eq-chart { height: 220px; touch-action: pan-y; cursor: crosshair; }
+  .eq-range { margin-top: 10px; }
+  .eq-range button { height: 30px; font-size: 12px; }
+  @media (min-width: 1024px) { .eq-chart { height: 280px; } }
   #pf-chart { height: 150px; margin-top: 14px; }
   #pp-chart { height: 150px; }
 
@@ -698,7 +708,19 @@
           <div class="note" id="pp-warn" style="display:none;"></div>
           <div class="card" id="pp-chart-card" style="display:none;">
             <div class="card-title">Equity curve <span id="pp-chart-sub" class="sub"></span></div>
-            <canvas id="pp-chart" class="chart"></canvas>
+            <div class="eq-head">
+              <div class="eq-value num" id="pp-eq-value">—</div>
+              <div class="eq-change num" id="pp-eq-change"></div>
+              <div class="eq-when" id="pp-eq-when"></div>
+            </div>
+            <canvas id="pp-chart" class="chart eq-chart" role="img" aria-label="Paper trading return over time"></canvas>
+            <div class="seg eq-range" id="pp-range" role="group" aria-label="Chart range">
+              <button data-range="7">1W</button>
+              <button data-range="30">1M</button>
+              <button data-range="90">3M</button>
+              <button data-range="365">1Y</button>
+              <button data-range="0" class="on">All</button>
+            </div>
           </div>
           <div class="card flush">
             <div class="card-title">Open positions <span class="sub">marked to live prices, not yet in the record</span></div>
@@ -1690,57 +1712,251 @@ function renderSkipped(k) {
     : `<div class="empty">${s.open ? `None closed yet — ${s.open} being followed.` : 'Nothing skipped yet.'}</div>`;
 }
 
+// --- Equity curve ------------------------------------------------------------
+// Drawn the way a quote app draws a price: the return in % from the start of
+// the chosen range, a 0% baseline, green above it and red below, a % axis on
+// the right, and a crosshair that reads out any point. The ledger's equity
+// only changes when a trade closes, so the line is stepped - a sloped line
+// would show gains accruing between trades that never happened.
+let ppRange = 0;      // days shown; 0 = since the first trade
+let ppHover = null;   // index into the drawn series under the pointer
+let ppView = null;    // geometry of the last draw, for hit-testing
+const PP_RANGE_LABEL = {0: 'All time', 7: 'Past week', 30: 'Past month', 90: 'Past 3 months', 365: 'Past year'};
+
+// The curve (start point, then one point per closed trade) cut to the range,
+// starting at the equity the range opened with and running on to now.
+function paperSeries(curve, days) {
+  const pts = curve.map(p => ({t: new Date(p.closed_at).getTime(), eq: Number(p.equity),
+    ticker: p.ticker, net: p.net_pct, dir: p.direction}))
+    .filter(p => !isNaN(p.t) && !isNaN(p.eq))
+    .sort((a, b) => a.t - b.t);
+  const end = Math.max(Date.now(), pts[pts.length - 1].t);
+  const from = Math.max(pts[0].t, days ? end - days * 864e5 : pts[0].t);
+  let base = pts[0].eq;
+  for (const p of pts) if (p.t <= from) base = p.eq;
+  const inRange = pts.filter(p => p.t > from);
+  const lastEq = inRange.length ? inRange[inRange.length - 1].eq : base;
+  const series = [{t: from, eq: base, start: true}, ...inRange, {t: end, eq: lastEq, now: true}];
+  return {series, base, from, end};
+}
+
+// Round axis steps (1, 2, 2.5, 5 x 10^n) covering lo..hi in about `count` steps.
+function niceTicks(lo, hi, count) {
+  const raw = (hi - lo) / count;
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => s >= raw);
+  const ticks = [];
+  // k * step rather than a running sum, so 0 comes out as exactly 0.
+  for (let k = Math.floor(lo / step); k <= Math.ceil(hi / step); k++) ticks.push(k * step);
+  return {ticks, step};
+}
+
+function axisPct(v, step) {
+  const p = v * 100, s = step * 100;
+  const digits = s >= 1 ? 0 : s >= 0.1 ? 1 : 2;
+  if (Math.abs(p) < 1e-9) return '0%';
+  return (p > 0 ? '+' : '') + p.toFixed(digits) + '%';
+}
+
+function axisDate(t, span) {
+  const d = new Date(t);
+  if (span <= 2 * 864e5) return d.toLocaleTimeString('en-GB', {hour: '2-digit', minute: '2-digit'});
+  if (span <= 400 * 864e5) return d.toLocaleDateString('en-US', {month: 'short', day: 'numeric'});
+  return d.toLocaleDateString('en-US', {month: 'short', year: 'numeric'});
+}
+
+function moneySigned(n) {
+  return (n >= 0 ? '+' : '-') + fmtMoney(Math.abs(n));
+}
+
+function renderPaperHeader(view) {
+  const {series, base} = view;
+  const i = ppHover === null ? series.length - 1 : ppHover;
+  const p = series[i];
+  const change = p.eq - base, pct = base ? p.eq / base - 1 : 0;
+  $('#pp-eq-value').textContent = fmtMoney(p.eq);
+  const ch = $('#pp-eq-change');
+  ch.textContent = `${moneySigned(change)} (${pctText(pct)})`;
+  ch.className = 'eq-change num ' + (Math.abs(change) < 0.005 ? 'muted' : change > 0 ? 'up' : 'down');
+  let when;
+  if (ppHover === null) {
+    when = PP_RANGE_LABEL[ppRange] || 'All time';
+  } else if (p.ticker) {
+    const side = p.dir === 'SHORT' ? 'Short' : 'Long';
+    when = `${fmtTime(new Date(p.t).toISOString())} · ${p.ticker} ${side} closed ${pctText(p.net)}`;
+  } else {
+    when = (p.start ? 'Start · ' : 'Now · ') + fmtTime(new Date(p.t).toISOString());
+  }
+  $('#pp-eq-when').textContent = when;
+}
+
 function drawPaperChart(curve) {
   const canvas = $('#pp-chart');
   const ctx = canvas.getContext('2d');
   const dpr = window.devicePixelRatio || 1;
-  const w = canvas.clientWidth, h = canvas.clientHeight || 150;
+  const w = canvas.clientWidth, h = canvas.clientHeight || 220;
+  if (!w) return;   // hidden - redrawCharts() draws it once shown
   canvas.width = w * dpr; canvas.height = h * dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
 
-  const vals = curve.map(p => p.equity);
-  const start = vals[0], last = vals[vals.length - 1];
-  // The starting capital is the reference line, so it must be inside the
-  // range even when every trade so far has gone one way.
-  const all = vals.concat([start]);
-  let min = Math.min(...all), max = Math.max(...all);
-  if (max === min) { max += 1; min -= 1; }
-  const pad = (max - min) * 0.12;
-  min -= pad; max += pad;
+  const css = getComputedStyle(document.documentElement);
+  const tok = name => css.getPropertyValue(name).trim();
+  const UP = tok('--up'), DOWN = tok('--down');
+  const rgba = (hex, a) => {
+    const n = parseInt(hex.slice(1), 16);
+    return `rgba(${n >> 16 & 255}, ${n >> 8 & 255}, ${n & 255}, ${a})`;
+  };
 
-  const pl = 8, pr = 8, pt = 10, pb = 10;
-  const x = i => pl + (i / Math.max(1, vals.length - 1)) * (w - pl - pr);
-  const y = v => pt + (1 - (v - min) / (max - min)) * (h - pt - pb);
+  const {series, base, from, end} = paperSeries(curve, ppRange);
+  if (ppHover !== null && ppHover >= series.length) ppHover = null;
+  const pct = series.map(p => base ? p.eq / base - 1 : 0);
 
-  // Break-even line.
-  ctx.strokeStyle = '#30363F';
-  ctx.setLineDash([3, 4]);
+  // Axis: always includes 0%, with a little air above and below the line.
+  let lo = Math.min(0, ...pct), hi = Math.max(0, ...pct);
+  const air = Math.max((hi - lo) * 0.08, 0.001);
+  lo -= air; hi += air;
+  // Only the ticks inside the range: stretching it out to the next round
+  // number left a band of empty chart below 0% on a record with no losses.
+  // 0 is a multiple of every step, so the baseline always gets a label.
+  const nice = niceTicks(lo, hi, 5), step = nice.step;
+  const ticks = nice.ticks.filter(v => v >= lo - 1e-12 && v <= hi + 1e-12);
+
+  ctx.font = '11px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+  const labelW = Math.max(...ticks.map(v => ctx.measureText(axisPct(v, step)).width));
+  const pl = 2, pr = labelW + 12, pt = 8, pb = 24;
+  const plotW = w - pl - pr, plotH = h - pt - pb;
+  const x = t => pl + (end > from ? (t - from) / (end - from) : 0) * plotW;
+  const y = v => pt + (1 - (v - lo) / (hi - lo)) * plotH;
+  const y0 = y(0);
+  ppView = {series, base, x, pl, pr, w};
+
+  // Grid and % labels on the right, as on a quote chart.
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'left';
+  ticks.forEach(v => {
+    const yy = Math.round(y(v)) + 0.5;
+    if (Math.abs(v) > 1e-12) {
+      ctx.strokeStyle = tok('--line');
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(pl, yy); ctx.lineTo(w - pr + 4, yy); ctx.stroke();
+    }
+    ctx.fillStyle = Math.abs(v) < 1e-12 ? tok('--text-2') : tok('--text-3');
+    ctx.fillText(axisPct(v, step), w - pr + 8, yy);
+  });
+
+  // The step path: flat until a trade closes, then straight to its result.
+  const trace = () => {
+    ctx.moveTo(x(series[0].t), y(pct[0]));
+    for (let i = 1; i < series.length; i++) {
+      ctx.lineTo(x(series[i].t), y(pct[i - 1]));
+      ctx.lineTo(x(series[i].t), y(pct[i]));
+    }
+  };
+  // Gains above the baseline in green, losses below it in red: each half is
+  // drawn through a clip, so a curve that crosses 0% changes colour there.
+  const halves = [
+    {clip: [0, 0, w, y0], color: UP, grad: [y(hi), y0]},
+    {clip: [0, y0, w, h - y0], color: DOWN, grad: [y(lo), y0]},
+  ];
+  halves.forEach(({clip, color, grad}) => {
+    ctx.save();
+    ctx.beginPath(); ctx.rect(...clip); ctx.clip();
+    const g = ctx.createLinearGradient(0, grad[0], 0, grad[1]);
+    g.addColorStop(0, rgba(color, 0.32));
+    g.addColorStop(1, rgba(color, 0.02));
+    ctx.beginPath(); trace();
+    ctx.lineTo(x(series[series.length - 1].t), y0);
+    ctx.lineTo(x(series[0].t), y0);
+    ctx.closePath();
+    ctx.fillStyle = g; ctx.fill();
+    ctx.beginPath(); trace();
+    ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.lineJoin = 'round';
+    ctx.stroke();
+    ctx.restore();
+  });
+
+  // 0% baseline - the "previous close" of this chart.
+  ctx.strokeStyle = tok('--text-3');
+  ctx.setLineDash([2, 4]);
   ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(pl, y(start)); ctx.lineTo(w - pr, y(start)); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(pl, Math.round(y0) + 0.5); ctx.lineTo(w - pr + 4, Math.round(y0) + 0.5); ctx.stroke();
   ctx.setLineDash([]);
 
-  const up = last >= start;
-  const line = up ? '#1FC07F' : '#F5475A';
-  const fill = up ? 'rgba(31,192,127,0.14)' : 'rgba(245,71,90,0.14)';
+  // Each trade as a dot in its own result's colour, while they stay legible.
+  const trades = series.filter(p => p.ticker);
+  if (trades.length && plotW / trades.length >= 6) {
+    series.forEach((p, i) => {
+      if (!p.ticker) return;
+      ctx.beginPath(); ctx.arc(x(p.t), y(pct[i]), 2.5, 0, Math.PI * 2);
+      ctx.fillStyle = p.net >= 0 ? UP : DOWN; ctx.fill();
+      ctx.lineWidth = 1.5; ctx.strokeStyle = tok('--surface'); ctx.stroke();
+    });
+  }
 
-  ctx.beginPath();
-  ctx.moveTo(x(0), y(vals[0]));
-  vals.forEach((v, i) => ctx.lineTo(x(i), y(v)));
-  ctx.lineTo(x(vals.length - 1), y(start));
-  ctx.lineTo(x(0), y(start));
-  ctx.closePath();
-  ctx.fillStyle = fill; ctx.fill();
+  // Dates along the bottom.
+  ctx.fillStyle = tok('--text-3');
+  ctx.textBaseline = 'alphabetic';
+  const n = plotW < 320 ? 3 : 4;
+  for (let k = 0; k < n; k++) {
+    const f = k / (n - 1);
+    ctx.textAlign = k === 0 ? 'left' : k === n - 1 ? 'right' : 'center';
+    ctx.fillText(axisDate(from + f * (end - from), end - from), pl + f * plotW, h - 6);
+  }
 
-  ctx.beginPath();
-  ctx.moveTo(x(0), y(vals[0]));
-  vals.forEach((v, i) => ctx.lineTo(x(i), y(v)));
-  ctx.strokeStyle = line; ctx.lineWidth = 2;
-  ctx.lineJoin = 'round'; ctx.stroke();
+  // Crosshair on the point under the pointer.
+  if (ppHover !== null) {
+    const p = series[ppHover], px = Math.round(x(p.t)) + 0.5, py = y(pct[ppHover]);
+    ctx.strokeStyle = tok('--text-2');
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(px, pt); ctx.lineTo(px, pt + plotH); ctx.stroke();
+    ctx.beginPath(); ctx.arc(px, py, 5, 0, Math.PI * 2);
+    ctx.fillStyle = pct[ppHover] >= 0 ? UP : DOWN; ctx.fill();
+    ctx.lineWidth = 2; ctx.strokeStyle = tok('--text'); ctx.stroke();
+  } else {
+    const last = series.length - 1;
+    ctx.beginPath(); ctx.arc(x(series[last].t), y(pct[last]), 3.5, 0, Math.PI * 2);
+    ctx.fillStyle = pct[last] >= 0 ? UP : DOWN; ctx.fill();
+  }
 
-  ctx.fillStyle = line;
-  ctx.beginPath(); ctx.arc(x(vals.length - 1), y(last), 3, 0, Math.PI * 2); ctx.fill();
+  const total = pct[pct.length - 1];
+  canvas.setAttribute('aria-label',
+    `Paper trading return, ${(PP_RANGE_LABEL[ppRange] || 'all time').toLowerCase()}: ${pctText(total)}`);
+  renderPaperHeader(ppView);
 }
+
+// Crosshair: the point nearest the pointer. pan-y on the canvas keeps
+// vertical page scrolling working on a phone while a sideways drag scrubs.
+(function () {
+  const canvas = $('#pp-chart');
+  const pick = e => {
+    if (!ppView || !lastPaperCurve) return;
+    const px = e.clientX - canvas.getBoundingClientRect().left;
+    let best = 0, dist = Infinity;
+    ppView.series.forEach((p, i) => {
+      const d = Math.abs(ppView.x(p.t) - px);
+      if (d <= dist) { dist = d; best = i; }   // <= : the later of two at one spot
+    });
+    if (best !== ppHover) { ppHover = best; drawPaperChart(lastPaperCurve); }
+  };
+  const clear = () => {
+    if (ppHover === null) return;
+    ppHover = null;
+    if (lastPaperCurve) drawPaperChart(lastPaperCurve);
+  };
+  canvas.addEventListener('pointermove', pick);
+  canvas.addEventListener('pointerdown', pick);
+  canvas.addEventListener('pointerleave', clear);
+  canvas.addEventListener('pointercancel', clear);
+  canvas.addEventListener('pointerup', e => { if (e.pointerType !== 'mouse') clear(); });
+
+  $('#pp-range').querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+    ppRange = Number(b.dataset.range);
+    $('#pp-range').querySelectorAll('button').forEach(o => o.classList.toggle('on', o === b));
+    ppHover = null;
+    if (lastPaperCurve) drawPaperChart(lastPaperCurve);
+  }));
+})();
 
 async function loadPortfolioSummary() {
   try {

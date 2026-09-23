@@ -21,6 +21,13 @@ one bad call doesn't take down the scan loop.
 # single stuck connection.
 REQUEST_TIMEOUT = 120
 
+# Most tokens one reply may use. The prompt asks for step-by-step reasoning
+# before the verdict, and on a reasoning model the hidden reasoning counts
+# against this budget too: at 1024 a reply could run out before its JSON was
+# closed, and that came back as "no usable reply" - an engine outage, as far
+# as the scan loop could tell. Only the tokens actually used are billed.
+MAX_TOKENS = 4096
+
 
 class BaseCloudProvider:
     """Common constructor + logging for every provider.
@@ -77,13 +84,16 @@ class AnthropicProvider(BaseCloudProvider):
         try:
             kwargs = {
                 "model": self.model,
-                "max_tokens": 1024,
+                "max_tokens": MAX_TOKENS,
                 "messages": [{"role": "user", "content": prompt}],
             }
             if system:
                 kwargs["system"] = system
             response = self._client.messages.create(**kwargs)
             text = next((b.text for b in response.content if b.type == "text"), "")
+            if getattr(response, "stop_reason", None) == "max_tokens":
+                self._log(f"Cloud AI warning: {self.model} ran out of tokens ({MAX_TOKENS}) "
+                          f"- the reply is cut off")
             self._log(f"<-- RESPONSE:\n{text}")
             return text
         except anthropic.AuthenticationError:
@@ -128,9 +138,13 @@ class OpenAIProvider(BaseCloudProvider):
         messages.append({"role": "user", "content": prompt})
         try:
             response = self._client.chat.completions.create(
-                model=self.model, max_tokens=1024, messages=messages,
+                model=self.model, max_tokens=MAX_TOKENS, messages=messages,
             )
-            text = response.choices[0].message.content or ""
+            choice = response.choices[0]
+            text = choice.message.content or ""
+            if getattr(choice, "finish_reason", None) == "length":
+                self._log(f"Cloud AI warning: {self.model} ran out of tokens ({MAX_TOKENS}) "
+                          f"- the reply is cut off")
             self._log(f"<-- RESPONSE:\n{text}")
             return text
         except openai.AuthenticationError:

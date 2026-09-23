@@ -128,5 +128,40 @@ class BuiltInFeedTests(unittest.TestCase):
         self.assertNotIn('FT Companies', names)
 
 
+
+
+class ScrapeCacheTest(unittest.TestCase):
+    """A page scraped for an article that wasn't analysed yet (the engine
+    down) is not downloaded again on the next scan."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.collector = NewsCollector(source_mgr=SourceManager(os.path.join(tmp.name, 'sources.json')))
+        self.gets = 0
+        outer = self
+
+        class Counting(_Session):
+            def get(self, url, **kwargs):
+                outer.gets += 1
+                return super().get(url, **kwargs)
+
+        self.collector.session = Counting("https://news.example.com/a", b"<p>" + b"x" * 9000 + b"</p>")
+
+    def test_second_scrape_comes_from_the_cache(self):
+        first = [{'url': "https://news.example.com/a", 'content': None}]
+        second = [{'url': "https://news.example.com/a", 'content': None}]
+        self.collector._scrape_many(first)
+        self.collector._scrape_many(second)
+        self.assertEqual(self.gets, 1)
+        self.assertEqual(second[0]['content'], first[0]['content'])
+
+    def test_kept_text_is_trimmed(self):
+        from news_collector import MAX_CONTENT_CHARS
+        articles = [{'url': "https://news.example.com/a", 'content': None}]
+        self.collector._scrape_many(articles)
+        self.assertEqual(len(articles[0]['content']), MAX_CONTENT_CHARS)
+
+
 if __name__ == "__main__":
     unittest.main()
