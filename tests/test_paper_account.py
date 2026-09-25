@@ -116,6 +116,16 @@ class ReplayTest(unittest.TestCase):
         acct = self.replay([t], prices={"AAA": 90.0})
         self.assertAlmostEqual(acct['unrealised_pnl'], 250 * (-0.10 - 0.002))
 
+    def test_free_funds_on_the_curve(self):
+        # Free funds drop by the position's size when it opens and come back
+        # with its P/L when it closes.
+        acct = self.replay([trade("a", 0, 2, 0.05)])
+        cash = {p['kind']: p['cash'] for p in acct['curve']}
+        self.assertEqual(cash['start'], 1000.0)
+        self.assertEqual(cash['open'], 750.0)
+        self.assertEqual(cash['close'], 1012.5)
+        self.assertEqual(cash['now'], acct['cash'])
+
     def test_losses_shrink_later_positions(self):
         acct = self.replay([trade("a", 0, 1, -0.5), trade("b", 2, None)])
         # 1000 - 125 lost = 875 -> 875 x 1% / 4% = 218.75

@@ -106,7 +106,9 @@ def replay(trades, cost_pct, risk_pct=None, marks=(), prices=None, now=None, cur
     valuing open positions along the way and now. Without them an open
     position is valued at its entry, less the cost.
 
-    Returns the account: equity (marked to market), cash, what is invested,
+    Returns the account: equity (marked to market), cash (the free funds -
+    down by a position's size when it opens, back up by size + P/L when it
+    closes; every curve point carries it too), what is invested,
     realised and unrealised P/L, max drawdown, the position each trade got
     (`sizes`, by watch id) or why it got none (`skipped`), and - unless
     curve=False - the points of its equity curve.
@@ -148,7 +150,8 @@ def replay(trades, cost_pct, risk_pct=None, marks=(), prices=None, now=None, cur
         if peak > 0:
             max_dd = max(max_dd, (peak - value) / peak)
         if curve:
-            points.append(dict(t=_iso(ts), equity=round(value, 2), kind=kind, **extra))
+            points.append(dict(t=_iso(ts), equity=round(value, 2), cash=round(cash, 2),
+                               kind=kind, **extra))
 
     if events:
         point(events[0][0], 'start')

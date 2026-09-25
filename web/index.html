@@ -472,7 +472,13 @@
   .chart { width: 100%; display: block; }
 
   /* Equity curve: quote-app layout - value, change, chart, range tabs. */
-  .eq-head { margin: 2px 0 10px; min-height: 64px; }
+  .eq-head { margin: 2px 0 10px; min-height: 64px; display: flex; align-items: flex-start; gap: 12px; }
+  .eq-main { flex: 1; min-width: 0; }
+  /* Free funds: the cash not tied up in an open position. */
+  .eq-free { text-align: right; flex-shrink: 0; }
+  .eq-free .l { font-size: 11px; font-weight: 700; color: var(--text-3); text-transform: uppercase; letter-spacing: .04em; }
+  .eq-free .v { font-size: 18px; font-weight: 800; letter-spacing: -.02em; line-height: 1.25; margin-top: 2px; }
+  .eq-free .s { font-size: 12px; color: var(--text-3); margin-top: 2px; }
   .eq-value { font-size: 28px; font-weight: 800; letter-spacing: -.02em; line-height: 1.15; }
   .eq-change { font-size: 14px; font-weight: 700; margin-top: 2px; }
   .eq-when { font-size: 12px; color: var(--text-3); margin-top: 2px; min-height: 16px; }
@@ -488,7 +494,7 @@
   .eq-legend .k-open { background: var(--info); box-shadow: 0 0 0 2px var(--info-soft); }
   .icon-btn.spin svg.i { animation: spin .8s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
-  .eq-range button { height: 30px; font-size: 12px; }
+  .eq-range button { height: 30px; font-size: 12px; padding: 0 6px; }
   @media (min-width: 1024px) { .eq-chart { height: 280px; } }
   #pf-chart { height: 150px; margin-top: 14px; }
 
@@ -1719,7 +1725,7 @@ function renderSkipped(k) {
 // is drawn straight; everywhere else it holds its value until the next
 // event - a sloped line would show money moving when nothing was traded or
 // priced (overnight, weekends, before snapshots were kept).
-const PP_RANGE_LABEL = {0: 'All time', 7: 'Past week', 30: 'Past month', 90: 'Past 3 months', 365: 'Past year'};
+const PP_RANGE_LABEL = {0: 'All time', 1: 'Past day', 5: 'Past 5 days', 7: 'Past week', 30: 'Past month', 90: 'Past 3 months', 365: 'Past year'};
 const PP_DIRECT_GAP = 30 * 60 * 1000;
 const ppCharts = [];   // {key, el, range, hover, view, acct}
 
@@ -1741,9 +1747,16 @@ function renderAccounts(accounts) {
           <span class="end"><button class="icon-btn sm eq-refresh" title="Refresh graph" aria-label="Refresh graph"><svg class="i"><use href="#i-refresh"/></svg></button></span>
         </div>
         <div class="eq-head">
-          <div class="eq-value num">—</div>
-          <div class="eq-change num"></div>
-          <div class="eq-when"></div>
+          <div class="eq-main">
+            <div class="eq-value num">—</div>
+            <div class="eq-change num"></div>
+            <div class="eq-when"></div>
+          </div>
+          <div class="eq-free">
+            <div class="l">Free funds</div>
+            <div class="v num eq-cash">—</div>
+            <div class="s num eq-held"></div>
+          </div>
         </div>
         <canvas class="chart eq-chart" role="img"></canvas>
         <div class="eq-legend" aria-hidden="true">
@@ -1752,7 +1765,7 @@ function renderAccounts(accounts) {
         </div>
         <div class="eq-foot num"></div>
         <div class="seg eq-range" role="group" aria-label="Chart range">
-          ${[7, 30, 90, 365, 0].map(r => `<button data-range="${r}">${{7: '1W', 30: '1M', 90: '3M', 365: '1Y', 0: 'All'}[r]}</button>`).join('')}
+          ${[1, 5, 7, 30, 90, 365, 0].map(r => `<button data-range="${r}">${{1: '1D', 5: '5D', 7: '1W', 30: '1M', 90: '3M', 365: '1Y', 0: 'All'}[r]}</button>`).join('')}
         </div>`;
       box.appendChild(card);
       const chart = {key, el: card, range: ranges[key] ?? 0, hover: null, view: null, acct: null};
@@ -1768,7 +1781,7 @@ function renderAccounts(accounts) {
       `${+(a.risk_pct * 100).toFixed(2)}% risk per trade · ${a.taken} taken · ${a.skipped_cash} skipped for cash · max drawdown -${(a.max_drawdown * 100).toFixed(1)}%`;
     const open = a.open ? ` (${a.open} open, ${moneySigned(a.unrealised_pnl)})` : '';
     c.el.querySelector('.eq-foot').textContent =
-      `Cash ${fmtMoney(a.cash)} · Invested ${fmtMoney(a.invested)}${open} · Started with ${fmtMoney(a.budget)}`;
+      `Free funds ${fmtMoney(a.cash)} · Invested ${fmtMoney(a.invested)}${open} · Started with ${fmtMoney(a.budget)}`;
     c.el.querySelectorAll('.eq-range button').forEach(b =>
       b.classList.toggle('on', Number(b.dataset.range) === c.range));
     drawAccountChart(c);
@@ -1788,11 +1801,11 @@ function accountSeries(curve, days) {
   if (!pts.length) return null;
   const end = Math.max(Date.now(), pts[pts.length - 1].ts);
   const from = Math.max(pts[0].ts, days ? end - days * 864e5 : pts[0].ts);
-  let base = pts[0].eq;
-  for (const p of pts) if (p.ts <= from) base = p.eq;
-  const series = [{kind: 'start', ts: from, eq: base}, ...pts.filter(p => p.ts > from)];
+  let base = pts[0].eq, baseCash = pts[0].cash;
+  for (const p of pts) if (p.ts <= from) { base = p.eq; baseCash = p.cash; }
+  const series = [{kind: 'start', ts: from, eq: base, cash: baseCash}, ...pts.filter(p => p.ts > from)];
   const last = series[series.length - 1];
-  if (last.kind !== 'now') series.push({kind: 'now', ts: end, eq: last.eq});
+  if (last.kind !== 'now') series.push({kind: 'now', ts: end, eq: last.eq, cash: last.cash});
   return {series, base, from, end};
 }
 
@@ -1817,6 +1830,8 @@ function axisPct(v, step) {
 function axisDate(t, span) {
   const d = new Date(t);
   if (span <= 2 * 864e5) return d.toLocaleTimeString('en-GB', {hour: '2-digit', minute: '2-digit'});
+  if (span <= 6 * 864e5) return d.toLocaleDateString('en-US', {weekday: 'short'}) + ' ' +
+    d.toLocaleTimeString('en-GB', {hour: '2-digit', minute: '2-digit'});
   if (span <= 400 * 864e5) return d.toLocaleDateString('en-US', {month: 'short', day: 'numeric'});
   return d.toLocaleDateString('en-US', {month: 'short', year: 'numeric'});
 }
@@ -1850,6 +1865,12 @@ function renderAccountHeader(chart) {
   ch.className = 'eq-change num ' + (Math.abs(change) < 0.005 ? 'muted' : change > 0 ? 'up' : 'down');
   el.querySelector('.eq-when').textContent =
     chart.hover === null ? (PP_RANGE_LABEL[chart.range] || 'All time') : describePoint(p);
+  // Free funds at that moment: down by a position's size when it opened, back
+  // up by its size and P/L when it closed. The rest is in open positions.
+  const cash = chart.hover === null ? chart.acct.cash : p.cash;
+  const known = cash !== null && cash !== undefined;
+  el.querySelector('.eq-cash').textContent = known ? fmtMoney(cash) : '—';
+  el.querySelector('.eq-held').textContent = known ? `${fmtMoney(Math.max(0, p.eq - cash))} in positions` : '';
 }
 
 function drawAccountChart(chart) {

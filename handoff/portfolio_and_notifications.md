@@ -151,7 +151,11 @@ re-sized under the current rules. The dashboard draws one graph, the
 trading account (`PAPER_RISK_PCT`): closed trades as green/red dots, entries
 as rings, and the positions still open as filled blue rings (the curve's
 `open` points carry `still_open`, `now_pct`, `now_pnl`). A refresh button
-on the card re-fetches `/api/paper`.
+on the card re-fetches `/api/paper`. Ranges: 1D, 5D, 1W, 1M, 3M, 1Y, All.
+The header's **Free funds** figure is the account's `cash` - down by a
+position's size when it opens, back up by size + P/L when it closes. Every
+curve point carries `cash` too, so the crosshair shows free funds (and
+what's in positions, equity - cash) at that moment.
 
 - **Size** = account x risk % x conviction / stop distance. The stop comes
   from the stock's ATR, so a jumpy stock gets a smaller position and every
