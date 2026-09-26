@@ -156,12 +156,22 @@ The header's **Free funds** figure is the account's `cash` - down by a
 position's size when it opens, back up by size + P/L when it closes. Every
 curve point carries `cash` too, so the crosshair shows free funds (and
 what's in positions, equity - cash) at that moment.
+The **S&P 500** button draws SPY (`PAPER_BENCHMARK`) behind the account's
+line in blue (`--bench`), both in % from the start of the range, and the
+header adds the index's % and how far ahead/behind the account is. Data
+from `GET /api/benchmark` -> `price_lookup.fetch_history`: regular-session
+bars sized to the span (5m for 1D, 15m to 8 days, 1h to 45 days, daily
+beyond), fetched a few days early so the range has a starting price, and
+cached in memory (5 min intraday, 1 h daily, 12 entries). One small
+single-ticker request per range, only while the button is on; its on/off is
+kept in the browser's localStorage.
 
 - **Size** = account x risk % x conviction / stop distance. The stop comes
   from the stock's ATR, so a jumpy stock gets a smaller position and every
   stopped-out trade costs about the same. Conviction is a small nudge:
   confidence 60 -> x0.75 .. 100 -> x1.25, CRITICAL x1.15. Capped at
-  `PAPER_MAX_POSITION_PCT` (25%) of the account and at the free cash;
+  `PAPER_MAX_POSITION_PCT` (25%, "Maximum per position %" in Settings) of
+  the account and at the free cash;
   under `PAPER_MIN_POSITION` ($20) the trade is refused.
 - **Cash**: a position ties its size up until it closes. `main._decide_trade`
   sizes every new trade from the trading account (`PAPER_RISK_PCT`) and, if

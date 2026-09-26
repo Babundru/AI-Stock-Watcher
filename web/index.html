@@ -34,6 +34,10 @@
     --warn-soft: rgba(242, 169, 59, .13);
     --info: #3D8BFF;
     --info-soft: rgba(61, 139, 255, .14);
+    /* The S&P 500 line behind the paper account's: a lighter blue than
+       --info, whose dots mark the positions still open. */
+    --bench: #6FB4FF;
+    --bench-soft: rgba(111, 180, 255, .14);
     --r-lg: 18px;
     --r: 14px;
     --r-sm: 10px;
@@ -492,6 +496,16 @@
   .eq-legend .k-loss { background: var(--down); }
   .eq-legend .k-entry { border: 1.5px solid var(--text-3); width: 6px; height: 6px; }
   .eq-legend .k-open { background: var(--info); box-shadow: 0 0 0 2px var(--info-soft); }
+  .eq-legend .k-bench { width: 14px; height: 2px; border-radius: 1px; background: var(--bench); }
+  .eq-legend .bench-key[hidden] { display: none; }
+  .eq-bench-btn { height: 28px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--line-2);
+                  background: transparent; color: var(--text-2); font-size: 12px; font-weight: 700; cursor: pointer;
+                  transition: background .15s var(--ease), color .15s var(--ease), border-color .15s var(--ease); }
+  .eq-bench-btn:hover { color: var(--text); }
+  .eq-bench-btn[aria-pressed="true"] { background: var(--bench-soft); border-color: transparent; color: var(--bench); }
+  .eq-bench { font-size: 12px; font-weight: 700; color: var(--bench); margin-top: 2px; min-height: 16px; }
+  .eq-bench[hidden] { display: none; }
+  .eq-bench .diff { color: var(--text-3); font-weight: 600; }
   .icon-btn.spin svg.i { animation: spin .8s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
   .eq-range button { height: 30px; font-size: 12px; padding: 0 6px; }
@@ -945,6 +959,11 @@
             <label for="st-risk">Risk per trade %</label>
             <input id="st-risk" type="number" min="0.1" max="5" step="0.1" inputmode="decimal" style="max-width:180px;">
             <div class="hint">How much of the account a trade may lose if its stop is hit. Positions are sized from it — smaller for jumpy stocks, whose stops are wider — and the phone alerts quote that size.</div>
+          </div>
+          <div class="field">
+            <label for="st-max-position">Maximum per position %</label>
+            <input id="st-max-position" type="number" min="1" max="100" step="1" inputmode="decimal" style="max-width:180px;">
+            <div class="hint">The most of the account any one position may take. Lower it to fit more positions into the same cash — raising the budget doesn't, since sizes grow with it. Past trades are re-sized too.</div>
           </div>
         </div>
 
@@ -1725,9 +1744,16 @@ function renderSkipped(k) {
 // is drawn straight; everywhere else it holds its value until the next
 // event - a sloped line would show money moving when nothing was traded or
 // priced (overnight, weekends, before snapshots were kept).
+// The S&P 500 button draws the index (/api/benchmark, SPY) over the same
+// window behind the account, in blue, measured in % from the same start, so
+// the two lines show the account's movement against the market's.
 const PP_RANGE_LABEL = {0: 'All time', 1: 'Past day', 5: 'Past 5 days', 7: 'Past week', 30: 'Past month', 90: 'Past 3 months', 365: 'Past year'};
 const PP_DIRECT_GAP = 30 * 60 * 1000;
-const ppCharts = [];   // {key, el, range, hover, view, acct}
+const PP_BENCH_TTL = 5 * 60 * 1000;
+const ppCharts = [];   // {key, el, range, hover, view, acct, bench, benchData, benchLoading}
+// The S&P 500 line's on/off is remembered per browser - a convenience only.
+let ppBenchOn = false;
+try { ppBenchOn = localStorage.getItem('pp-bench') === '1'; } catch (e) {}
 
 function renderAccounts(accounts) {
   const box = $('#pp-accounts');
@@ -1744,12 +1770,16 @@ function renderAccounts(accounts) {
       card.className = 'card';
       card.innerHTML = `
         <div class="card-title"><span class="acct-name"></span> <span class="sub acct-sub"></span>
-          <span class="end"><button class="icon-btn sm eq-refresh" title="Refresh graph" aria-label="Refresh graph"><svg class="i"><use href="#i-refresh"/></svg></button></span>
+          <span class="end" style="display:inline-flex;gap:6px;align-items:center;">
+            <button class="eq-bench-btn" aria-pressed="false" title="Show the S&amp;P 500 over the same period">S&amp;P 500</button>
+            <button class="icon-btn sm eq-refresh" title="Refresh graph" aria-label="Refresh graph"><svg class="i"><use href="#i-refresh"/></svg></button>
+          </span>
         </div>
         <div class="eq-head">
           <div class="eq-main">
             <div class="eq-value num">—</div>
             <div class="eq-change num"></div>
+            <div class="eq-bench num" hidden></div>
             <div class="eq-when"></div>
           </div>
           <div class="eq-free">
@@ -1762,13 +1792,15 @@ function renderAccounts(accounts) {
         <div class="eq-legend" aria-hidden="true">
           <span><i class="k-win"></i>Closed, won</span><span><i class="k-loss"></i>Closed, lost</span>
           <span><i class="k-entry"></i>Opened</span><span><i class="k-open"></i>Still open</span>
+          <span class="bench-key" hidden><i class="k-bench"></i>S&amp;P 500</span>
         </div>
         <div class="eq-foot num"></div>
         <div class="seg eq-range" role="group" aria-label="Chart range">
           ${[1, 5, 7, 30, 90, 365, 0].map(r => `<button data-range="${r}">${{1: '1D', 5: '5D', 7: '1W', 30: '1M', 90: '3M', 365: '1Y', 0: 'All'}[r]}</button>`).join('')}
         </div>`;
       box.appendChild(card);
-      const chart = {key, el: card, range: ranges[key] ?? 0, hover: null, view: null, acct: null};
+      const chart = {key, el: card, range: ranges[key] ?? 0, hover: null, view: null, acct: null,
+                     bench: ppBenchOn, benchData: null, benchLoading: null};
       bindChart(chart);
       ppCharts.push(chart);
     });
@@ -1807,6 +1839,52 @@ function accountSeries(curve, days) {
   const last = series[series.length - 1];
   if (last.kind !== 'now') series.push({kind: 'now', ts: end, eq: last.eq, cash: last.cash});
   return {series, base, from, end};
+}
+
+// The S&P 500 over the chart's window, fetched once per range and kept for a
+// few minutes (the server caches it too). Redraws the chart when it lands.
+// A late answer for a range no longer shown is dropped.
+const PP_BENCH_GAP = {'5m': 20 * 6e4, '15m': 45 * 6e4, '1h': 3 * 36e5, '1d': 4 * 864e5};
+function ensureBench(chart, from, end) {
+  const d = chart.benchData, range = chart.range;
+  if (!chart.bench || chart.benchLoading === range) return;
+  if (d && d.range === range && d.from <= from && Date.now() - d.at < PP_BENCH_TTL) return;
+  chart.benchLoading = range;
+  fetch(`/api/benchmark?from=${Math.floor(from)}&to=${Math.ceil(end)}`)
+    .then(r => r.ok ? r.json() : Promise.reject(r.status))
+    .then(j => ({points: j.points || [], gap: PP_BENCH_GAP[j.interval] || PP_BENCH_GAP['1d']}))
+    .catch(() => ({points: [], gap: 0}))
+    .then(got => {
+      chart.benchLoading = null;
+      if (chart.range !== range) return;
+      chart.benchData = {range, from, at: Date.now(), ...got};
+      if (chart.acct) drawAccountChart(chart);
+    });
+}
+
+// The index as % from its last price at or before the window's start - the
+// same footing as the account's line. Null while loading or with no data.
+function benchSeries(chart, from, end) {
+  const d = chart.benchData;
+  if (!chart.bench || !d || d.range !== chart.range || !d.points.length) return null;
+  let base = null;
+  for (const [ts, v] of d.points) { if (ts <= from) base = v; else break; }
+  const inside = d.points.filter(([ts]) => ts > from && ts <= end).map(([ts, v]) => ({ts, v}));
+  if (base === null) {
+    if (!inside.length) return null;
+    base = inside[0].v;           // no price before the start: from its first one
+  } else {
+    inside.unshift({ts: from, v: base});
+  }
+  inside.push({ts: end, v: inside[inside.length - 1].v});
+  return {pts: inside.map(p => ({ts: p.ts, pct: p.v / base - 1})), gap: d.gap};
+}
+
+// The index's % at time `ts`: its last point at or before it.
+function benchAt(bench, ts) {
+  let v = null;
+  for (const p of bench.pts) { if (p.ts <= ts) v = p.pct; else break; }
+  return v;
 }
 
 // Round axis steps (1, 2, 2.5, 5 x 10^n) covering lo..hi in about `count` steps.
@@ -1871,6 +1949,19 @@ function renderAccountHeader(chart) {
   const known = cash !== null && cash !== undefined;
   el.querySelector('.eq-cash').textContent = known ? fmtMoney(cash) : '—';
   el.querySelector('.eq-held').textContent = known ? `${fmtMoney(Math.max(0, p.eq - cash))} in positions` : '';
+  // The S&P 500 at the same moment, and how far the account is from it.
+  const row = el.querySelector('.eq-bench');
+  row.hidden = !chart.bench;
+  if (chart.bench) {
+    const b = chart.view.bench ? benchAt(chart.view.bench, p.ts) : null;
+    if (b === null) {
+      row.textContent = chart.benchLoading !== null ? 'S&P 500 loading…' : 'S&P 500 unavailable for this period';
+    } else {
+      const diff = (pct - b) * 100;
+      row.innerHTML = `S&amp;P 500 ${pctText(b)} <span class="diff">· ${Math.abs(diff) < 0.005 ? 'level with it'
+        : `${diff > 0 ? 'ahead' : 'behind'} by ${Math.abs(diff).toFixed(2)} pts`}</span>`;
+    }
+  }
 }
 
 function drawAccountChart(chart) {
@@ -1895,9 +1986,15 @@ function drawAccountChart(chart) {
   const {series, base, from, end} = data;
   if (chart.hover !== null && chart.hover >= series.length) chart.hover = null;
   const pct = series.map(p => base ? p.eq / base - 1 : 0);
+  ensureBench(chart, from, end);
+  const bench = benchSeries(chart, from, end);
+  chart.el.querySelector('.eq-bench-btn').setAttribute('aria-pressed', String(chart.bench));
+  chart.el.querySelector('.bench-key').hidden = !chart.bench;
 
-  // Axis: always includes 0%, with a little air above and below the line.
-  let lo = Math.min(0, ...pct), hi = Math.max(0, ...pct);
+  // Axis: always includes 0%, with a little air above and below the line -
+  // and the S&P 500's line too, when it's shown.
+  const all = bench ? pct.concat(bench.pts.map(p => p.pct)) : pct;
+  let lo = Math.min(0, ...all), hi = Math.max(0, ...all);
   const air = Math.max((hi - lo) * 0.08, 0.001);
   lo -= air; hi += air;
   // Only the ticks inside the range: stretching it out to the next round
@@ -1913,7 +2010,7 @@ function drawAccountChart(chart) {
   const x = t => pl + (end > from ? (t - from) / (end - from) : 0) * plotW;
   const y = v => pt + (1 - (v - lo) / (hi - lo)) * plotH;
   const y0 = y(0);
-  chart.view = {series, base, x};
+  chart.view = {series, base, x, bench};
 
   // Grid and % labels on the right, as on a quote chart.
   ctx.textBaseline = 'middle';
@@ -1938,6 +2035,23 @@ function drawAccountChart(chart) {
       ctx.lineTo(x(b.ts), y(pct[i]));
     }
   };
+  // The S&P 500 behind the account's line. Straight between bars; across a
+  // gap (overnight, a weekend) it holds the close and steps at the open,
+  // as the account's line does.
+  if (bench) {
+    ctx.save();
+    ctx.beginPath();
+    bench.pts.forEach((p, i) => {
+      if (!i) { ctx.moveTo(x(p.ts), y(p.pct)); return; }
+      const a = bench.pts[i - 1];
+      if (p.ts - a.ts > bench.gap) ctx.lineTo(x(p.ts), y(a.pct));
+      ctx.lineTo(x(p.ts), y(p.pct));
+    });
+    ctx.strokeStyle = rgba(tok('--bench'), 0.85); ctx.lineWidth = 1.5; ctx.lineJoin = 'round';
+    ctx.stroke();
+    ctx.restore();
+  }
+
   // Gains above the baseline in green, losses below it in red: each half is
   // drawn through a clip, so a curve that crosses 0% changes colour there.
   [
@@ -2015,7 +2129,8 @@ function drawAccountChart(chart) {
 
   canvas.setAttribute('aria-label',
     `Paper account at ${+(chart.acct.risk_pct * 100).toFixed(2)}% risk, ` +
-    `${(PP_RANGE_LABEL[chart.range] || 'all time').toLowerCase()}: ${pctText(pct[pct.length - 1])}`);
+    `${(PP_RANGE_LABEL[chart.range] || 'all time').toLowerCase()}: ${pctText(pct[pct.length - 1])}` +
+    (bench ? `; S&P 500 ${pctText(bench.pts[bench.pts.length - 1].pct)}` : ''));
   renderAccountHeader(chart);
 }
 
@@ -2047,7 +2162,13 @@ function bindChart(chart) {
   refresh.addEventListener('click', async () => {
     if (refresh.disabled) return;
     refresh.disabled = true; refresh.classList.add('spin');
+    chart.benchData = null;   // the S&P 500 is fetched afresh too
     try { await loadPaper(); } finally { refresh.disabled = false; refresh.classList.remove('spin'); }
+  });
+  chart.el.querySelector('.eq-bench-btn').addEventListener('click', () => {
+    chart.bench = ppBenchOn = !chart.bench;
+    try { localStorage.setItem('pp-bench', ppBenchOn ? '1' : '0'); } catch (e) {}
+    drawAccountChart(chart);
   });
   chart.el.querySelectorAll('.eq-range button').forEach(b => b.addEventListener('click', () => {
     chart.range = Number(b.dataset.range);
@@ -2302,6 +2423,7 @@ function renderSettings(s) {
   $('#st-cost').value = ((s.PAPER_COST_PCT || 0) * 100).toFixed(2);
   $('#st-budget').value = s.PAPER_BUDGET ?? 1000;
   $('#st-risk').value = +(((s.PAPER_RISK_PCT ?? 0.01) * 100).toFixed(2));
+  $('#st-max-position').value = +(((s.PAPER_MAX_POSITION_PCT ?? 0.25) * 100).toFixed(2));
 
   $('#st-scan-europe').checked = s.SCAN_EUROPE !== false;
   $('#st-min-conf').value = s.MIN_CONFIDENCE ?? 60;
@@ -2338,6 +2460,8 @@ $('#st-save').addEventListener('click', async () => {
   if (!isFinite(budget) || budget < 50) { setSettingsMsg('The paper budget must be at least $50.', 'err'); return; }
   const risk = Number($('#st-risk').value);
   if (!isFinite(risk) || risk < 0.1 || risk > 5) { setSettingsMsg('Risk per trade must be between 0.1% and 5%.', 'err'); return; }
+  const maxPosition = Number($('#st-max-position').value);
+  if (!isFinite(maxPosition) || maxPosition < 1 || maxPosition > 100) { setSettingsMsg('Maximum per position must be between 1% and 100%.', 'err'); return; }
   const threads = parseInt($('#st-threads').value, 10);
   const minConf = parseInt($('#st-min-conf').value, 10);
   if (!isFinite(minConf) || minConf < 0 || minConf > 100) { setSettingsMsg('Minimum confidence must be between 0 and 100.', 'err'); return; }
@@ -2367,6 +2491,7 @@ $('#st-save').addEventListener('click', async () => {
     PAPER_COST_PCT: cost / 100,
     PAPER_BUDGET: budget,
     PAPER_RISK_PCT: risk / 100,
+    PAPER_MAX_POSITION_PCT: maxPosition / 100,
     SCAN_EUROPE: $('#st-scan-europe').checked,
     MIN_CONFIDENCE: minConf,
     LET_WINNERS_RUN: $('#st-let-run').checked,

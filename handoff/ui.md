@@ -49,6 +49,7 @@ everything the desktop GUI has. Feature map, with the endpoint behind it:
 | Keywords: add / remove / reset, "inactive" banner | `/api/keywords...`, `POST /api/keywords/reset`, `GET /api/engine` (`ai_active`) |
 | Settings: ntfy topic, ownership tag, engine + provider/model/key/base URL, Ollama model/threads/URL, paper cost, dashboard login | `GET/POST /api/settings` |
 | Reload files edited by hand on the server | `POST /api/reload` |
+| Paper chart: S&P 500 line behind the account's | `GET /api/benchmark?from=&to=` (epoch ms) |
 
 `POST /api/settings` persists through `config.save_settings` and then
 calls `backend.apply_settings()`, which rebuilds the analyzer, refreshes

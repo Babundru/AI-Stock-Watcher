@@ -172,6 +172,8 @@ PAPER_RISK_PCT = 0.01
 
 # Largest single position, as a fraction of the account. Without it a very
 # calm stock's tight stop would size one position at most of the account.
+# Lowering it fits more positions into the same cash (the budget doesn't:
+# sizes scale with it). Editable from the dashboard's Settings.
 PAPER_MAX_POSITION_PCT = 0.25
 
 # Positions smaller than this are not worth opening; a signal that can only
@@ -500,6 +502,7 @@ USER_SETTINGS = {
     "PAPER_COST_PCT": _FLOAT,
     "PAPER_BUDGET": _FLOAT,
     "PAPER_RISK_PCT": _FLOAT,
+    "PAPER_MAX_POSITION_PCT": _FLOAT,
 }
 
 # Settings whose value must not be emptied by a blank entry: a blank model

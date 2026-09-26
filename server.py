@@ -39,7 +39,7 @@ from local_time import now_local
 from main import StockAppBackend
 from portfolio_manager import PortfolioManager
 from portfolio_history import compute_history
-from price_lookup import fetch_prices
+from price_lookup import fetch_history, fetch_prices
 from source_manager import SourceManager, source_trust
 import reddit_source
 from keyword_manager import KeywordManager
@@ -184,7 +184,8 @@ _SETTINGS_PUBLIC = (
     "NTFY_TOPIC", "NOTIFY_OWNERSHIP", "SCAN_EUROPE",
     "USE_CLOUD_AI", "CLOUD_AI_PROVIDER", "CLOUD_AI_MODEL", "CLOUD_AI_BASE_URL",
     "USE_LOCAL_LLM", "LOCAL_MODEL_NAME", "OLLAMA_NUM_THREADS", "OLLAMA_URL",
-    "PAPER_COST_PCT", "PAPER_BUDGET", "PAPER_RISK_PCT", "DASHBOARD_USERNAME",
+    "PAPER_COST_PCT", "PAPER_BUDGET", "PAPER_RISK_PCT", "PAPER_MAX_POSITION_PCT",
+    "DASHBOARD_USERNAME",
     "ALLOW_SHORTS", "NOTIFY_SHORTS", "SHORT_MIN_IMPACT",
     "MIN_CONFIDENCE", "LET_WINNERS_RUN",
     "MAX_OPEN_POSITIONS", "STOP_ATR_MULT",
@@ -235,6 +236,8 @@ def api_settings():
                 return jsonify({"error": "PAPER_BUDGET must be between 50 and 10,000,000"}), 400
             if "PAPER_RISK_PCT" in updates and not (0.001 <= float(updates["PAPER_RISK_PCT"]) <= 0.05):
                 return jsonify({"error": "PAPER_RISK_PCT must be between 0.1% and 5%"}), 400
+            if "PAPER_MAX_POSITION_PCT" in updates and not (0.01 <= float(updates["PAPER_MAX_POSITION_PCT"]) <= 1):
+                return jsonify({"error": "PAPER_MAX_POSITION_PCT must be between 1% and 100%"}), 400
             if "MIN_CONFIDENCE" in updates and not (0 <= int(updates["MIN_CONFIDENCE"]) <= 100):
                 return jsonify({"error": "MIN_CONFIDENCE must be between 0 and 100"}), 400
             # Capped for the 1GB VM: every open position is priced on every
@@ -478,6 +481,24 @@ def api_paper():
     # beside the record, never mixed into it (shadow_trades.py). Marked at
     # the last watch check's prices, so this costs no extra price call.
     data["skipped"] = backend.shadows.overview() if backend.shadows else None
+    return jsonify(data)
+
+
+@app.route("/api/benchmark")
+def api_benchmark():
+    """The S&P 500 (config.PAPER_BENCHMARK) over the paper chart's range, for
+    the line drawn behind the account's. ?from=&to= are epoch milliseconds,
+    the chart's own window; the bar size follows its span
+    (price_lookup.fetch_history)."""
+    try:
+        start = float(request.args["from"]) / 1000
+        end = float(request.args.get("to") or 0) / 1000 or None
+    except (KeyError, ValueError):
+        return jsonify({"error": "from (epoch ms) is required"}), 400
+    if end is not None and end <= start:
+        return jsonify({"error": "to must be after from"}), 400
+    data = fetch_history(config.PAPER_BENCHMARK, start, end)
+    data.update(ticker=config.PAPER_BENCHMARK, name="S&P 500")
     return jsonify(data)
 
 

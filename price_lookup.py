@@ -189,6 +189,67 @@ def _intraday_prices(tickers):
     return prices
 
 
+# Price history for the dashboard's benchmark line (fetch_history): the bar
+# size per chart span, finest first. Yahoo keeps 5m/15m bars for 60 days and
+# hourly ones for two years, so every span here is inside its limit.
+_HISTORY_INTERVALS = (
+    (1.5 * 86400, "5m"),
+    (8 * 86400, "15m"),
+    (45 * 86400, "1h"),
+)
+# Fetched a few days early, so a range that opens on a weekend or before
+# the bell still has the last price before it to measure from.
+_HISTORY_PAD = 4 * 86400
+# {(ticker, interval, start bucket): (fetched at, points)} - the chart asks
+# again on every range click and refresh, and SPY's past doesn't change.
+_history_cache = {}
+_HISTORY_TTL = {"5m": 300, "15m": 300, "1h": 900, "1d": 3600}
+_HISTORY_CACHE_MAX = 12
+
+
+def fetch_history(ticker, start, end=None):
+    """Regular-session closes of `ticker` from a little before `start` to
+    `end` (epoch seconds; end defaults to now), as {'interval', 'points':
+    [[epoch ms, close], ...]}. The bar size follows the span - 5-minute bars
+    for a day, daily ones past six weeks - so a chart gets a few hundred
+    points whatever its range. Empty points when Yahoo has nothing.
+    """
+    import time
+
+    now = time.time()
+    end = min(end or now, now)
+    span = max(end - start, 0)
+    interval = next((iv for limit, iv in _HISTORY_INTERVALS if span <= limit), "1d")
+    bucket = 3600 if interval != "1d" else 86400
+    first = int((start - _HISTORY_PAD) // bucket * bucket)
+
+    key = (ticker, interval, first)
+    hit = _history_cache.get(key)
+    if hit and now - hit[0] < _HISTORY_TTL[interval]:
+        return {"interval": interval, "points": hit[1]}
+
+    import datetime
+    import yfinance as yf
+
+    points = []
+    try:
+        hist = yf.Ticker(ticker).history(
+            start=datetime.datetime.fromtimestamp(first, datetime.timezone.utc),
+            interval=interval, prepost=False, auto_adjust=False)
+        if hist is not None and not hist.empty:
+            closes = hist["Close"].dropna()
+            points = [[int(ts.timestamp() * 1000), round(float(v), 4)]
+                      for ts, v in closes.items()]
+    except Exception as e:
+        print(f"Price history fetch failed for {ticker}: {e}")
+        return {"interval": interval, "points": []}
+
+    if len(_history_cache) >= _HISTORY_CACHE_MAX:
+        _history_cache.pop(min(_history_cache, key=lambda k: _history_cache[k][0]))
+    _history_cache[key] = (now, points)
+    return {"interval": interval, "points": points}
+
+
 def fetch_context(ticker, published_at=None, benchmark=None):
     """Price context for deciding how far a story has already moved a
     stock. Returns a dict with whichever of these could be worked out ({} if
