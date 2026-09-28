@@ -14,6 +14,7 @@ from watch_manager import WatchManager
 from paper_trader import PaperTrader
 from shadow_trades import ShadowBook
 from source_manager import article_trust, OPINION
+import fills
 import markets
 import price_lookup
 import reddit_source
@@ -915,23 +916,33 @@ class StockAppBackend:
             direction, impact, expected_pct, context,
             needs_confirmation=trust == OPINION,
             capped=strategy.parse_flag(analysis.get('value_is_capped')) is True)
+        # What the trade would really have opened at - the ask for a long,
+        # the bid for a short - worked out from the context's last trade,
+        # which was fetched seconds ago from the same 1-minute chart the
+        # watch checks price from (fills.py). Wanted for a skipped trade too,
+        # so its record pays the same spread a real one would.
+        fill = self._entry_fill(ticker, direction, context, article) if tracked or plan['ok'] else None
         if not plan['ok']:
             if tracked:
                 self._follow_skipped(ticker, company, direction, impact, horizon, confidence,
-                                     trust, title, url, context, plan)
+                                     trust, title, url, context, plan, fill)
             return no(plan['reason'])
-
-        # The context was fetched seconds ago from the same 1-minute,
-        # extended-hours chart the watch checks price from, for the stock and
-        # the benchmark alike - so its prices are the entry. Downloading both
-        # again here cost two more Yahoo requests per trade for nothing.
-        entry = context.get('price')
-        benchmark_entry = context.get('market_price')
-        if not entry:
-            prices = price_lookup.fetch_prices([ticker] + ([benchmark] if self.paper else []))
-            entry, benchmark_entry = prices.get(ticker), prices.get(benchmark)
-        if not entry:
+        if not fill:
             return no(f"couldn't price {ticker}")
+        self.log(f"   💱 {fills.describe(fill)}")
+        # A price nobody could have traded at - too old, from before the
+        # story, or across too wide a spread - is not an entry. Followed as
+        # a skipped trade like any other refusal, so the cost of the rule
+        # shows up.
+        if fill['problem']:
+            rule, reason = fill['problem']
+            if tracked:
+                self._follow_skipped(ticker, company, direction, impact, horizon, confidence,
+                                     trust, title, url, context,
+                                     dict(plan, rule=rule, reason=reason), fill)
+            return no(reason)
+        entry = fill['price']
+        benchmark_entry = context.get('market_price')
 
         decision.update(
             entry_price=entry,
@@ -954,7 +965,7 @@ class StockAppBackend:
             if sizing['size'] is None:
                 self._follow_skipped(ticker, company, direction, impact, horizon, confidence,
                                      trust, title, url, context,
-                                     dict(plan, rule='cash', reason=sizing['reason']))
+                                     dict(plan, rule='cash', reason=sizing['reason']), fill)
                 return no(sizing['reason'])
             decision.update(position_usd=sizing['size'], risk_usd=sizing['risk_usd'],
                             account_usd=sizing['account'])
@@ -975,6 +986,9 @@ class StockAppBackend:
                 'moved_from': plan['moved_from'],
                 'market_move_pct': plan['market_move_pct'],
                 'atr_pct': plan['atr_pct'],
+                'entry_last': fill['last'],
+                'spread_pct': fill['spread_pct'],
+                'spread_source': fill['spread_source'],
                 **extra_sizing,
             },
         )
@@ -985,18 +999,46 @@ class StockAppBackend:
         decision.update(opened=True, watch=watch, expires_at=watch['expires_at'])
         return decision
 
+    def _entry_fill(self, ticker, direction, context, article):
+        """The price a position in `ticker` would open at now, and whether
+        it may: fills.entry_fill plus 'problem', a (rule, reason) from
+        fills.entry_problem or None. None when there is no price at all.
+
+        Costs one quote request, so it is only asked for once a signal has
+        got as far as a price check."""
+        last = (context or {}).get('price')
+        if not last:
+            return None
+        quote = price_lookup.fetch_quote(ticker)
+        fill = fills.entry_fill(direction, last, quote, strategy.market_open(ticker))
+        fill['problem'] = fills.entry_problem(
+            fill, context.get('price_time'), quote.get('delay_min'),
+            article.get('published_ts'))
+        return fill
+
+    def _exit_fill(self, position, price):
+        """The price closing `position` would get: the bid for a long, the
+        ask for a short (fills.exit_fill), from a fresh quote. `price` is the
+        last trade the exit fired on."""
+        return fills.exit_fill(position.get('direction', LONG), price,
+                               price_lookup.fetch_quote(position['ticker']),
+                               strategy.market_open(position['ticker']),
+                               fallback_spread=position.get('spread_pct'))
+
     def _follow_skipped(self, ticker, company, direction, impact, horizon, confidence,
-                        trust, title, url, context, plan):
+                        trust, title, url, context, plan, fill=None):
         """Follow a signal the entry rules refused as if it had been traded,
         so the rule that refused it can be judged later (shadow_trades.py).
-        Never notified."""
+        Opened at `fill` - the price a real entry would have paid - when
+        there is one. Never notified."""
         if not self.shadows:
             return
         ctx = context or {}
         record = self.shadows.track(
-            ticker, company, direction, ctx.get('price'), plan,
+            ticker, company, direction, fill['price'] if fill else ctx.get('price'), plan,
             horizon=horizon, impact=impact, confidence=confidence, source_trust=trust,
-            headline=title, url=url, benchmark_price=ctx.get('market_price'))
+            headline=title, url=url, benchmark_price=ctx.get('market_price'),
+            spread_pct=fill['spread_pct'] if fill else None)
         if record:
             self.log(f"   👻 Following it as a skipped trade ({plan['rule']}) to see "
                      f"whether the rule was right")
@@ -1024,13 +1066,19 @@ class StockAppBackend:
                                  prices.get(benchmark), now_local())
 
     def _close_position(self, watch, reason, price, benchmark_price, now):
-        """Close a watch, record the paper trade and send the exit signal."""
+        """Close a watch, record the paper trade and send the exit signal.
+        `price` is the last trade the exit fired on; the position closes at
+        the side of the quote a real order would hit (fills.py). Returns the
+        exit price, or None if the watch was no longer open."""
+        fill = self._exit_fill(watch, price)
+        price = fill['price']
         closed = self.watch_mgr.close_watch(watch['id'], reason, price)
         if not closed:
-            return
+            return None
+        self.log(f"  💱 Exit {fills.describe(fill)}")
 
         if self.paper:
-            trade = self.paper.close_trade(closed, price, benchmark_price)
+            trade = self.paper.close_trade(closed, price, benchmark_price, fill)
             if trade:
                 self.log(f"  📒 Paper trade #{len(self.paper.closed())}: "
                          f"{trade['net_pct'] * 100:+.2f}% after costs")
@@ -1067,6 +1115,7 @@ class StockAppBackend:
                 })
             except Exception as e:
                 self.log(f"  (alert view update failed: {e})")
+        return price
 
     def close_watch_manually(self, watch_id):
         """User-initiated exit - the "Sell" button on an open paper
@@ -1089,8 +1138,7 @@ class StockAppBackend:
         price = prices.get(watch['ticker'])
         if not price:
             return None
-        self._close_position(watch, 'manual', price, prices.get(benchmark), now_local())
-        return price
+        return self._close_position(watch, 'manual', price, prices.get(benchmark), now_local())
 
     def _check_watches(self):
         """Check every open watch's current price against its exits and close
@@ -1169,6 +1217,14 @@ class StockAppBackend:
             self.shadows.mark_price(record, price)
             reason, _ = self._exit_reason(record, price, now, sessions[record['ticker']], cost)
             if reason:
+                # Out at the other side of the spread it went in across -
+                # assumed from the entry rather than a quote request per
+                # skipped trade. Records from before fills were modelled
+                # went in at the last trade and come out at it too.
+                if record.get('spread_pct') is not None:
+                    price = fills.exit_fill(record['direction'], price, {},
+                                            sessions[record['ticker']],
+                                            fallback_spread=record['spread_pct'])['price']
                 self.shadows.close(record, reason, price,
                                    benchmark_price_for(record['ticker']), now)
                 self.log(f"  👻 Skipped trade {record['ticker']} ({record['skip_rule']}) would have "

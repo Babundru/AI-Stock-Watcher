@@ -38,6 +38,7 @@ import json
 import os
 import datetime
 
+import fills
 import paper_account
 from local_time import now_local
 
@@ -219,6 +220,13 @@ class PaperTrader:
             "headline": watch.get('article_headline'),
             "url": watch.get('article_url'),
             "entry_price": watch['entry_price'],
+            # The fill above is the ask (a long) or the bid (a short); the
+            # last trade it was worked out from, and the spread paid, are
+            # kept beside it (fills.py). Absent on trades recorded before
+            # fills were modelled, which opened at the last trade.
+            "entry_last": watch.get('entry_last'),
+            "spread_pct": watch.get('spread_pct'),
+            "spread_source": watch.get('spread_source'),
             # What the trading account put in when it opened (informational:
             # the accounts re-size every trade from the ledger on replay).
             "position_usd": watch.get('position_usd'),
@@ -267,8 +275,10 @@ class PaperTrader:
         # Not saved here - the caller saves once after marking every watch,
         # rather than rewriting the file once per open position per check.
 
-    def close_trade(self, watch, exit_price, benchmark_price=None):
-        """Finalise a trade whose watch has just closed."""
+    def close_trade(self, watch, exit_price, benchmark_price=None, fill=None):
+        """Finalise a trade whose watch has just closed. `exit_price` is the
+        fill - the bid for a long, the ask for a short - and `fill` the
+        fills.exit_fill it came from, whose last trade and spread are kept."""
         trade = self._find(watch['id'])
         if not trade:
             # The ledger was enabled after this watch opened; record it now
@@ -285,6 +295,10 @@ class PaperTrader:
 
         trade['status'] = 'CLOSED'
         trade['exit_price'] = exit_price
+        if fill:
+            trade['exit_last'] = fill['last']
+            trade['exit_spread_pct'] = fill['spread_pct']
+            trade['exit_spread_source'] = fill['spread_source']
         trade['closed_at'] = watch.get('closed_at') or now_local().isoformat()
         trade['reason'] = watch.get('reason')
         trade['gross_pct'] = round(gross, 6)
@@ -361,6 +375,13 @@ class PaperTrader:
             "worst": min(rets),
             "avg_benchmark": (sum(benches) / len(benches)) if benches else None,
             "avg_alpha": (sum(alphas) / len(alphas)) if alphas else None,
+            # Bid-ask spread paid per round trip, on the trades that
+            # recorded one (both sides); it is already inside every return.
+            "avg_spread": _avg([t['spread_pct'] / 2 + t['exit_spread_pct'] / 2 for t in trades
+                                if t.get('spread_pct') is not None
+                                and t.get('exit_spread_pct') is not None]),
+            "spread_trades": sum(1 for t in trades if t.get('spread_pct') is not None
+                                 and t.get('exit_spread_pct') is not None),
             "avg_holding_hours": _avg([t['holding_hours'] for t in trades
                                        if t.get('holding_hours') is not None]),
             "by_strategy": _group(trades, lambda t: t.get('strategy') or 'v1'),
@@ -414,7 +435,9 @@ class PaperTrader:
             if price:
                 gross = _pct_move(t['direction'], t['entry_price'], price)
                 row['current_price'] = price
-                row['unrealised_pct'] = round(gross - self.cost_pct, 6)
+                # Valued at what closing would get: the last trade less half
+                # the spread it opened across.
+                row['unrealised_pct'] = round(gross - self.cost_pct - fills.exit_haircut(t), 6)
                 # How far this position has come toward the exit that would
                 # close it - the "am I nearly there" number the watch card
                 # cannot show.

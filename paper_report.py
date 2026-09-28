@@ -78,6 +78,9 @@ def main():
         print(f"  Payoff ratio     {stats['payoff_ratio']:.2f}x  "
               f"(avg win vs avg loss)")
     print(f"  Best / worst     {pct(stats['best'])} / {pct(stats['worst'])}")
+    if stats['avg_spread'] is not None:
+        print(f"  Spread paid      {pct(stats['avg_spread'])} per round trip, already in "
+              f"every return ({stats['spread_trades']} of {n} trades filled at bid/ask)")
     if stats['avg_holding_hours'] is not None:
         print(f"  Avg hold         {stats['avg_holding_hours']:.1f}h")
 

@@ -36,3 +36,6 @@ data/alerts_history.json
 venv/
 .idea/
 .vscode/
+
+# Clone of the private Stocks-AI-Data repo (VM stats snapshots)
+VM files/

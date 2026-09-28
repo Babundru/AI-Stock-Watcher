@@ -8,6 +8,7 @@ import datetime
 import os
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -210,10 +211,15 @@ class DecideTradeTest(unittest.TestCase):
         b.watch_mgr = WatchManager(filename=os.path.join(tmp.name, 'watches.json'))
         b.shadows = mock.Mock()
         self.b = b
-        # A calm, unmoved stock: ATR 2% -> a 3% stop.
+        # A calm, unmoved stock: ATR 2% -> a 3% stop. Priced a moment ago,
+        # with a tight quote around it.
         ctx = {'price': 100.0, 'atr_pct': 0.02, 'change_since_close_pct': 0.0,
-               'market_price': 500.0, 'market_since_close_pct': 0.0}
-        for name, value in (('fetch_context', ctx), ('fetch_prices', {})):
+               'market_price': 500.0, 'market_since_close_pct': 0.0,
+               'price_time': time.time() - 30}
+        quote = {'bid': 99.95, 'ask': 100.05, 'market_cap': 5e10, 'currency': 'USD',
+                 'delay_min': 0}
+        for name, value in (('fetch_context', ctx), ('fetch_prices', {}),
+                            ('fetch_quote', quote)):
             p = mock.patch.object(main.price_lookup, name, return_value=value)
             p.start()
             self.addCleanup(p.stop)

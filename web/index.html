@@ -310,7 +310,8 @@
   .row-end .s { font-size: 12px; color: var(--text-3); margin-top: 2px; font-variant-numeric: tabular-nums; }
   .row-actions { display: flex; align-items: center; gap: 6px; flex: none; }
   .bar-wrap { display: flex; align-items: center; gap: 8px; margin-top: 7px; font-size: 11px; color: var(--text-3); }
-  .bar-wrap .bar { flex: 1; margin-top: 0; }
+  .bar-wrap .bar { flex: 1; margin-top: 0; min-width: 24px; }
+  .bar-wrap span { white-space: nowrap; }
   .bar { height: 4px; border-radius: 999px; background: var(--surface-3); overflow: hidden; margin-top: 7px; max-width: 160px; }
   .bar i { display: block; height: 100%; border-radius: 999px; background: var(--up); }
   .bar.neg i { background: var(--down); }
@@ -1651,17 +1652,21 @@ async function loadPaper() {
     const prog = hasProg
       ? `<div class="bar-wrap"><div class="bar${p.progress < 0 ? ' neg' : ''}"><i style="width:${Math.min(1, Math.abs(p.progress)) * 100}%"></i></div><span>${(p.progress * 100).toFixed(0)}% to target</span></div>`
       : '';
+    // Prices live in the sub lines and the end column holds only the result,
+    // so on a phone the ticker keeps its room beside the Sell button.
+    const hasUsd = p.unrealised_usd !== null && p.unrealised_usd !== undefined;
     return `<div class="row-item">
       ${avatar(p.ticker)}
       <div class="row-main">
         <div class="row-title"><span class="name">${esc(p.ticker)}</span><span class="chip sm ${isShort ? 'short' : 'long'}">${isShort ? 'Short' : 'Long'}</span></div>
-        <div class="row-sub">${p.position_usd ? esc(fmtMoney(p.position_usd)) + ' · ' : ''}Entry ${fmtPrice(p.entry_price)} · ${esc(fmtTime(p.opened_at))}</div>
+        <div class="row-sub">${p.position_usd ? esc(fmtMoney(p.position_usd)) + ' · ' : ''}${fmtPrice(p.entry_price)} → ${p.current_price ? fmtPrice(p.current_price) : '—'}</div>
+        <div class="row-sub">Opened ${esc(fmtTime(p.opened_at))}</div>
         ${p.skipped_reason ? `<div class="row-sub muted">Not in the paper account: ${esc(p.skipped_reason)}</div>` : ''}
         ${prog}
       </div>
       <div class="row-end">
-        <div class="v ${pctClass(p.unrealised_pct)}">${p.unrealised_usd !== null && p.unrealised_usd !== undefined ? esc(moneySigned(p.unrealised_usd)) : pctText(p.unrealised_pct)}</div>
-        <div class="s">${p.unrealised_usd !== null && p.unrealised_usd !== undefined ? pctText(p.unrealised_pct) + ' · ' : ''}${p.current_price ? 'now ' + fmtPrice(p.current_price) : '—'}</div>
+        <div class="v ${pctClass(p.unrealised_pct)}">${hasUsd ? esc(moneySigned(p.unrealised_usd)) : pctText(p.unrealised_pct)}</div>
+        ${hasUsd ? `<div class="s">${pctText(p.unrealised_pct)}</div>` : ''}
       </div>
       <button class="btn ghost sm" data-sell="${esc(p.watch_id)}" title="Sell at the current price" aria-label="Sell ${esc(p.ticker)}">Sell</button>
     </div>`;
@@ -1692,10 +1697,11 @@ async function loadPaper() {
       <div class="row-main">
         <div class="row-title"><span class="name">${esc(t.ticker)}</span><span class="chip sm ${isShort ? 'short' : 'long'}">${isShort ? 'Short' : 'Long'}</span></div>
         <div class="row-sub">${esc(REASONS[t.reason] || t.reason || '')} · ${esc(fmtTime(t.closed_at))}</div>
+        <div class="row-sub">${fmtPrice(t.entry_price)} → ${t.exit_price !== null && t.exit_price !== undefined ? fmtPrice(t.exit_price) : '—'}</div>
       </div>
       <div class="row-end">
         <div class="v ${pctClass(t.net_pct)}">${t.pnl_usd !== null && t.pnl_usd !== undefined ? esc(moneySigned(t.pnl_usd)) : pctText(t.net_pct)}</div>
-        <div class="s">${t.pnl_usd !== null && t.pnl_usd !== undefined ? pctText(t.net_pct) + ' · ' : ''}${fmtPrice(t.entry_price)} → ${t.exit_price !== null && t.exit_price !== undefined ? fmtPrice(t.exit_price) : '—'}</div>
+        ${t.pnl_usd !== null && t.pnl_usd !== undefined ? `<div class="s">${pctText(t.net_pct)}</div>` : ''}
       </div>
     </div>`;
   }).join('') : '<div class="empty">No closed trades yet.</div>';

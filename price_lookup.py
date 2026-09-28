@@ -256,6 +256,7 @@ def fetch_context(ticker, published_at=None, benchmark=None):
     none):
 
       price                     last trade, extended hours included
+      price_time                when that trade printed (epoch seconds)
       ref_close                 last regular-session close before the news
       change_since_close_pct    price vs ref_close (fraction)
       price_at_publish          last trade at/before `published_at`
@@ -339,6 +340,9 @@ def _context_for(ticker, published_at, session=None):
         minute = None
         if closes is not None and not closes.empty:
             ctx['price'] = float(closes.iloc[-1])
+            # When that trade printed - how fresh an entry priced off it
+            # would be (fills.entry_problem).
+            ctx['price_time'] = closes.index[-1].timestamp()
 
         if daily is None or daily.empty:
             return ctx
@@ -396,6 +400,47 @@ def _context_for(ticker, published_at, session=None):
     except Exception as e:
         print(f"Price context for {ticker} incomplete: {e}")
     return ctx
+
+
+def fetch_quote(ticker):
+    """Yahoo's quote for one ticker, for turning a last trade into a fill
+    (fills.py): {'bid', 'ask', 'market_cap', 'currency', 'delay_min'}, each
+    None when Yahoo has nothing - or {} if the request failed.
+
+    The quote summary is the heaviest call yfinance makes, so this is only
+    for the moment a position opens or closes (a few a day), never the
+    per-check price loop. Yahoo's US bid/ask is often junk; fills.py decides
+    whether to believe it.
+    """
+    import yfinance as yf
+
+    def read(symbol):
+        try:
+            return yf.Ticker(symbol).info or {}
+        except Exception as e:
+            print(f"Quote fetch failed for {symbol}: {e}")
+            return {}
+
+    info = read(ticker)
+    if not info.get('bid') and not info.get('marketCap') and _is_class_share(ticker):
+        info = read(ticker.replace('.', '-'))
+    if not info:
+        return {}
+
+    def num(key):
+        try:
+            value = float(info.get(key))
+        except (TypeError, ValueError):
+            return None
+        return value if value > 0 else None
+
+    return {
+        'bid': num('bid'),
+        'ask': num('ask'),
+        'market_cap': num('marketCap'),
+        'currency': info.get('currency'),
+        'delay_min': num('exchangeDataDelayedBy') or 0,
+    }
 
 
 def _regular_session_prices(tickers):

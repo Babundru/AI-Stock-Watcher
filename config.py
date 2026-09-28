@@ -128,12 +128,17 @@ CLOUD_AI_BASE_URL = ""
 # worth, and none of it can be reconstructed after the fact.
 PAPER_TRADING = True
 
-# Round-trip cost of a trade, as a fraction: CFD spread on both sides, plus
-# commission, plus overnight financing on anything held for days. 0.002 =
-# 0.2%, a plausible retail CFD figure on a liquid US stock. It is subtracted
-# from every trade, so it is the whole difference between "the price moved my
-# way" and "I made money" - worth setting to your broker's real numbers
-# before reading the results.
+# Round-trip cost of a trade on top of the bid-ask spread, as a fraction:
+# commission, overnight financing on anything held for days, and whatever a
+# CFD broker adds to the market's own spread. 0.002 = 0.2%. It is subtracted
+# from every trade - worth setting to your broker's real numbers before
+# reading the results.
+#
+# The market's spread itself is no longer part of this figure: every paper
+# trade is filled at the side of the quote a real order would cross (buy at
+# the ask, sell at the bid - see fills.py), so it is charged trade by trade,
+# 0.1% on a mega-cap and several percent on a penny stock, instead of one
+# flat guess that fits neither.
 PAPER_COST_PCT = 0.002
 
 # Ticker priced alongside each trade to record what the market did over the
@@ -274,6 +279,26 @@ AGAINST_NEWS_ATR_MULT = 0.5
 # confirmed them already: at least this many daily ranges the news's way.
 # News reporting needs no confirmation.
 CONFIRM_ATR_MULT = 0.5
+
+# --- STRATEGY: FILLS ---
+# A paper trade is only as honest as its entry price. The last trade on the
+# chart is not a price anyone can buy at: a buyer pays the ask and a seller
+# gets the bid, and on a small stock straight after news the gap between the
+# two can be several percent. Nor is a last trade from before the story broke
+# - a takeover bid announced at 16:27 doesn't move a price last printed at
+# 16:12. Both used to go into the ledger as if they had been fills. See
+# fills.py; signals refused here are followed as skipped trades like every
+# other refusal.
+#
+# Widest bid-ask spread, as a fraction of the mid price, a trade may be
+# opened across. Past this the spread alone eats most of a typical target.
+ENTRY_MAX_SPREAD_PCT = 0.015
+
+# Oldest the last trade may be when a position opens, in minutes, on top of
+# the delay Yahoo reports for that exchange (15-20 minutes on most of Europe,
+# none on US listings). The price must also postdate the article: a price
+# that hasn't seen the story yet is not one the story's trade could get.
+ENTRY_MAX_PRICE_AGE_MIN = 10
 
 # Most positions open at once. Also a memory guard for the 1GB VM: every
 # open position is priced on every watch check (see price_lookup.MAX_BATCH).
@@ -478,6 +503,8 @@ USER_SETTINGS = {
     "STOP_ATR_MULT": _FLOAT,
     "LET_WINNERS_RUN": _BOOL,
     "EXITS_REGULAR_HOURS_ONLY": _BOOL,
+    "ENTRY_MAX_SPREAD_PCT": _FLOAT,
+    "ENTRY_MAX_PRICE_AGE_MIN": _FLOAT,
     "MIN_CONFIDENCE": _INT,
     "MAX_OPEN_POSITIONS": _INT,
     "ALLOW_SHORTS": _BOOL,

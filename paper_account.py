@@ -28,13 +28,16 @@ Sizing (position_size)
   position that would come out under PAPER_MIN_POSITION is refused.
 
 Costs are charged at the entry (the spread is paid the moment a position
-opens), so an open position is valued at size x (1 + move - cost) and a
-closed one at size x (1 + net_pct) - the same figure once it closes.
+opens), so an open position is valued at size x (1 + move - cost - half its
+spread) - its move measured from the fill it opened at, to the last trade,
+less the other half of the spread closing it would pay (fills.exit_haircut)
+- and a closed one at size x (1 + net_pct), the same figure once it closes.
 """
 
 import datetime
 
 import config
+import fills
 import strategy
 
 LONG = strategy.LONG
@@ -163,7 +166,8 @@ def replay(trades, cost_pct, risk_pct=None, marks=(), prices=None, now=None, cur
                 p = held.get(wid)
                 if p and price:
                     t = p['trade']
-                    p['pct'] = strategy.pct_move(t['direction'], t['entry_price'], price) - cost_pct
+                    p['pct'] = (strategy.pct_move(t['direction'], t['entry_price'], price)
+                                - cost_pct - fills.exit_haircut(t))
                     moved = True
             if moved:
                 point(ts, 'mark', open=len(held))
@@ -179,7 +183,10 @@ def replay(trades, cost_pct, risk_pct=None, marks=(), prices=None, now=None, cur
                 continue
             sizes[wid] = got['size']
             cash -= got['size']
-            held[wid] = {'size': got['size'], 'trade': t, 'pct': -cost_pct}
+            # Worth, the moment it opens, what selling it straight back would
+            # get: the whole spread and the cost down.
+            held[wid] = {'size': got['size'], 'trade': t,
+                         'pct': -cost_pct - 2 * fills.exit_haircut(t)}
             point(ts, 'open', ticker=t.get('ticker'), dir=t.get('direction'), size=got['size'])
             if curve:
                 held[wid]['point'] = points[-1]
@@ -196,7 +203,8 @@ def replay(trades, cost_pct, risk_pct=None, marks=(), prices=None, now=None, cur
         price = (prices or {}).get(p['trade']['ticker'])
         if price:
             t = p['trade']
-            p['pct'] = strategy.pct_move(t['direction'], t['entry_price'], price) - cost_pct
+            p['pct'] = (strategy.pct_move(t['direction'], t['entry_price'], price)
+                        - cost_pct - fills.exit_haircut(t))
     if events:
         point(max(now_ts, events[-1][0]), 'now', open=len(held))
     # The entries of the positions still open, flagged with where they

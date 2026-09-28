@@ -69,7 +69,12 @@ import markets
 # prices from the regular session - before it, an extended-hours print
 # could close a position at a price that never traded, so v4 and earlier
 # results are not comparable with v5 and should not be pooled with them.
-STRATEGY_VERSION = "v5"
+# v6: positions open at the ask (a long) or the bid (a short) and close at
+# the other side, and only on a fresh price that postdates the story with a
+# spread no wider than config.ENTRY_MAX_SPREAD_PCT (fills.py). v5 and
+# earlier filled at the last trade, however old, so their returns are
+# flattered by the spread and by stale entries - compare, don't pool.
+STRATEGY_VERSION = "v6"
 LEGACY_STRATEGY = "v1"
 
 # Normal daily range assumed for a stock whose ATR couldn't be worked out.

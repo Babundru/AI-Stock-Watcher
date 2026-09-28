@@ -370,10 +370,20 @@ Two things the report shows that are easy to miss:
   would have done. That is the one measurement that cannot be reconstructed
   later, which is why it is logged from the start.
 
-Set `PAPER_COST_PCT` in `config.py` to your broker's real round-trip cost
-(spread + commission + overnight financing). At the default 0.2% a 5% target
-keeps most of its gain, but on a wide spread the same strategy can be a loser
-while every price move still goes your way.
+**Fills at the bid and ask, not the last trade.** A paper position opens at
+the ask (a long) or the bid (a short) and closes at the other side, so every
+trade pays the spread a real order would have paid - 0.1% on a mega-cap,
+several percent on a penny stock. Yahoo's quote is used where it is
+believable; otherwise the spread is estimated from the company's size
+(`fills.py`). A position is also only opened on a price it could really have
+got: the last trade must be recent (`ENTRY_MAX_PRICE_AGE_MIN`, plus the
+exchange's reporting delay), must postdate the article, and the spread must be
+no wider than `ENTRY_MAX_SPREAD_PCT`. Refused signals are followed as skipped
+trades like any other refusal. Trades from strategy v5 and earlier filled at
+the last trade, however old - compare them with v6, don't pool them.
+
+Set `PAPER_COST_PCT` in `config.py` to your broker's round-trip cost on top of
+the spread (commission, overnight financing, any markup a CFD broker adds).
 
 **Give it time.** Below roughly 30 closed trades the figures are noise, and
 the alert filter is deliberately selective (HIGH/CRITICAL, clear sentiment,
@@ -428,7 +438,9 @@ Edit `config.py`:
 | `NOTIFICATIONS_ENABLED` | `True` | Master mute for phone alerts (use the in-app toggle) |
 | `MIN_IMPACT` | `HIGH` | Weakest impact that alerts (use the in-app slider) |
 | `PAPER_TRADING` | `True` | Record every alert's profit/loss to `data/paper_trades.json` |
-| `PAPER_COST_PCT` | `0.002` | Round-trip trading cost, subtracted from every trade |
+| `PAPER_COST_PCT` | `0.002` | Round-trip cost on top of the bid-ask spread (commission, financing), subtracted from every trade |
+| `ENTRY_MAX_SPREAD_PCT` | `0.015` | Widest bid-ask spread a position may open across |
+| `ENTRY_MAX_PRICE_AGE_MIN` | `10` | Oldest the last trade may be at entry, in minutes, on top of the exchange's reporting delay |
 | `PAPER_BENCHMARK` | `SPY` | Priced alongside each US trade to measure alpha |
 | `PAPER_BENCHMARK_EU` | `^STOXX` | The same for a European listing — STOXX Europe 600 |
 | `STOP_LOSS_PCT` | `0.08` | Most any one position may lose. Each stop is sized to the stock's volatility (`STOP_ATR_MULT` x its 14-day ATR) and capped here; `0` = the 8% default. Stops can't be turned off (use the in-app control) |

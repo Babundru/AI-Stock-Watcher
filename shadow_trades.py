@@ -42,6 +42,10 @@ RULE_LABELS = {
     'capped': "price capped by the news",
     'reward_risk': "story too small for the stock",
     'cash': "not enough cash in the paper account",
+    # fills.entry_problem. A 'stale' record opened at the old price it was
+    # refused for, so its results flatter it - the price hadn't caught up.
+    'stale': "no fresh price (results optimistic)",
+    'spread': "bid-ask spread too wide",
 }
 
 
@@ -95,11 +99,13 @@ class ShadowBook:
 
     def track(self, ticker, company, direction, entry_price, plan, horizon=None,
               impact=None, confidence=None, source_trust=None, headline=None,
-              url=None, benchmark_price=None):
+              url=None, benchmark_price=None, spread_pct=None):
         """Start following a signal strategy.plan_trade refused. Returns the
         record, or None when there is no price, the ticker is already being
         followed (one story tends to arrive as several articles), or
-        MAX_SHADOW_POSITIONS are open already."""
+        MAX_SHADOW_POSITIONS are open already. `entry_price` is the fill a
+        real entry would have got (fills.py) and `spread_pct` the spread it
+        crossed, which the exit pays again on the way out."""
         if not ticker or not entry_price or self.has_open(ticker) or self.is_full():
             return None
         horizon = (horizon or '').upper()
@@ -128,6 +134,7 @@ class ShadowBook:
             "headline": headline,
             "url": url,
             "entry_price": entry_price,
+            "spread_pct": spread_pct,
             # The exit state strategy.update_exit reads and ratchets - the
             # same fields a real watch carries (watch_manager.add_watch).
             "target_pct": plan['target_pct'],
