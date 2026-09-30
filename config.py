@@ -270,6 +270,13 @@ MIN_CONFIDENCE = 60
 # spent, and chasing it is where reversals are likeliest.
 EXHAUSTED_ATR_MULT = 3.0
 
+# Past this many daily ranges the move is spent whatever the story's
+# expected move says. The expected move comes from the AI, and for a
+# headline that reports the move itself ("uniQure plunges 65%") it simply
+# repeats it - so a 60% crash, 11 daily ranges, still counted as "short of
+# the 65% expected" and was shorted at the bottom (strategy v7).
+EXHAUSTED_MAX_ATR_MULT = 6.0
+
 # A move the other way is the warning sign: the market reads the story
 # differently. Beyond this many daily ranges against it, the trade is skipped.
 AGAINST_NEWS_ATR_MULT = 0.5

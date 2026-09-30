@@ -5,6 +5,7 @@ Run from the project root:  py -m unittest discover -s tests
 """
 
 import datetime
+import json
 import os
 import sys
 import tempfile
@@ -190,6 +191,32 @@ class LedgerTest(unittest.TestCase):
         self.assertEqual(len(data['accounts']), 1)
         self.assertNotIn('sizes', data['accounts'][0])
 
+    def test_a_deleted_trade_drops_out_of_every_figure_and_is_archived(self):
+        self.paper.trades = [trade("win", 0, 2, 0.05, ticker="A"),
+                             trade("bad", 3, 5, -0.55, ticker="B")]
+        self.paper._by_id = {t['watch_id']: t for t in self.paper.trades}
+        self.assertEqual(self.paper.stats()['trades'], 2)
+
+        self.assertTrue(self.paper.delete_trade("bad"))
+        self.assertEqual(self.paper.stats()['trades'], 1)
+        self.assertEqual([t['ticker'] for t in self.paper.overview({})['closed_recent']], ["A"])
+        self.assertGreater(self.paper.accounts(curve=False)[0]['equity'], 1000)
+        # Gone from the saved ledger, kept in the archive beside it.
+        self.paper.reload()
+        self.assertEqual([t['watch_id'] for t in self.paper.trades], ["win"])
+        with open(os.path.join(os.path.dirname(self.paper.filename),
+                               'paper_trades_deleted.json'), encoding='utf-8') as f:
+            archived = json.load(f)
+        self.assertEqual([t['watch_id'] for t in archived], ["bad"])
+        self.assertIn('deleted_at', archived[0])
+        self.assertFalse(self.paper.delete_trade("bad"))
+
+    def test_an_open_trade_is_not_deleted(self):
+        self.paper.trades = [trade("a", 0)]
+        self.paper._by_id = {"a": self.paper.trades[0]}
+        self.assertFalse(self.paper.delete_trade("a"))
+        self.assertEqual(len(self.paper.trades), 1)
+
 
 
 
@@ -223,6 +250,10 @@ class DecideTradeTest(unittest.TestCase):
             p = mock.patch.object(main.price_lookup, name, return_value=value)
             p.start()
             self.addCleanup(p.stop)
+        # Positions only open in the regular session.
+        p = mock.patch.object(main.strategy, 'market_open', return_value=True)
+        p.start()
+        self.addCleanup(p.stop)
 
     def decide(self, ticker="AAA"):
         return self.b._decide_trade(ticker, "Acme", "LONG", "HIGH", "RALLY", 0.08, 80,

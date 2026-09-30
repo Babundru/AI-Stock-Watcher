@@ -9,7 +9,7 @@ import price_lookup
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import alert_history
-from main import StockAppBackend
+from main import SellRefused, StockAppBackend
 from portfolio_manager import PortfolioManager
 from paper_trader import PaperTrader
 from shadow_trades import RULE_LABELS, ShadowBook
@@ -384,6 +384,8 @@ class StockAppGUI(ctk.CTk):
         self.alert_queue.put(alert)
 
     def clear_alerts(self):
+        if not messagebox.askyesno("Clear alerts", "Clear every alert from the feed?"):
+            return
         self.alerts = []
         alert_history.clear()
         self.refresh_alerts_list()
@@ -597,6 +599,8 @@ class StockAppGUI(ctk.CTk):
         return 'info', False
 
     def clear_log(self):
+        if not messagebox.askyesno("Clear log", "Clear the log view?"):
+            return
         self.log_area.configure(state='normal')
         self.log_area.delete("1.0", tk.END)
         self.log_area.configure(state='disabled')
@@ -1292,15 +1296,38 @@ class StockAppGUI(ctk.CTk):
                          daemon=True).start()
 
     def _sell_paper_position_thread(self, watch_id):
-        price = None
+        # A refused or failed sale closes nothing; say why in a dialog, on
+        # the Tk thread, rather than only in the log.
+        error = None
         try:
-            price = self.backend.close_watch_manually(watch_id)
+            self.backend.close_watch_manually(watch_id)
+        except SellRefused as e:
+            error = str(e)
         except Exception as e:
-            self.log_queue.put(f"Sell failed: {e}")
-        if price is None:
-            self.log_queue.put(f"Could not sell {watch_id} - no open position, or it couldn't be priced.")
+            error = f"Sell failed: {e}"
+        if error:
+            self.log_queue.put(f"Could not sell: {error}")
         if self.winfo_exists():
+            if error:
+                self.after(0, lambda: messagebox.showerror("Couldn't sell", error))
             self.after(0, self.refresh_paper_view)
+
+    def delete_paper_trade(self, watch_id, ticker, when):
+        """The × on a closed paper trade - takes it out of the record, and so
+        out of every figure (PaperTrader.delete_trade, which archives it).
+        Through the backend's ledger when there is one: that copy is the one
+        that writes, and would otherwise save the trade straight back."""
+        if not messagebox.askyesno(
+                "Delete trade",
+                f"Delete the {ticker} trade closed {when} from the record?\n\n"
+                f"It will no longer count towards the results or the win rate."):
+            return
+        ledger = self.backend.paper if self.backend and self.backend.paper else self.paper
+        if ledger.delete_trade(watch_id):
+            self.log_queue.put(f"Deleted the {ticker} paper trade from the record")
+        else:
+            messagebox.showerror("Delete trade", "That trade isn't in the closed record any more.")
+        self.refresh_paper_view()
 
     def _render_paper(self, prices, pending=False):
         data = self.paper.overview(prices)
@@ -1378,7 +1405,8 @@ class StockAppGUI(ctk.CTk):
                           'trailing_stop': "trailing stop", 'news_reversal': "news reversal",
                           'horizon_expired': "time stop", 'max_age': "age limit",
                           'manual': "sold manually"
-                          }.get(t.get('reason'), t.get('reason') or ''))
+                          }.get(t.get('reason'), t.get('reason') or ''),
+                    delete_id=t.get('watch_id'))
         else:
             ctk.CTkLabel(self.paper_scroll, text="No closed trades yet", font=UI(12),
                          text_color=COLOR_TEXT_MUTE).pack(pady=14)
@@ -1419,7 +1447,7 @@ class StockAppGUI(ctk.CTk):
                      text_color=COLOR_TEXT_MUTE).pack(side='left', padx=10)
 
     def _paper_row(self, ticker, direction, entry, exit_price, pct_value, when, note="",
-                   watch_id=None):
+                   watch_id=None, delete_id=None):
         is_short = direction == 'SHORT'
         accent = COLOR_DANGER if is_short else COLOR_SUCCESS
         row = ctk.CTkFrame(self.paper_scroll, fg_color=COLOR_PANEL, corner_radius=RADIUS,
@@ -1449,6 +1477,12 @@ class StockAppGUI(ctk.CTk):
                           fg_color=COLOR_ACCENT_SOFT, border_width=0,
                           text_color=COLOR_ACCENT, hover_color=COLOR_PANEL_HI,
                           corner_radius=RADIUS_SM, font=UI(10, "bold")).pack(side='right', padx=(6, 12))
+        # A closed trade (delete_id given) can be taken out of the record.
+        if delete_id:
+            ctk.CTkButton(row, text="×", width=30, height=26, fg_color="transparent",
+                          text_color=COLOR_TEXT_MUTE, hover_color=COLOR_PANEL_HI, font=UI(16),
+                          command=lambda wid=delete_id, t=ticker, w=when:
+                              self.delete_paper_trade(wid, t, w)).pack(side='right', padx=(6, 12))
         ctk.CTkLabel(row, text=when, anchor='e', font=MONO(10),
                      text_color=COLOR_TEXT_MUTE).pack(side='right', padx=12)
 
@@ -1477,6 +1511,8 @@ class StockAppGUI(ctk.CTk):
             self.refresh_portfolio_list()
 
     def delete_stock(self, ticker):
+        if not messagebox.askyesno("Remove holding", f"Remove {ticker} from the portfolio?"):
+            return
         self.portfolio_mgr.remove_stock(ticker)
         self.log_queue.put(f"Removed {ticker}")
         self.refresh_portfolio_list(fetch_prices=False)
@@ -1671,6 +1707,10 @@ class StockAppGUI(ctk.CTk):
     
     def delete_source(self, source_id):
         """Delete a source."""
+        source = next((s for s in self.source_mgr.get_sources() if s.get('id') == source_id), {})
+        name = source.get('name') or source_id
+        if not messagebox.askyesno("Remove source", f'Remove the source "{name}"?'):
+            return
         if self.source_mgr.remove_source(source_id):
             self.log_queue.put(f"Removed source: {source_id}")
             self.refresh_sources_list()
@@ -1880,6 +1920,9 @@ class StockAppGUI(ctk.CTk):
     
     def delete_keyword(self, keyword, keyword_type):
         """Delete a keyword."""
+        if not messagebox.askyesno("Remove keyword",
+                                   f'Remove the {keyword_type} keyword "{keyword}"?'):
+            return
         if self.keyword_mgr.remove_keyword(keyword, keyword_type):
             self.log_queue.put(f"Removed {keyword_type} keyword: {keyword}")
             self.refresh_keywords_list()

@@ -402,6 +402,29 @@ def _context_for(ticker, published_at, session=None):
     return ctx
 
 
+def fetch_last_trade(ticker):
+    """(price, epoch seconds it printed) of `ticker`'s newest 1-minute bar,
+    extended hours included, or (None, None). One small request - for the
+    manual Sell, which must know the price is current before acting on it.
+    """
+    import yfinance as yf
+
+    symbols = [ticker] + ([ticker.replace('.', '-')] if _is_class_share(ticker) else [])
+    for symbol in symbols:
+        try:
+            minute = yf.Ticker(symbol).history(period="1d", interval="1m", prepost=True,
+                                               auto_adjust=False)
+        except Exception as e:
+            print(f"Last trade fetch failed for {symbol}: {e}")
+            continue
+        if minute is None or minute.empty:
+            continue
+        closes = minute["Close"].dropna()
+        if not closes.empty:
+            return float(closes.iloc[-1]), closes.index[-1].timestamp()
+    return None, None
+
+
 def fetch_quote(ticker):
     """Yahoo's quote for one ticker, for turning a last trade into a fill
     (fills.py): {'bid', 'ask', 'market_cap', 'currency', 'delay_min'}, each

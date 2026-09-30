@@ -738,6 +738,7 @@
           <div id="pp-accounts"></div>
           <div class="card flush">
             <div class="card-title">Open positions <span class="sub">marked to live prices, not yet in the record</span></div>
+            <div class="status-msg err" id="pp-sell-msg" role="alert" style="display:none; padding:0 16px 10px;"></div>
             <div class="rows" id="pp-open-body"></div>
           </div>
           <div class="card flush">
@@ -1315,6 +1316,8 @@ async function loadWatches() {
       </div>`;
     }).join('');
     $('#watches-body').querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', async () => {
+      const ticker = b.closest('.row-item')?.querySelector('.name')?.textContent || 'this position';
+      if (!confirm(`Stop watching ${ticker}?\n\nNo exit signal will be sent for it, and its open paper position is discarded without being recorded.`)) return;
       await fetch('/api/watches/' + encodeURIComponent(b.dataset.del), {method: 'DELETE'});
       loadWatches();
     }));
@@ -1513,12 +1516,14 @@ $('#log-ai').addEventListener('change', (e) => {
 });
 
 $('#log-clear').addEventListener('click', () => {
+  if (!confirm('Clear the log view?')) return;
   $('#logbox').innerHTML = '';
   pendingNewLogs = 0;
   updateJumpButton();
 });
 
 $('#alerts-clear').addEventListener('click', async () => {
+  if (!confirm('Clear every alert from the feed?')) return;
   try {
     await fetch('/api/alerts', {method: 'DELETE'});
     lastAlertSig = null;   // force a redraw on the next poll
@@ -1555,6 +1560,7 @@ function renderHoldingsRows(rows, pending) {
     </div>`;
   }).join('');
   body.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', async () => {
+    if (!confirm(`Remove ${b.dataset.del} from the portfolio?`)) return;
     await fetch('/api/portfolio/' + encodeURIComponent(b.dataset.del), {method: 'DELETE'});
     loadPortfolio();
   }));
@@ -1675,13 +1681,23 @@ async function loadPaper() {
     if (b.disabled) return;
     b.disabled = true;
     b.textContent = '…';
+    // A refused sale (market shut, no current price) closes nothing - the
+    // server says why, and it is shown above the positions until the next try.
+    const msg = $('#pp-sell-msg');
+    msg.style.display = 'none';
+    const ticker = b.closest('.row-item')?.querySelector('.name')?.textContent || 'position';
     try {
       const r = await fetch('/api/watches/' + encodeURIComponent(b.dataset.sell) + '/sell', {method: 'POST'});
-      if (!r.ok) throw new Error(await r.text());
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        throw new Error(d.error || `The server answered ${r.status}.`);
+      }
       loadWatches();
     } catch (e) {
       b.disabled = false;
       b.textContent = 'Sell';
+      msg.textContent = `Couldn't sell ${ticker}: ${e.message === 'Failed to fetch' ? 'the server could not be reached.' : e.message}`;
+      msg.style.display = '';
     }
     loadPaper();
   }));
@@ -1703,8 +1719,22 @@ async function loadPaper() {
         <div class="v ${pctClass(t.net_pct)}">${t.pnl_usd !== null && t.pnl_usd !== undefined ? esc(moneySigned(t.pnl_usd)) : pctText(t.net_pct)}</div>
         ${t.pnl_usd !== null && t.pnl_usd !== undefined ? `<div class="s">${pctText(t.net_pct)}</div>` : ''}
       </div>
+      <button class="icon-btn sm plain del" data-del-trade="${esc(t.watch_id)}" data-label="${esc(t.ticker)} ${isShort ? 'short' : 'long'} (closed ${esc(fmtTime(t.closed_at))})" title="Delete from the record" aria-label="Delete the ${esc(t.ticker)} trade from the record">${icon('x')}</button>
     </div>`;
   }).join('') : '<div class="empty">No closed trades yet.</div>';
+  // Out of the record means out of every figure and the graph - they are all
+  // replayed from the ledger. The server keeps an archive copy.
+  cb.querySelectorAll('[data-del-trade]').forEach(b => b.addEventListener('click', async () => {
+    if (!confirm(`Delete the ${b.dataset.label} from the record?\n\nIt will no longer count towards the results, the win rate or the graph.`)) return;
+    try {
+      const r = await fetch('/api/paper/trades/' + encodeURIComponent(b.dataset.delTrade), {method: 'DELETE'});
+      if (!r.ok) {
+        const e = await r.json().catch(() => ({}));
+        alert(e.error || `Couldn't delete the trade (the server answered ${r.status}).`);
+      }
+    } catch (e) { alert("Couldn't delete the trade: the server could not be reached."); }
+    loadPaper();
+  }));
 
   renderSkipped(d.skipped);
 
@@ -2305,6 +2335,8 @@ async function loadSources() {
     loadSources();
   }));
   list.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', async () => {
+    const name = b.closest('.row-item')?.querySelector('.name')?.textContent || 'this source';
+    if (!confirm(`Remove the source "${name}"?`)) return;
     await fetch('/api/sources/' + b.dataset.del, {method: 'DELETE'});
     loadSources();
   }));
@@ -2360,6 +2392,7 @@ async function loadKeywords() {
   $('#kw-pos').innerHTML = render(data.positive_keywords || {}, 'positive');
   $('#kw-neg').innerHTML = render(data.negative_keywords || {}, 'negative');
   document.querySelectorAll('[data-del][data-type]').forEach(b => b.addEventListener('click', async () => {
+    if (!confirm(`Remove the ${b.dataset.type} keyword "${b.dataset.del}"?`)) return;
     await fetch(`/api/keywords/${encodeURIComponent(b.dataset.del)}?type=${b.dataset.type}`, {method: 'DELETE'});
     loadKeywords();
   }));

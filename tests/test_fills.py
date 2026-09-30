@@ -191,10 +191,12 @@ class DecideTradeFillTest(unittest.TestCase):
         self.quote = {'bid': 99.9, 'ask': 100.1, 'market_cap': 5e10, 'currency': 'USD',
                       'delay_min': 0}
 
-    def decide(self):
-        with mock.patch.object(self.main.price_lookup, 'fetch_context', return_value=self.ctx), \
+    def decide(self, market_open=True):
+        with mock.patch.object(self.main.price_lookup, 'fetch_context',
+                               return_value=self.ctx) as fetch_context, \
              mock.patch.object(self.main.price_lookup, 'fetch_quote', return_value=self.quote), \
-             mock.patch.object(self.main.strategy, 'market_open', return_value=True):
+             mock.patch.object(self.main.strategy, 'market_open', return_value=market_open):
+            self.fetched_context = fetch_context
             return self.b._decide_trade("AAA", "Acme", "LONG", "HIGH", "RALLY", 0.08, 80,
                                         {'horizon': 'DAYS'}, {'source': 'Custom/X'}, "u", "t")
 
@@ -206,6 +208,18 @@ class DecideTradeFillTest(unittest.TestCase):
         self.assertEqual(trade['entry_price'], 100.1)
         self.assertEqual(trade['entry_last'], 100.0)
         self.assertEqual(trade['spread_source'], 'quote')
+
+    def test_nothing_opens_while_the_market_is_shut(self):
+        d = self.decide(market_open=False)
+        self.assertFalse(d['opened'])
+        self.assertIn("market is closed", d['reason'])
+        # Not priced, and not followed as a skipped trade either.
+        self.fetched_context.assert_not_called()
+        self.b.shadows.track.assert_not_called()
+        self.assertEqual(self.b.paper.trades, [])
+
+    def test_an_unmodelled_exchange_still_trades(self):
+        self.assertTrue(self.decide(market_open=None)['opened'])
 
     def test_a_stale_price_is_followed_not_traded(self):
         self.ctx['price_time'] = time.time() - 3600

@@ -14,7 +14,9 @@ stock's normal daily range (14-day ATR):
     differently.
   * Exhausted: skip when it has already moved with the story past both
     EXHAUSTED_ATR_MULT daily ranges and the whole expected move - the move
-    is spent, and chasing it is where reversals are likeliest. Anything
+    is spent, and chasing it is where reversals are likeliest. Past
+    EXHAUSTED_MAX_ATR_MULT daily ranges it is spent whatever the expected
+    move says - the AI's estimate can just repeat the headline's. Anything
     short of that is the market agreeing with the news, not a reason to
     stay out: stocks with real company news tend to keep drifting the way
     the news points.
@@ -74,7 +76,11 @@ import markets
 # spread no wider than config.ENTRY_MAX_SPREAD_PCT (fills.py). v5 and
 # earlier filled at the last trade, however old, so their returns are
 # flattered by the spread and by stale entries - compare, don't pool.
-STRATEGY_VERSION = "v6"
+# v7: positions open only in the stock's regular session, like the exits
+# (a pre-market entry had no working stop until the open), and a move past
+# config.EXHAUSTED_MAX_ATR_MULT daily ranges is exhausted whatever the
+# expected move - v6 shorted QURE after a 60% pre-market crash and lost 55%.
+STRATEGY_VERSION = "v7"
 LEGACY_STRATEGY = "v1"
 
 # Normal daily range assumed for a stock whose ATR couldn't be worked out.
@@ -284,6 +290,11 @@ def plan_trade(direction, impact, expected_pct, context, needs_confirmation=Fals
             return skip('exhausted', f"already moved {moved * 100:.1f}% on the news - past the "
                                      f"{expected * 100:.1f}% expected and {moved / daily:.1f}x {unit}; "
                                      f"too late to chase")
+        # However big the AI says the story is: its estimate can just repeat
+        # a move the headline already reports.
+        if moved >= config.EXHAUSTED_MAX_ATR_MULT * daily:
+            return skip('exhausted', f"already moved {moved * 100:.1f}% on the news - "
+                                     f"{moved / daily:.1f}x {unit}; too late to chase")
         need = config.CONFIRM_ATR_MULT * daily
         if needs_confirmation and moved < need:
             return skip('unconfirmed', f"opinion source, and the price hasn't confirmed it: "

@@ -23,7 +23,7 @@ class RulesMixin:
     restores them afterwards."""
 
     SETTINGS = dict(STOP_LOSS_PCT=0.08, STOP_ATR_MULT=1.5, STOP_MIN_PCT=0.02, MIN_REWARD_RISK=1.2,
-                    MIN_MOVE_ATR_MULT=1.2, EXHAUSTED_ATR_MULT=3.0, AGAINST_NEWS_ATR_MULT=0.5, CONFIRM_ATR_MULT=0.5,
+                    MIN_MOVE_ATR_MULT=1.2, EXHAUSTED_ATR_MULT=3.0, EXHAUSTED_MAX_ATR_MULT=6.0, AGAINST_NEWS_ATR_MULT=0.5, CONFIRM_ATR_MULT=0.5,
                     MAX_SHADOW_POSITIONS=20, LET_WINNERS_RUN=True, BREAKEVEN_AT=0.5)
 
     def setUp(self):
@@ -103,6 +103,16 @@ class PlanTradeTests(RulesMixin, unittest.TestCase):
         # 4% range, 8% story: past the expected move, but only 2.25 ranges.
         self.assertTrue(self.plan(0.09, atr=0.04, expected=0.08)['ok'])
         self.assertEqual(self.plan(0.121, atr=0.04, expected=0.08)['rule'], 'exhausted')
+
+    def test_a_huge_move_is_spent_whatever_the_expected_move(self):
+        # QURE: a 60% crash on a 5.3% range stock, with the AI's expected
+        # move copied from the "plunges 65%" headline.
+        plan = strategy.plan_trade('SHORT', 'CRITICAL', 0.65, ctx(close=-0.60, atr=0.053,
+                                                                  in_session=False))
+        self.assertEqual(plan['rule'], 'exhausted')
+        # Up to six ranges a big story still trades.
+        self.assertTrue(self.plan(0.059, atr=0.01, expected=0.10)['ok'])
+        self.assertEqual(self.plan(0.061, atr=0.01, expected=0.10)['rule'], 'exhausted')
 
     def test_a_move_against_the_news_is_skipped(self):
         self.assertEqual(self.plan(-0.011)['rule'], 'against')

@@ -99,6 +99,11 @@ def is_weekend(now=None):
     return now.astimezone(strategy.ET).weekday() >= 5
 
 
+class SellRefused(Exception):
+    """A manual Sell that could not be carried out; the message says why,
+    in words meant for the user."""
+
+
 class StockAppBackend:
     def __init__(self, log_callback=print, alert_callback=None, status_callback=None,
                  portfolio_mgr=None, source_mgr=None):
@@ -890,6 +895,17 @@ class StockAppBackend:
             # The alert still went out; only the position is refused, for a
             # broker that can't deal outside the US.
             return no(f"{ticker} is listed in Europe, which is off in settings")
+        # Positions open only while the stock's own exchange is in its
+        # regular session - the same gate every exit waits for. Outside it
+        # the price is a thin extended-hours print, and a position opened on
+        # one has no working stop until the open: QURE was shorted at 07:34 ET
+        # on a pre-market print after a 60% crash, rallied through its 8% stop
+        # within minutes, and the stop could first fire at 09:35, at -55%.
+        # Not followed as a skipped trade either, since it would open on that
+        # same print. An exchange markets.py doesn't model (None) trades as before.
+        if strategy.market_open(ticker) is False:
+            return no(f"{ticker}'s market is closed - positions only open during its "
+                      f"regular session")
         if direction == SHORT:
             if not config.ALLOW_SHORTS and not config.NOTIFY_SHORTS:
                 return no("short selling is off in settings")
@@ -1016,12 +1032,13 @@ class StockAppBackend:
             article.get('published_ts'))
         return fill
 
-    def _exit_fill(self, position, price):
+    def _exit_fill(self, position, price, quote=None):
         """The price closing `position` would get: the bid for a long, the
-        ask for a short (fills.exit_fill), from a fresh quote. `price` is the
-        last trade the exit fired on."""
-        return fills.exit_fill(position.get('direction', LONG), price,
-                               price_lookup.fetch_quote(position['ticker']),
+        ask for a short (fills.exit_fill), from a fresh quote unless one is
+        given. `price` is the last trade the exit fired on."""
+        if quote is None:
+            quote = price_lookup.fetch_quote(position['ticker'])
+        return fills.exit_fill(position.get('direction', LONG), price, quote,
                                strategy.market_open(position['ticker']),
                                fallback_spread=position.get('spread_pct'))
 
@@ -1065,12 +1082,12 @@ class StockAppBackend:
             self._close_position(watch, 'news_reversal', price,
                                  prices.get(benchmark), now_local())
 
-    def _close_position(self, watch, reason, price, benchmark_price, now):
+    def _close_position(self, watch, reason, price, benchmark_price, now, quote=None):
         """Close a watch, record the paper trade and send the exit signal.
         `price` is the last trade the exit fired on; the position closes at
         the side of the quote a real order would hit (fills.py). Returns the
         exit price, or None if the watch was no longer open."""
-        fill = self._exit_fill(watch, price)
+        fill = self._exit_fill(watch, price, quote)
         price = fill['price']
         closed = self.watch_mgr.close_watch(watch['id'], reason, price)
         if not closed:
@@ -1126,19 +1143,41 @@ class StockAppBackend:
         reason='manual' and a price fetched fresh rather than one already in
         hand from a watch-check pass.
 
-        Returns the exit price on success, or None if there's no such open
-        watch or it couldn't be priced.
+        Only a sale that could really happen goes through: the stock's own
+        exchange must be in its regular session, and its last trade recent
+        enough to be the price now (the entry's ENTRY_MAX_PRICE_AGE_MIN plus
+        the exchange's reporting delay - which also catches a holiday, which
+        markets.py doesn't model). Otherwise nothing is closed.
+
+        Returns the exit price. Raises SellRefused, with a message for the
+        user, when there's no such open position or it can't be sold now.
         """
         watch = next((w for w in self.watch_mgr.get_open_watches() if w['id'] == watch_id), None)
         if not watch:
-            return None
-        benchmark = markets.benchmark_for(watch['ticker'])
-        wanted = [watch['ticker']] + ([benchmark] if self.paper else [])
-        prices = price_lookup.fetch_prices(wanted)
-        price = prices.get(watch['ticker'])
+            raise SellRefused("That position is no longer open - it may have just been "
+                              "closed by its own exit rules.")
+        ticker = watch['ticker']
+        if strategy.market_open(ticker) is False:
+            raise SellRefused(f"{ticker}'s market is closed. Sell it once its exchange opens.")
+        price, printed = price_lookup.fetch_last_trade(ticker)
         if not price:
-            return None
-        return self._close_position(watch, 'manual', price, prices.get(benchmark), now_local())
+            raise SellRefused(f"Couldn't get a price for {ticker}. Try again in a minute.")
+        quote = price_lookup.fetch_quote(ticker)
+        age = (time.time() - printed) / 60
+        allowed = config.ENTRY_MAX_PRICE_AGE_MIN + (quote.get('delay_min') or 0)
+        if age > allowed:
+            raise SellRefused(f"{ticker} hasn't traded for {age:.0f} minutes - its market may be "
+                              f"shut for a holiday or the stock halted, so there's no price to "
+                              f"sell at.")
+        benchmark = markets.benchmark_for(ticker)
+        benchmark_price = (price_lookup.fetch_prices([benchmark]).get(benchmark)
+                           if self.paper else None)
+        sold = self._close_position(watch, 'manual', price, benchmark_price, now_local(), quote)
+        if sold is None:
+            raise SellRefused("That position is no longer open - it may have just been "
+                              "closed by its own exit rules.")
+        self.log(f"🖐 Sold {ticker} by hand at {sold:.2f}")
+        return sold
 
     def _check_watches(self):
         """Check every open watch's current price against its exits and close

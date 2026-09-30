@@ -44,6 +44,10 @@ from local_time import now_local
 
 LEDGER_FILE = "data/paper_trades.json"
 
+# Closed trades the user deleted from the record (PaperTrader.delete_trade),
+# kept so a deletion can be undone by hand. Nothing reads it.
+DELETED_FILE = "data/paper_trades_deleted.json"
+
 # Prices of the open positions, snapshotted on every watch check, so the
 # account can be drawn marked to market over time and not only at the
 # moments trades close. Kept apart from the ledger: it is a chart's raw
@@ -177,6 +181,45 @@ class PaperTrader:
         if not trade or trade['status'] != 'OPEN':
             return False
         self.trades.remove(trade)
+        del self._by_id[watch_id]
+        self.save()
+        return True
+
+    def delete_trade(self, watch_id):
+        """Take a closed trade out of the record at the user's request - a
+        trade they don't want counted (a data glitch, a rule since fixed).
+        Every figure is replayed from the ledger, so it drops out of all of
+        them at once.
+
+        Not destroyed: it is appended to the archive beside the ledger
+        (paper_trades_deleted.json), so a deletion can be undone by moving
+        it back by hand. An open trade is not deleted here - it is still
+        live, and closes through its exits or the Sell button.
+        """
+        trade = self._find(watch_id)
+        if not trade or trade['status'] != 'CLOSED':
+            return False
+        archive = os.path.join(os.path.dirname(self.filename) or '.',
+                               os.path.basename(DELETED_FILE))
+        try:
+            with open(archive, 'r', encoding='utf-8') as f:
+                deleted = json.load(f)
+            if not isinstance(deleted, list):
+                deleted = []
+        except (OSError, ValueError):
+            deleted = []
+        deleted.append(dict(trade, deleted_at=now_local().isoformat()))
+        try:
+            os.makedirs(os.path.dirname(archive) or '.', exist_ok=True)
+            with open(archive, 'w', encoding='utf-8') as f:
+                json.dump(deleted, f, indent=2)
+        except OSError as e:
+            # Better to keep the trade than to lose it for good.
+            print(f"Error archiving deleted paper trade: {e}")
+            return False
+        # A new list rather than remove(): this runs on a dashboard request
+        # while the scan thread may be looping over the ledger.
+        self.trades = [t for t in self.trades if t is not trade]
         del self._by_id[watch_id]
         self.save()
         return True

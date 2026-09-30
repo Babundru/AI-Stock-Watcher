@@ -48,12 +48,23 @@ stop - 1.8 daily ranges - so a HIGH story rated at 5% traded only on stocks
 calmer than 2.8% a day (most mega-caps, little else), and the app went days
 without a trade. It is now `MIN_MOVE_ATR_MULT` (1.2) daily ranges, the
 "clearly more than an ordinary day" the rule was always described as.
+Strategy `v7` (Sep 2026) came from a v6 short on QURE that lost 55%: it
+opened at 07:34 ET on a pre-market print right after a 60% crash, the stock
+rallied through its 8% stop within minutes, and the stop - gated to the
+regular session like every exit - could first fire at 09:35. Positions now
+open only in the regular session too, and a move past
+`EXHAUSTED_MAX_ATR_MULT` (6) daily ranges is `exhausted` whatever the
+AI's expected move (which had just repeated the headline's "65%").
 
 **Entry** (`main.py:_decide_trade`, cheapest checks first):
 - Short gates: `ALLOW_SHORTS` / `NOTIFY_SHORTS` (both off = negative news
   on an unowned stock is skipped outright) and `SHORT_MIN_IMPACT`
   (default CRITICAL). `ALLOW_SHORTS` off with `NOTIFY_SHORTS` on sends the
   setup marked "not tracked" and opens no watch.
+- The stock's own exchange must be in its regular session
+  (`strategy.market_open`; an exchange `markets.py` doesn't model counts
+  as open). Out of hours the alert still goes out, but nothing opens and
+  nothing is followed as a skipped trade.
 - One position per ticker; at most `MAX_OPEN_POSITIONS` (20) open.
 - `price_lookup.fetch_context(ticker, published, benchmark=SPY)` (two
   small single-ticker requests each for the stock and for SPY), then
@@ -69,7 +80,8 @@ without a trade. It is now `MIN_MOVE_ATR_MULT` (1.2) daily ranges, the
   - `exhausted` - moved with it past both `EXHAUSTED_ATR_MULT` (3) daily
     ranges and the whole expected move: the move is spent. (Both, so a big
     story on a calm stock isn't cut off after 3% - a plain 3x ATR limit was
-    stricter than v2 there.)
+    stricter than v2 there.) Or past `EXHAUSTED_MAX_ATR_MULT` (6) daily
+    ranges alone - the expected move can simply echo a headline's move.
   - `unconfirmed` - a story from an opinion source (X, Reddit - see
     `data_sources.md`) that hasn't moved the price at least
     `CONFIRM_ATR_MULT` (0.5) daily ranges its way, or can't be priced.
@@ -184,6 +196,12 @@ kept in the browser's localStorage.
   as they age (every check for a day, hourly for a month, daily after).
 - The entry alert quotes the size and the risk; the exit alert the result in
   money. `py paper_report.py` prints each account.
+- **Deleting a closed trade** (the × on a closed row, dashboard or desktop
+  app; `PaperTrader.delete_trade`) takes it out of the ledger, so it drops
+  out of every figure and the graph at once - they're all replayed. It is
+  appended to `data/paper_trades_deleted.json` first; nothing reads that
+  file, it's there to undo a deletion by hand. Open trades can't be
+  deleted - they're sold or closed by their exits.
 - A replay is only as good as the ledger: trades from before sizing existed
   had no cash limit, so a replay can skip some of them for cash.
 

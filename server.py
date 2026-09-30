@@ -36,7 +36,7 @@ import config
 import strategy
 from cloud_providers import PROVIDERS
 from local_time import now_local
-from main import StockAppBackend
+from main import SellRefused, StockAppBackend
 from portfolio_manager import PortfolioManager
 from portfolio_history import compute_history
 from price_lookup import fetch_history, fetch_prices
@@ -516,15 +516,33 @@ def api_watches_delete(watch_id):
     return jsonify(backend.watch_mgr.get_all())
 
 
+@app.route("/api/paper/trades/<watch_id>", methods=["DELETE"])
+def api_paper_trade_delete(watch_id):
+    """Take a closed trade out of the paper record, so it no longer counts
+    towards any figure or graph (PaperTrader.delete_trade - archived, not
+    destroyed). Only closed trades; an open one is sold or left to its exits."""
+    if not backend.paper:
+        return jsonify({"error": "Paper trading is off."}), 404
+    if not backend.paper.delete_trade(watch_id):
+        return jsonify({"error": "That trade isn't in the closed record any more."}), 404
+    return jsonify({"deleted": True})
+
+
 @app.route("/api/watches/<watch_id>/sell", methods=["POST"])
 def api_watches_sell(watch_id):
     """Manually close an open paper position at the current market price -
     the Sell button on the Paper trading tab, for not wanting to wait for
     the strategy's own exit rules. Unlike the DELETE above, this records a
-    real closed trade (reason 'manual') instead of discarding it."""
-    price = backend.close_watch_manually(watch_id)
-    if price is None:
-        return jsonify({"error": "no open position with that id, or it couldn't be priced"}), 404
+    real closed trade (reason 'manual') instead of discarding it. Refused,
+    with nothing sold, when the market is shut or there's no current price;
+    the error says why, for the page to show."""
+    try:
+        price = backend.close_watch_manually(watch_id)
+    except SellRefused as e:
+        return jsonify({"error": str(e)}), 409
+    except Exception as e:
+        print(f"Manual sell of {watch_id} failed: {e}")
+        return jsonify({"error": f"Sell failed: {e}"}), 500
     return jsonify({"closed": True, "exit_price": price})
 
 
