@@ -10,6 +10,65 @@ them before pasting (bash reads a literal `<zone>` as a redirect).
 
 ---
 
+## 2026-10: "RAM full at weekends" - OOM kill after ~4.5 days of uptime
+
+### What it looked like
+
+The VM slowed to a crawl from a Friday through the weekend, two weeks
+running. The hourly snapshots in the local `VM files` repo (normally taken
+at :00-:05) started arriving at :08-:52 past the hour, with a 9-hour gap.
+
+| Process | Started | Snapshots late from | Uptime then | End |
+|---|---|---|---|---|
+| 919486 | Wed Sep 30 ~14:00Z | Fri Oct 3 ~07:00Z | ~2.7 d | OOM kill Sun Oct 5 02:12Z |
+| 1112814 | Sun Oct 5 02:13Z | Fri Oct 9 ~17:00Z | ~4.6 d | still thrashing Sat Oct 10 |
+
+```
+stocks-ai.service: A process of this unit has been killed by the OOM killer.
+stocks-ai.service: Consumed 1h 34min 41.461s CPU time, 373.9M memory peak, 405.7M memory swap peak.
+```
+
+### Diagnosis
+
+- **Not weekend-specific.** Both slowdowns began on a Friday, before the
+  weekend scan schedule (`is_weekend`, Saturday 04:00Z) applies. The process
+  grows slowly with uptime, roughly 4-7 MB an hour. The slowdown starts when
+  it crosses `MemoryHigh=420M` and the kernel pushes it into zram. With
+  restarts early in the week, that lands on Friday or the weekend.
+- `MemoryMax=550M` caps RAM only. The process went on into swap (374M + 406M)
+  until the whole VM ran out, so the kill was a global OOM after ~19 hours of
+  thrashing, not the unit's own cap.
+- Ruled out: open positions (fell all week, 7-13 tickers), paper marks
+  (~300), dashboard polling (cheap endpoints only), and every collection in
+  the scan loop (all capped; the Python heap stayed flat in a forced-weekend
+  local run).
+- The `period=1y` yfinance errors that start in the same hours come from the
+  `fast_info` price fallback after Yahoo requests began failing. They look
+  like a symptom of the thrashing, not the cause.
+- Leak source **not yet found**. Possibly part of it: 120 repeated
+  `price_lookup.fetch_prices` calls grew process memory ~13 MB on Windows
+  (~0.1 MB a call, ~1 MB/h at the watch-check rate). Unconfirmed on the VM.
+- Log timestamps from before the fix are flush times, not event times:
+  Python's stdout was block-buffered under systemd.
+
+### Changes
+
+- systemd unit (`DEPLOY.md` section 6): `RuntimeMaxSec=2d` (planned restart
+  well before `MemoryHigh`), `MemorySwapMax=100M` (the cgroup kills the app
+  instead of the VM thrashing), `Environment=PYTHONUNBUFFERED=1`.
+- `server.py`: a SIGTERM handler runs `backend.stop()`, so a restart saves
+  the processed URLs and counters instead of re-alerting recent articles.
+- `main.py`: the per-scan `Memory in use` reading also goes to stdout, i.e.
+  journald, where it survives a restart.
+
+### Open follow-up
+
+Find the leak: plot `journalctl -u stocks-ai | grep "Memory in use"` over a
+couple of days and line the jumps up with watch checks, Reddit passes and
+AI calls.
+
+---
+
 ## 2026-09: VM froze after 2-3 days of uptime (memory livelock)
 
 ### What it looked like

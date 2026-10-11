@@ -128,6 +128,9 @@ class EntryProblemTest(unittest.TestCase):
 
 class LedgerTest(unittest.TestCase):
     def setUp(self):
+        p = mock.patch.multiple(config, PAPER_FEE_PER_ORDER=0.0, PAPER_FX_FEE_PCT=0.0, PAPER_MAX_FEE_PCT=0.0)
+        p.start()
+        self.addCleanup(p.stop)
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.paper = PaperTrader(filename=os.path.join(tmp.name, 'paper_trades.json'),
@@ -173,7 +176,7 @@ class DecideTradeFillTest(unittest.TestCase):
         patcher = mock.patch.multiple(config, PAPER_BUDGET=1000.0, PAPER_RISK_PCT=0.01,
                                       PAPER_MAX_POSITION_PCT=0.25, ENTRY_MAX_PRICE_AGE_MIN=10,
                                       ENTRY_MAX_SPREAD_PCT=0.015, ALLOW_SHORTS=True,
-                                      MAX_OPEN_POSITIONS=20)
+                                      MAX_OPEN_POSITIONS=20, PAPER_FEE_PER_ORDER=0.0, PAPER_FX_FEE_PCT=0.0, PAPER_MAX_FEE_PCT=0.0)
         patcher.start()
         self.addCleanup(patcher.stop)
         tmp = tempfile.TemporaryDirectory()
@@ -218,8 +221,11 @@ class DecideTradeFillTest(unittest.TestCase):
         self.b.shadows.track.assert_not_called()
         self.assertEqual(self.b.paper.trades, [])
 
-    def test_an_unmodelled_exchange_still_trades(self):
-        self.assertTrue(self.decide(market_open=None)['opened'])
+    def test_an_exchange_with_unknown_hours_is_not_traded(self):
+        d = self.decide(market_open=None)
+        self.assertFalse(d['opened'])
+        self.assertIn("trading hours", d['reason'])
+        self.fetched_context.assert_not_called()
 
     def test_a_stale_price_is_followed_not_traded(self):
         self.ctx['price_time'] = time.time() - 3600

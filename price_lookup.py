@@ -425,6 +425,107 @@ def fetch_last_trade(ticker):
     return None, None
 
 
+def learn_market(ticker):
+    """Look up the regular session of `ticker`'s exchange when markets.py
+    doesn't know it (Sydney, Seoul, Toronto, Tokyo...) and register it there
+    (markets.learn). Returns the Market, or None when Yahoo has no session
+    for it either.
+
+    From Yahoo's own chart metadata - the exchange's timezone and the start
+    and end of its latest regular session - rather than from the AI: these
+    are the hours the price feed itself keeps, they cost one small request
+    per exchange, ever, and a model asked for them can be confidently wrong.
+    Lunch breaks (Tokyo, Hong Kong) and holidays are not modelled.
+    """
+    import datetime
+
+    import pytz
+    import yfinance as yf
+
+    known = markets.market(ticker)
+    if known is not None or not markets.other_suffix(ticker):
+        return known
+    try:
+        t = yf.Ticker(ticker)
+        t.history(period="1d", interval="1m", auto_adjust=False)
+        meta = t.history_metadata or {}
+        tz = pytz.timezone(meta['exchangeTimezoneName'])
+        regular = meta['currentTradingPeriod']['regular']
+        opens = datetime.datetime.fromtimestamp(regular['start'], tz).time().replace(second=0)
+        closes = datetime.datetime.fromtimestamp(regular['end'], tz).time().replace(second=0)
+    except Exception as e:
+        print(f"Couldn't look up the trading hours of {ticker}'s exchange: {e}")
+        return None
+    if opens >= closes:
+        print(f"Trading hours of {ticker}'s exchange look wrong ({opens}-{closes}); not used")
+        return None
+    name = meta.get('fullExchangeName') or meta.get('exchangeName')
+    m = markets.learn(ticker, name, tz.zone, opens, closes)
+    print(f"Learned {ticker}'s exchange: {m.name}, {opens:%H:%M}-{closes:%H:%M} {tz.zone}")
+    return m
+
+
+def fetch_bars(tickers):
+    """Today's 1-minute bars per ticker, extended hours included:
+    {ticker: [(epoch seconds the bar starts, open, high, low, close), ...]},
+    oldest first, [] when there are none. The newest bar is usually still
+    forming.
+
+    For the watch check, which needs every price between two passes - a
+    stop order is triggered by any trade through its level, not only by the
+    one that happens to be the last when the check runs.
+    """
+    out = {t: [] for t in tickers or [] if t}
+    unique = list(dict.fromkeys(out))
+    for batch in _chunked(unique, MAX_BATCH):
+        out.update(_intraday_bars(batch))
+    alternates = {t: t.replace('.', '-') for t in unique if not out[t] and _is_class_share(t)}
+    if alternates:
+        found = {}
+        for batch in _chunked(list(alternates.values()), MAX_BATCH):
+            found.update(_intraday_bars(batch))
+        for ticker, alt in alternates.items():
+            out[ticker] = found.get(alt) or []
+    return out
+
+
+def _intraday_bars(tickers):
+    import yfinance as yf
+
+    bars = {t: [] for t in tickers}
+    if not tickers:
+        return bars
+    try:
+        data = yf.download(
+            tickers, period="1d", interval="1m", prepost=True,
+            progress=False, auto_adjust=False, threads=True, group_by="column",
+        )
+    except Exception as e:
+        print(f"Bar fetch failed: {e}")
+        return bars
+    if data is None or data.empty:
+        return bars
+    try:
+        frames = {field: data[field] for field in ("Open", "High", "Low", "Close")}
+    except KeyError:
+        return bars
+    for ticker in tickers:
+        try:
+            cols = [frames[f][ticker] if hasattr(frames[f], 'columns') else frames[f]
+                    for f in ("Open", "High", "Low", "Close")]
+        except KeyError:
+            continue
+        rows = []
+        for ts, o, h, l, c in zip(cols[3].index, *cols):
+            # A delisted ticker gets an all-NaN column, and the newest
+            # minute can be NaN mid-print.
+            if c != c or o != o or h != h or l != l:
+                continue
+            rows.append((ts.timestamp(), float(o), float(h), float(l), float(c)))
+        bars[ticker] = rows
+    return bars
+
+
 def fetch_quote(ticker):
     """Yahoo's quote for one ticker, for turning a last trade into a fill
     (fills.py): {'bid', 'ask', 'market_cap', 'currency', 'delay_min'}, each

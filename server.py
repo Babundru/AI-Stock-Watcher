@@ -22,6 +22,8 @@ import collections
 import datetime
 import hmac
 import os
+import signal
+import sys
 import threading
 
 # Every data file is addressed as "data/..." relative to the working
@@ -185,6 +187,7 @@ _SETTINGS_PUBLIC = (
     "USE_CLOUD_AI", "CLOUD_AI_PROVIDER", "CLOUD_AI_MODEL", "CLOUD_AI_BASE_URL",
     "USE_LOCAL_LLM", "LOCAL_MODEL_NAME", "OLLAMA_NUM_THREADS", "OLLAMA_URL",
     "PAPER_COST_PCT", "PAPER_BUDGET", "PAPER_RISK_PCT", "PAPER_MAX_POSITION_PCT",
+    "PAPER_FEE_PER_ORDER", "PAPER_FX_FEE_PCT",
     "DASHBOARD_USERNAME",
     "ALLOW_SHORTS", "NOTIFY_SHORTS", "SHORT_MIN_IMPACT",
     "MIN_CONFIDENCE", "LET_WINNERS_RUN",
@@ -232,6 +235,10 @@ def api_settings():
                 return jsonify({"error": "OLLAMA_NUM_THREADS must be at least 1"}), 400
             if "PAPER_COST_PCT" in updates and not (0 <= float(updates["PAPER_COST_PCT"]) < 1):
                 return jsonify({"error": "PAPER_COST_PCT must be a fraction between 0 and 1"}), 400
+            if "PAPER_FEE_PER_ORDER" in updates and not (0 <= float(updates["PAPER_FEE_PER_ORDER"]) <= 50):
+                return jsonify({"error": "PAPER_FEE_PER_ORDER must be between 0 and 50"}), 400
+            if "PAPER_FX_FEE_PCT" in updates and not (0 <= float(updates["PAPER_FX_FEE_PCT"]) <= 0.05):
+                return jsonify({"error": "PAPER_FX_FEE_PCT must be between 0% and 5%"}), 400
             if "PAPER_BUDGET" in updates and not (50 <= float(updates["PAPER_BUDGET"]) <= 10_000_000):
                 return jsonify({"error": "PAPER_BUDGET must be between 50 and 10,000,000"}), 400
             if "PAPER_RISK_PCT" in updates and not (0.001 <= float(updates["PAPER_RISK_PCT"]) <= 0.05):
@@ -518,14 +525,25 @@ def api_watches_delete(watch_id):
 
 @app.route("/api/paper/trades/<watch_id>", methods=["DELETE"])
 def api_paper_trade_delete(watch_id):
-    """Take a closed trade out of the paper record, so it no longer counts
-    towards any figure or graph (PaperTrader.delete_trade - archived, not
-    destroyed). Only closed trades; an open one is sold or left to its exits."""
+    """Leave a closed trade out of the paper record, so it no longer counts
+    towards any figure or graph (PaperTrader.exclude_trade - it stays in the
+    ledger, flagged, and listed). Only closed trades; an open one is sold or
+    left to its exits."""
     if not backend.paper:
         return jsonify({"error": "Paper trading is off."}), 404
-    if not backend.paper.delete_trade(watch_id):
+    if not backend.paper.exclude_trade(watch_id):
         return jsonify({"error": "That trade isn't in the closed record any more."}), 404
-    return jsonify({"deleted": True})
+    return jsonify({"excluded": True})
+
+
+@app.route("/api/paper/trades/<watch_id>/restore", methods=["POST"])
+def api_paper_trade_restore(watch_id):
+    """Count an excluded trade again."""
+    if not backend.paper:
+        return jsonify({"error": "Paper trading is off."}), 404
+    if not backend.paper.exclude_trade(watch_id, excluded=False):
+        return jsonify({"error": "That trade isn't in the closed record any more."}), 404
+    return jsonify({"excluded": False})
 
 
 @app.route("/api/watches/<watch_id>/sell", methods=["POST"])
@@ -642,6 +660,17 @@ if __name__ == "__main__":
         print("WARNING: DASHBOARD_USERNAME/DASHBOARD_PASSWORD are not set "
               "(data/settings.json) - the dashboard has no login. Set them "
               "before running this anywhere but localhost.")
+
+    # systemd stops the service with SIGTERM - on `systemctl restart` and on
+    # the planned restart RuntimeMaxSec makes (DEPLOY.md section 6). Python's
+    # default is to die on the spot, losing the processed URLs and counters
+    # saved since the last periodic save, so a restart re-analysed and
+    # re-alerted the last few articles.
+    def _shutdown(signum, frame):
+        backend.stop()
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _shutdown)
     backend.start()
     try:
         from waitress import serve

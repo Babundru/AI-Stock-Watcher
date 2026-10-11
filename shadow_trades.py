@@ -23,7 +23,9 @@ import os
 import uuid
 
 import config
+import costs
 import markets
+import paper_account
 import strategy
 from local_time import now_local
 
@@ -177,10 +179,11 @@ class ShadowBook:
     def close(self, record, reason, price, benchmark_price=None, now=None):
         """Settle a record whose exit fired. Not saved here, like mark_price."""
         gross = strategy.pct_move(record['direction'], record['entry_price'], price)
+        cost = costs.round_trip_pct(record, size=_nominal_size(record), base_pct=self.cost_pct)
         record.update(
             status='CLOSED', reason=reason, exit_price=price,
             closed_at=(now or now_local()).isoformat(),
-            gross_pct=round(gross, 6), net_pct=round(gross - self.cost_pct, 6),
+            gross_pct=round(gross, 6), cost_pct=round(cost, 6), net_pct=round(gross - cost, 6),
             benchmark_exit=benchmark_price,
             mfe_pct=round(max(record['mfe_pct'], gross), 6),
             mae_pct=round(min(record['mae_pct'], gross), 6),
@@ -228,6 +231,16 @@ class ShadowBook:
         oldest = sorted(closed, key=lambda r: r['closed_at'] or '')[:excess]
         drop = {r['id'] for r in oldest}
         self.records = [r for r in self.records if r['id'] not in drop]
+
+
+def _nominal_size(record):
+    """The position a skipped trade would have been given in a fresh paper
+    account - the size its fixed fees are charged on (costs.py), as it was
+    never really sized."""
+    s = paper_account.settings()
+    stop = record.get('stop_pct') or strategy.max_stop_pct()
+    conv = paper_account.conviction(record.get('confidence'), record.get('impact'))
+    return min(s['budget'] * s['risk_pct'] * conv / stop, s['budget'] * s['max_position_pct'])
 
 
 def _avg(values):

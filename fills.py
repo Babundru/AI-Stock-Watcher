@@ -99,19 +99,26 @@ def quoted_spread(bid, ask, last, estimate=None):
     return spread
 
 
-def _fill(direction, buying, last, quote, in_session, fallback_spread=None):
+def _fill(direction, buying, last, quote, in_session, fallback_spread=None, at_level=False):
     quote = quote or {}
     bid, ask = quote.get('bid'), quote.get('ask')
     estimate = estimate_spread(quote.get('market_cap'), quote.get('currency'), in_session)
     if not quote.get('market_cap') and fallback_spread is not None:
         estimate = fallback_spread
-    spread = quoted_spread(bid, ask, last, estimate)
-    if spread is not None:
+    # A level seen earlier needn't sit inside this moment's quote, so the
+    # quote is then checked against its own middle instead.
+    check = (bid + ask) / 2 if at_level and bid and ask else last
+    spread = quoted_spread(bid, ask, check, estimate)
+    if spread is not None and not at_level:
         price, source = (ask if buying else bid), 'quote'
     else:
-        spread = estimate
+        # `at_level`: the order went through at a price seen earlier (a stop
+        # triggered between two checks), not at this moment's bid or ask -
+        # so only the quote's width is used, around that price.
+        source = 'quote' if spread is not None else 'estimate'
+        if spread is None:
+            spread = estimate
         price = last * (1 + spread / 2) if buying else last * (1 - spread / 2)
-        source = 'estimate'
     return {
         'price': round(price, 6),
         'last': last,
@@ -126,12 +133,16 @@ def entry_fill(direction, last, quote, in_session):
     return _fill(direction, direction != strategy.SHORT, last, quote, in_session)
 
 
-def exit_fill(direction, last, quote, in_session, fallback_spread=None):
+def exit_fill(direction, last, quote, in_session, fallback_spread=None, at_level=False):
     """Close a position: a long sells at the bid, a short buys back at the
     ask. Without a quote or a market cap to go on, `fallback_spread` (the
-    spread paid on the way in) is assumed rather than a generic guess."""
+    spread paid on the way in) is assumed rather than a generic guess.
+
+    `at_level`: `last` is the price an order triggered at earlier - a stop
+    hit between two watch checks - so the fill is half the spread beyond
+    it, not the bid or ask of the moment the check runs."""
     return _fill(direction, direction == strategy.SHORT, last, quote, in_session,
-                 fallback_spread)
+                 fallback_spread, at_level)
 
 
 def _as_datetime(value):

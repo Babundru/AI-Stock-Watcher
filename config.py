@@ -141,6 +141,23 @@ PAPER_TRADING = True
 # flat guess that fits neither.
 PAPER_COST_PCT = 0.002
 
+# What the broker charges per order, in the account's currency (USD) -
+# every trade pays it twice, opening and closing. A percentage can't model
+# it: $1 is 0.1% of a $1,000 position and 4% of a $25 one, and a small
+# account takes plenty of small positions. 0 turns it off. See costs.py.
+PAPER_FEE_PER_ORDER = 1.0
+
+# Currency conversion on a stock not priced in dollars (anything not on a
+# US exchange), as a fraction, charged on the way in and again on the way
+# out. 0.0025 = 0.25% each way, a typical retail figure; 0 for an account
+# that holds the currency already.
+PAPER_FX_FEE_PCT = 0.0025
+
+# A position whose fixed fees (PAPER_FEE_PER_ORDER, both orders) would cost
+# more than this fraction of it is not opened: the fee is a loss it starts
+# with. 0.02 = 2% - with a $1 fee, positions under $100 are refused.
+PAPER_MAX_FEE_PCT = 0.02
+
 # Ticker priced alongside each trade to record what the market did over the
 # same window. Without it there is no telling an analyser that works from a
 # month in which everything went up.
@@ -233,6 +250,13 @@ TRAIL_AFTER_TARGET_MULT = 0.5
 # on the session either way - one fired at 03:00 would close on a stale
 # print regardless of who your broker is.
 EXITS_REGULAR_HOURS_ONLY = True
+
+# A position whose stock has had no price at all for this many of its
+# exchange's sessions (delisted after a takeover, suspended, a ticker Yahoo
+# stopped serving) is closed at its last known price, reason 'no_price',
+# instead of sitting open forever - no exit can fire without a price, the
+# time exit included. A holiday costs one session, hence more than one.
+NO_PRICE_CLOSE_SESSIONS = 2
 
 # The least a position aims for: no target is set closer than this x the
 # stop. Also the entry bar for a stock whose normal daily range couldn't be
@@ -537,6 +561,9 @@ USER_SETTINGS = {
     "PAPER_BUDGET": _FLOAT,
     "PAPER_RISK_PCT": _FLOAT,
     "PAPER_MAX_POSITION_PCT": _FLOAT,
+    "PAPER_FEE_PER_ORDER": _FLOAT,
+    "PAPER_FX_FEE_PCT": _FLOAT,
+    "PAPER_MAX_FEE_PCT": _FLOAT,
 }
 
 # Settings whose value must not be emptied by a blank entry: a blank model

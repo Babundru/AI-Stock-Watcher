@@ -24,7 +24,8 @@ class RulesMixin:
 
     SETTINGS = dict(STOP_LOSS_PCT=0.08, STOP_ATR_MULT=1.5, STOP_MIN_PCT=0.02, MIN_REWARD_RISK=1.2,
                     MIN_MOVE_ATR_MULT=1.2, EXHAUSTED_ATR_MULT=3.0, EXHAUSTED_MAX_ATR_MULT=6.0, AGAINST_NEWS_ATR_MULT=0.5, CONFIRM_ATR_MULT=0.5,
-                    MAX_SHADOW_POSITIONS=20, LET_WINNERS_RUN=True, BREAKEVEN_AT=0.5)
+                    MAX_SHADOW_POSITIONS=20, LET_WINNERS_RUN=True, BREAKEVEN_AT=0.5,
+                    PAPER_FEE_PER_ORDER=0.0, PAPER_FX_FEE_PCT=0.0, PAPER_MAX_FEE_PCT=0.0)
 
     def setUp(self):
         self._saved = {k: getattr(config, k) for k in self.SETTINGS}

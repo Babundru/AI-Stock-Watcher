@@ -80,6 +80,8 @@ def _t(hour, minute=0):
 
 US = "US"
 EUROPE = "Europe"
+# Region of an exchange learned from Yahoo (Sydney, Seoul, Toronto...).
+OTHER = "Other"
 
 # Session times are the continuous-trading hours Yahoo reports for each
 # venue, which is also the window the price feed has real volume in.
@@ -170,6 +172,20 @@ EXCHANGE_PREFIX_SUFFIX = {
 }
 
 
+# Single-letter Yahoo suffixes that are exchanges this module doesn't model
+# rather than share classes: Tokyo ("6594.T") and the TSX Venture ("ABC.V").
+# Without this "6594.T" read as a US class share and was gated on New York's
+# session.
+OTHER_EXCHANGE_LETTERS = frozenset({"T", "V"})
+
+# Exchanges outside MARKETS whose sessions were looked up from Yahoo's own
+# chart metadata (price_lookup.learn_market), by suffix: {"AX": Market}.
+# A ticker from an exchange in neither has no session at all, and no new
+# position opens on it (main.py).
+LEARNED_FILE = "data/exchange_sessions.json"
+_learned = {}
+
+
 def suffix(ticker):
     """The exchange suffix of a Yahoo symbol, without the dot and upper-cased
     ("BMW.DE" -> "DE"), or "" for an unsuffixed (US) one.
@@ -202,13 +218,82 @@ def market_key(ticker):
 def _is_class_share(ticker):
     """"BRK.B" - a dot followed by one letter that is not an exchange."""
     parts = str(ticker or "").rsplit(".", 1)
-    return len(parts) == 2 and len(parts[1]) == 1 and parts[1].isalpha()
+    return (len(parts) == 2 and len(parts[1]) == 1 and parts[1].isalpha()
+            and parts[1].upper() not in OTHER_EXCHANGE_LETTERS)
+
+
+def other_suffix(ticker):
+    """The suffix of a ticker listed on an exchange MARKETS doesn't model
+    ("TLX.AX" -> "AX", "6594.T" -> "T"), or "" for one it does."""
+    if market_key(ticker) is not None:
+        return ""
+    return str(ticker).rsplit(".", 1)[1].upper()
 
 
 def market(ticker):
-    """The Market record for `ticker`, or None when it isn't modelled."""
+    """The Market record for `ticker` - a modelled one, or one whose session
+    was learned from Yahoo - or None when its session is unknown."""
     key = market_key(ticker)
-    return MARKETS.get(key) if key else None
+    if key:
+        return MARKETS.get(key)
+    return _learned.get(other_suffix(ticker))
+
+
+def needs_learning(ticker):
+    """Whether `ticker` is on an exchange whose session is still unknown."""
+    return bool(ticker) and market(ticker) is None
+
+
+def learn(ticker, name, tz, open_at, close_at, save=True):
+    """Record the regular session of `ticker`'s exchange (local times of
+    day, from Yahoo's chart metadata) and save it, so the lookup is made
+    once per exchange rather than once per stock. Returns the Market."""
+    tail = other_suffix(ticker)
+    if not tail:
+        return market(ticker)
+    m = Market(name or tail, OTHER, tz, open_at, close_at, "PAPER_BENCHMARK")
+    _learned[tail] = m
+    if save:
+        _save_learned(LEARNED_FILE)
+    return m
+
+
+def load_learned(path=None):
+    """Read the sessions learned on earlier runs. Called once at startup by
+    the backend - not on import, so the tests see only the built-in table."""
+    import json
+
+    try:
+        with open(path or LEARNED_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return
+    for tail, d in (data or {}).items():
+        try:
+            _learned[tail] = Market(d['name'], OTHER, d['tz'], _parse_hm(d['open']),
+                                    _parse_hm(d['close']), "PAPER_BENCHMARK")
+        except (KeyError, TypeError, ValueError, pytz.UnknownTimeZoneError):
+            continue
+
+
+def _save_learned(path):
+    import json
+    import os
+
+    data = {tail: {'name': m.name, 'tz': m.tz.zone, 'open': m.open_at.strftime('%H:%M'),
+                   'close': m.close_at.strftime('%H:%M')}
+            for tail, m in _learned.items()}
+    try:
+        os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2)
+    except OSError as e:
+        print(f"Error saving learned exchange sessions: {e}")
+
+
+def _parse_hm(text):
+    hour, minute = str(text).split(':')
+    return datetime.time(int(hour), int(minute))
 
 
 def is_european(ticker):

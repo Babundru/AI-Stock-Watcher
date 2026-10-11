@@ -228,6 +228,8 @@
   .chip.cover { background: var(--info-soft); color: var(--info); }
   .chip.sm { height: 20px; padding: 0 7px; font-size: 10px; }
   .chip.owned { background: var(--info-soft); color: var(--info); }
+  .chip.excluded { background: var(--surface-2); color: var(--text-2); }
+  .row-item.excluded > :not(.btn) { opacity: .5; }
   /* Source trust: a tappable chip on each source row. */
   .chip.opinion { background: var(--warn-soft); color: var(--warn); }
   button.chip { border: 0; cursor: pointer; font-family: inherit; }
@@ -742,7 +744,8 @@
             <div class="rows" id="pp-open-body"></div>
           </div>
           <div class="card flush">
-            <div class="card-title">Closed trades <span class="sub">the record, after <span id="pp-cost">0.20%</span> costs</span></div>
+            <div class="card-title">Closed trades <span class="sub">the record, after spreads, fees and <span id="pp-cost">0.20%</span> other costs</span></div>
+            <div class="hint" id="pp-excluded-note" style="display:none; padding:0 16px 8px;"></div>
             <div class="rows" id="pp-closed-body"></div>
           </div>
           <div class="card flush" id="pp-skip-card" style="display:none;">
@@ -948,9 +951,19 @@
         <div class="card">
           <div class="card-title">Paper trading</div>
           <div class="field">
-            <label for="st-cost">Round-trip cost %</label>
+            <label for="st-cost">Other costs %</label>
             <input id="st-cost" type="number" min="0" max="99" step="0.01" inputmode="decimal" style="max-width:180px;">
-            <div class="hint">Spread on both sides plus commission and financing. Subtracted from every paper trade; set it to your broker's real figure before reading the record.</div>
+            <div class="hint">Any percentage your broker charges besides the fees below - commission as a percentage, overnight financing, a CFD markup. The bid-ask spread is already paid in every fill.</div>
+          </div>
+          <div class="field">
+            <label for="st-fee">Fee per order ($)</label>
+            <input id="st-fee" type="number" min="0" max="50" step="0.01" inputmode="decimal" style="max-width:180px;">
+            <div class="hint">Your broker's fixed charge for each buy or sell; every trade pays it twice. Positions too small for it to be worth paying aren't opened.</div>
+          </div>
+          <div class="field">
+            <label for="st-fx-fee">Currency conversion %</label>
+            <input id="st-fx-fee" type="number" min="0" max="5" step="0.01" inputmode="decimal" style="max-width:180px;">
+            <div class="hint">Charged on the way in and again on the way out on any stock not listed in the US. 0 if your account already holds the currency.</div>
           </div>
           <div class="field">
             <label for="st-budget">Paper account budget ($)</label>
@@ -1703,15 +1716,15 @@ async function loadPaper() {
   }));
 
   // Closed trades.
-  const REASONS = {target_hit: 'Target hit', stop_loss: 'Stop-loss', trailing_stop: 'Trailing stop', news_reversal: 'News reversal', horizon_expired: 'Time stop', max_age: 'Age limit', max_postponed: 'Postpone limit', manual: 'Closed manually'};
+  const REASONS = {target_hit: 'Target hit', stop_loss: 'Stop-loss', trailing_stop: 'Trailing stop', news_reversal: 'News reversal', horizon_expired: 'Time stop', max_age: 'Age limit', max_postponed: 'Postpone limit', manual: 'Closed manually', no_price: 'No price'};
   const cb = $('#pp-closed-body');
   const closed = d.closed_recent || [];
   cb.innerHTML = closed.length ? closed.map(t => {
     const isShort = t.direction === 'SHORT';
-    return `<div class="row-item">
+    return `<div class="row-item${t.excluded ? ' excluded' : ''}">
       ${avatar(t.ticker)}
       <div class="row-main">
-        <div class="row-title"><span class="name">${esc(t.ticker)}</span><span class="chip sm ${isShort ? 'short' : 'long'}">${isShort ? 'Short' : 'Long'}</span></div>
+        <div class="row-title"><span class="name">${esc(t.ticker)}</span><span class="chip sm ${isShort ? 'short' : 'long'}">${isShort ? 'Short' : 'Long'}</span>${t.excluded ? '<span class="chip sm excluded">Excluded</span>' : ''}</div>
         <div class="row-sub">${esc(REASONS[t.reason] || t.reason || '')} · ${esc(fmtTime(t.closed_at))}</div>
         <div class="row-sub">${fmtPrice(t.entry_price)} → ${t.exit_price !== null && t.exit_price !== undefined ? fmtPrice(t.exit_price) : '—'}</div>
       </div>
@@ -1719,20 +1732,40 @@ async function loadPaper() {
         <div class="v ${pctClass(t.net_pct)}">${t.pnl_usd !== null && t.pnl_usd !== undefined ? esc(moneySigned(t.pnl_usd)) : pctText(t.net_pct)}</div>
         ${t.pnl_usd !== null && t.pnl_usd !== undefined ? `<div class="s">${pctText(t.net_pct)}</div>` : ''}
       </div>
-      <button class="icon-btn sm plain del" data-del-trade="${esc(t.watch_id)}" data-label="${esc(t.ticker)} ${isShort ? 'short' : 'long'} (closed ${esc(fmtTime(t.closed_at))})" title="Delete from the record" aria-label="Delete the ${esc(t.ticker)} trade from the record">${icon('x')}</button>
+      ${t.excluded
+        ? `<button class="btn ghost sm" data-restore-trade="${esc(t.watch_id)}" title="Count it in the record again" aria-label="Restore the ${esc(t.ticker)} trade to the record">Restore</button>`
+        : `<button class="icon-btn sm plain del" data-del-trade="${esc(t.watch_id)}" data-label="${esc(t.ticker)} ${isShort ? 'short' : 'long'} (closed ${esc(fmtTime(t.closed_at))})" title="Leave out of the record" aria-label="Leave the ${esc(t.ticker)} trade out of the record">${icon('x')}</button>`}
     </div>`;
   }).join('') : '<div class="empty">No closed trades yet.</div>';
   // Out of the record means out of every figure and the graph - they are all
-  // replayed from the ledger. The server keeps an archive copy.
+  // replayed from the counted trades. An excluded trade stays listed, with
+  // what leaving it out changed, and can be restored.
+  const exNote = $('#pp-excluded-note');
+  if (d.excluded_count) {
+    const eff = d.excluded_effect_usd;
+    exNote.textContent = `${d.excluded_count} excluded trade${d.excluded_count === 1 ? '' : 's'} not counted` +
+      (eff !== null && eff !== undefined ? ` - the account is ${moneySigned(eff)} for leaving ${d.excluded_count === 1 ? 'it' : 'them'} out.` : '.');
+    exNote.style.display = '';
+  } else exNote.style.display = 'none';
   cb.querySelectorAll('[data-del-trade]').forEach(b => b.addEventListener('click', async () => {
-    if (!confirm(`Delete the ${b.dataset.label} from the record?\n\nIt will no longer count towards the results, the win rate or the graph.`)) return;
+    if (!confirm(`Leave the ${b.dataset.label} out of the record?\n\nIt will no longer count towards the results, the win rate or the graph. It stays listed, marked excluded, and can be restored.`)) return;
     try {
       const r = await fetch('/api/paper/trades/' + encodeURIComponent(b.dataset.delTrade), {method: 'DELETE'});
       if (!r.ok) {
         const e = await r.json().catch(() => ({}));
-        alert(e.error || `Couldn't delete the trade (the server answered ${r.status}).`);
+        alert(e.error || `Couldn't exclude the trade (the server answered ${r.status}).`);
       }
-    } catch (e) { alert("Couldn't delete the trade: the server could not be reached."); }
+    } catch (e) { alert("Couldn't exclude the trade: the server could not be reached."); }
+    loadPaper();
+  }));
+  cb.querySelectorAll('[data-restore-trade]').forEach(b => b.addEventListener('click', async () => {
+    try {
+      const r = await fetch('/api/paper/trades/' + encodeURIComponent(b.dataset.restoreTrade) + '/restore', {method: 'POST'});
+      if (!r.ok) {
+        const e = await r.json().catch(() => ({}));
+        alert(e.error || `Couldn't restore the trade (the server answered ${r.status}).`);
+      }
+    } catch (e) { alert("Couldn't restore the trade: the server could not be reached."); }
     loadPaper();
   }));
 
@@ -2460,6 +2493,8 @@ function renderSettings(s) {
   $('#st-ollama-url').value = s.OLLAMA_URL || '';
 
   $('#st-cost').value = ((s.PAPER_COST_PCT || 0) * 100).toFixed(2);
+  $('#st-fee').value = +(s.PAPER_FEE_PER_ORDER ?? 1).toFixed(2);
+  $('#st-fx-fee').value = +(((s.PAPER_FX_FEE_PCT ?? 0.0025) * 100).toFixed(3));
   $('#st-budget').value = s.PAPER_BUDGET ?? 1000;
   $('#st-risk').value = +(((s.PAPER_RISK_PCT ?? 0.01) * 100).toFixed(2));
   $('#st-max-position').value = +(((s.PAPER_MAX_POSITION_PCT ?? 0.25) * 100).toFixed(2));
@@ -2495,6 +2530,10 @@ $('#st-save').addEventListener('click', async () => {
   const choice = currentEngineChoice();
   const cost = Number($('#st-cost').value);
   if (!isFinite(cost) || cost < 0 || cost >= 100) { setSettingsMsg('Cost % must be between 0 and 100.', 'err'); return; }
+  const fee = Number($('#st-fee').value);
+  if (!isFinite(fee) || fee < 0 || fee > 50) { setSettingsMsg('The fee per order must be between $0 and $50.', 'err'); return; }
+  const fxFee = Number($('#st-fx-fee').value);
+  if (!isFinite(fxFee) || fxFee < 0 || fxFee > 5) { setSettingsMsg('Currency conversion must be between 0% and 5%.', 'err'); return; }
   const budget = Number($('#st-budget').value);
   if (!isFinite(budget) || budget < 50) { setSettingsMsg('The paper budget must be at least $50.', 'err'); return; }
   const risk = Number($('#st-risk').value);
@@ -2528,6 +2567,8 @@ $('#st-save').addEventListener('click', async () => {
     OLLAMA_NUM_THREADS: isFinite(threads) && threads >= 1 ? threads : 1,
     OLLAMA_URL: $('#st-ollama-url').value.trim(),
     PAPER_COST_PCT: cost / 100,
+    PAPER_FEE_PER_ORDER: fee,
+    PAPER_FX_FEE_PCT: fxFee / 100,
     PAPER_BUDGET: budget,
     PAPER_RISK_PCT: risk / 100,
     PAPER_MAX_POSITION_PCT: maxPosition / 100,

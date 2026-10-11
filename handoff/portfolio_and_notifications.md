@@ -62,9 +62,13 @@ AI's expected move (which had just repeated the headline's "65%").
   (default CRITICAL). `ALLOW_SHORTS` off with `NOTIFY_SHORTS` on sends the
   setup marked "not tracked" and opens no watch.
 - The stock's own exchange must be in its regular session
-  (`strategy.market_open`; an exchange `markets.py` doesn't model counts
-  as open). Out of hours the alert still goes out, but nothing opens and
-  nothing is followed as a skipped trade.
+  (`strategy.market_open`). An exchange `markets.py` doesn't model (Sydney,
+  Seoul, Tokyo, Toronto...) has its hours looked up once from Yahoo's chart
+  metadata (`price_lookup.learn_market` -> `markets.learn`, saved to
+  `data/exchange_sessions.json`, loaded at startup); if that fails nothing
+  opens. Out of hours the alert still goes out, but nothing opens and
+  nothing is followed as a skipped trade. `.T` and `.V` are exchanges, not
+  share classes (`markets.OTHER_EXCHANGE_LETTERS`).
 - One position per ticker; at most `MAX_OPEN_POSITIONS` (20) open.
 - `price_lookup.fetch_context(ticker, published, benchmark=SPY)` (two
   small single-ticker requests each for the stock and for SPY), then
@@ -99,7 +103,19 @@ AI's expected move (which had just repeated the headline's "65%").
 - An alert whose direction contradicts an open position in the same
   ticker closes it first (`news_reversal`).
 
-**Exit** (`strategy.update_exit` from `main.py:_check_watches`):
+**Exit** (`strategy.update_exit_bar` from `main.py:_check_watches`, v8):
+- **Every 1-minute bar** since the last pass is run through the rules
+  (`main._run_bars`), not just the newest price: a stop triggers on a bar's
+  low (a short's high) and fills at the stop's level, or at the bar's open
+  when it gapped past it; a target order likewise. Within a bar the stop is
+  checked before the bar's best price may ratchet it, and a stop raised by
+  the high is then checked against the close. Only finished bars from the
+  stock's own regular session, after the position's opening minute;
+  `last_bar_ts` on the record marks where it got to. The exit is filled
+  half the spread beyond the trigger level (`fills.exit_fill(at_level=True)`),
+  not at the bid/ask of the moment the pass runs.
+- **No exit on a stale price.** Exits only read bars; the stale last close
+  `fetch_prices` falls back to is never acted on.
 - **Stop** always on, stored as `stop_gain` (the stop's level as a gain on
   the position) and mirrored to `stop_loss_price` for the UI. It only
   ratchets up: it trails the best price by the initial distance, jumps to
@@ -112,8 +128,14 @@ AI's expected move (which had just repeated the headline's "65%").
 - **Time exit**: `expires_at` = 15:45 ET on the Nth trading day after the
   opening session (INTRADAY 0, DAYS 3, WEEKS 15; a position opened after
   12:00 ET or at a weekend counts from the next session). Time exits,
-  like `max_age`, only fire while the US regular session is open, so they
-  close on a live price. Nothing is ever postponed.
+  like `max_age`, only fire while the stock's session is open, at its last
+  price from today's session (`last_price` / `last_price_at` on the
+  record); with none yet today they wait. Nothing is ever postponed.
+- **No price at all** for `NO_PRICE_CLOSE_SESSIONS` (2) of its exchange's
+  sessions (delisted after a takeover, suspended, dropped by Yahoo) closes
+  the position at its last known price, reason `no_price`, flagged
+  `exit_price_stale` (`main._time_exit`). Positions from before v8 start
+  that clock from their newest paper mark.
 - Watches from before v2 are upgraded on load (`_upgrade`): an open one
   gets its original stop or the maximum stop, and keeps closing at its
   target.
@@ -124,14 +146,14 @@ AI's expected move (which had just repeated the headline's "65%").
   before a new one can be considered.
 - **Checked every `WATCH_CHECK_INTERVAL`** (5 min, coarser than the news
   scan on purpose - price doesn't need per-minute polling, and it's one
-  batched `price_lookup.fetch_prices` call per check) by `main.py:
+  batched `price_lookup.fetch_bars` call per check) by `main.py:
   _check_watches`, called from inside `_run_loop`. Ratcheted stops are
   saved once per pass.
 - **Close reasons**, all sent through `notifier.notify_sell(...)` (a short's
   are muted when `NOTIFY_SHORTS` is off): `stop_loss`, `trailing_stop`,
   `target_hit` (only for watches without `let_run`), `news_reversal`,
-  `horizon_expired`, and `max_age` - open longer than `MAX_OPEN_DAYS` (30),
-  a safety net a working time exit never reaches. `max_postponed` only
+  `horizon_expired`, `no_price`, and `max_age` - open longer than
+  `MAX_OPEN_DAYS` (30), a safety net a working time exit never reaches. `max_postponed` only
   appears on records from before v2.
 
   A closed watch stays in `data/watches.json` (status `CLOSED`) for the
@@ -184,24 +206,35 @@ kept in the browser's localStorage.
   confidence 60 -> x0.75 .. 100 -> x1.25, CRITICAL x1.15. Capped at
   `PAPER_MAX_POSITION_PCT` (25%, "Maximum per position %" in Settings) of
   the account and at the free cash;
-  under `PAPER_MIN_POSITION` ($20) the trade is refused.
+  under `PAPER_MIN_POSITION` ($20) the trade is refused, and so is one whose
+  fixed fees (2 x `PAPER_FEE_PER_ORDER`) would be more than
+  `PAPER_MAX_FEE_PCT` (2%) of it - with a $1 fee, anything under $100.
 - **Cash**: a position ties its size up until it closes. `main._decide_trade`
   sizes every new trade from the trading account (`PAPER_RISK_PCT`) and, if
   the cash can't cover it, refuses it and follows it as a skipped trade
   (rule `cash`). The other accounts are replays and may skip different ones.
-- **Costs** are charged at entry, so an open position is worth
-  size x (1 + move - cost) and a closed one size x (1 + net_pct).
+- **Costs** (`costs.round_trip_pct`): `PAPER_COST_PCT` + the fixed fee
+  per order on both orders, as a fraction of the size + `PAPER_FX_FEE_PCT`
+  each way for a listing outside the US. Charged at entry, so an open
+  position is worth size x (1 + move - costs - half its spread). The replay
+  costs closed trades the same way from their `gross_pct`, on the size it
+  gave them (`nets`), so the account is under today's rules like its sizes;
+  the ledger's own `net_pct` / `cost_pct` keep what was charged at close.
 - **Marks**: each watch check snapshots the open positions' in-session prices
   (`PaperTrader.record_marks`), so the graphs are marked to market. Thinned
   as they age (every check for a day, hourly for a month, daily after).
 - The entry alert quotes the size and the risk; the exit alert the result in
   money. `py paper_report.py` prints each account.
-- **Deleting a closed trade** (the × on a closed row, dashboard or desktop
-  app; `PaperTrader.delete_trade`) takes it out of the ledger, so it drops
-  out of every figure and the graph at once - they're all replayed. It is
-  appended to `data/paper_trades_deleted.json` first; nothing reads that
-  file, it's there to undo a deletion by hand. Open trades can't be
-  deleted - they're sold or closed by their exits.
+- **Excluding a closed trade** (the × on a closed row, dashboard or
+  desktop app; `PaperTrader.exclude_trade`, `DELETE /api/paper/trades/<id>`)
+  flags it `excluded` in the ledger, so it drops out of every figure and
+  the graph at once - they're all replayed from `PaperTrader.counted()`.
+  It stays listed, marked Excluded, with a Restore button (`POST
+  /api/paper/trades/<id>/restore`), and the overview reports
+  `excluded_count` and `excluded_effect_usd` (equity without them minus
+  equity with them). Trades deleted before this, in
+  `data/paper_trades_deleted.json`, are folded back in as excluded on load
+  and the file renamed `.merged`. Open trades can't be excluded.
 - A replay is only as good as the ledger: trades from before sizing existed
   had no cash limit, so a replay can skip some of them for cash.
 
@@ -210,10 +243,12 @@ kept in the browser's localStorage.
 A signal `strategy.plan_trade` refuses is followed as if it had been
 traded: opened at the context price with the plan's stop and target (the
 plan is sized even when it refuses), run through exactly the exits a real
-watch gets (`main.py:_exit_reason` - `strategy.update_exit`, the time exit
-and `max_age`) in the same `_check_watches` pass and price call, and
+watch gets (`main._run_bars` / `main._time_exit` - the bar-checked stop,
+the time exit, `max_age` and `no_price`) in the same `_check_watches` pass
+and price call, and
 closed silently - never notified. `ShadowBook.summary()` splits the
-results by `skip_rule`: win rate, expectancy after `PAPER_COST_PCT`, alpha
+results by `skip_rule`: win rate, expectancy after costs (`costs.py`, the
+fixed fee on the size the trade would have had), alpha
 vs SPY. That is how to tell whether a rule keeps the app out of losers or
 out of winners - read it before moving any of the `*_ATR_MULT` settings.
 Shown under Paper trading in the dashboard (`GET /api/paper` ->

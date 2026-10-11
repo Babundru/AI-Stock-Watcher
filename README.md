@@ -382,8 +382,18 @@ no wider than `ENTRY_MAX_SPREAD_PCT`. Refused signals are followed as skipped
 trades like any other refusal. Trades from strategy v5 and earlier filled at
 the last trade, however old - compare them with v6, don't pool them.
 
-Set `PAPER_COST_PCT` in `config.py` to your broker's round-trip cost on top of
-the spread (commission, overnight financing, any markup a CFD broker adds).
+Set your broker's charges in `config.py` (or Settings): `PAPER_FEE_PER_ORDER`
+(a fixed fee per order, in dollars), `PAPER_FX_FEE_PCT` (currency conversion,
+each way, on anything not listed in the US) and `PAPER_COST_PCT` (any other
+percentage cost - commission, overnight financing, a CFD markup). A fixed fee
+weighs most on small positions, so a position whose fees would cost more than
+`PAPER_MAX_FEE_PCT` of it isn't opened.
+
+**Stops work like stop orders.** Every 1-minute bar between two watch checks
+is checked, so a dip through the stop that recovered before the check still
+triggers it, and the exit fills at the stop's level (or at the open, after a
+gap) rather than wherever the price was five minutes later. A stock that has
+had no price for two sessions is closed at its last one (`no_price`).
 
 **Give it time.** Below roughly 30 closed trades the figures are noise, and
 the alert filter is deliberately selective (HIGH/CRITICAL, clear sentiment,
@@ -438,7 +448,11 @@ Edit `config.py`:
 | `NOTIFICATIONS_ENABLED` | `True` | Master mute for phone alerts (use the in-app toggle) |
 | `MIN_IMPACT` | `HIGH` | Weakest impact that alerts (use the in-app slider) |
 | `PAPER_TRADING` | `True` | Record every alert's profit/loss to `data/paper_trades.json` |
-| `PAPER_COST_PCT` | `0.002` | Round-trip cost on top of the bid-ask spread (commission, financing), subtracted from every trade |
+| `PAPER_COST_PCT` | `0.002` | Round-trip percentage cost on top of the bid-ask spread and fees (commission, financing), subtracted from every trade |
+| `PAPER_FEE_PER_ORDER` | `1.0` | Broker's fixed fee per order, in dollars; paid opening and closing |
+| `PAPER_FX_FEE_PCT` | `0.0025` | Currency conversion each way on a non-US listing |
+| `PAPER_MAX_FEE_PCT` | `0.02` | Positions whose fixed fees would cost more than this fraction of them aren't opened |
+| `NO_PRICE_CLOSE_SESSIONS` | `2` | Sessions without any price after which a position closes at its last one |
 | `ENTRY_MAX_SPREAD_PCT` | `0.015` | Widest bid-ask spread a position may open across |
 | `ENTRY_MAX_PRICE_AGE_MIN` | `10` | Oldest the last trade may be at entry, in minutes, on top of the exchange's reporting delay |
 | `PAPER_BENCHMARK` | `SPY` | Priced alongside each US trade to measure alpha |

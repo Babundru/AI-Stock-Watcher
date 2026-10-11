@@ -28,6 +28,10 @@ Two things are recorded that the watch itself does not keep:
     reconstructed after the fact, and it is what answers "would a stop loss
     have helped?" retroactively. See stop_loss_study().
 
+Excluding a trade (the dashboard's x) keeps it in the ledger, flagged
+'excluded', and leaves it out of every figure: the record can't quietly get
+better, the dashboard still lists it, and restoring it is one click.
+
 Trades are never trimmed. WatchManager caps watches.json at 200 records
 because it only needs the live ones; the whole point of this file is the
 history, so it grows without bound (a few hundred bytes per trade - years
@@ -38,14 +42,16 @@ import json
 import os
 import datetime
 
+import costs
 import fills
 import paper_account
 from local_time import now_local
 
 LEDGER_FILE = "data/paper_trades.json"
 
-# Closed trades the user deleted from the record (PaperTrader.delete_trade),
-# kept so a deletion can be undone by hand. Nothing reads it.
+# Where deleted trades used to be archived, before an x kept them in the
+# ledger flagged 'excluded' (PaperTrader.exclude_trade). Read once on load,
+# its trades put back as excluded, and renamed out of the way.
 DELETED_FILE = "data/paper_trades_deleted.json"
 
 # Prices of the open positions, snapshotted on every watch check, so the
@@ -90,6 +96,7 @@ class PaperTrader:
         self.cost_pct = cost_pct
         self.benchmark = benchmark
         self.trades = self._load()
+        self._fold_in_deleted()
         # watch_id -> trade. The ledger is never trimmed, and mark_price is
         # called for every open watch on every check, so a linear scan of
         # the whole history each time would grow with the record's age.
@@ -185,44 +192,58 @@ class PaperTrader:
         self.save()
         return True
 
-    def delete_trade(self, watch_id):
-        """Take a closed trade out of the record at the user's request - a
-        trade they don't want counted (a data glitch, a rule since fixed).
-        Every figure is replayed from the ledger, so it drops out of all of
-        them at once.
+    def exclude_trade(self, watch_id, excluded=True):
+        """Leave a closed trade out of the record at the user's request (a
+        data glitch, a rule since fixed) - or, with excluded=False, put it
+        back. Every figure is replayed from the counted trades, so it drops
+        out of (or back into) all of them at once.
 
-        Not destroyed: it is appended to the archive beside the ledger
-        (paper_trades_deleted.json), so a deletion can be undone by moving
-        it back by hand. An open trade is not deleted here - it is still
-        live, and closes through its exits or the Sell button.
+        The trade stays in the ledger, flagged, rather than being removed:
+        the dashboard keeps listing it, with what leaving it out changed, so
+        the record can't improve without that showing. An open trade can't
+        be excluded - it is still live, and closes through its exits or the
+        Sell button.
         """
         trade = self._find(watch_id)
         if not trade or trade['status'] != 'CLOSED':
             return False
+        if excluded:
+            trade['excluded'] = True
+            trade['excluded_at'] = now_local().isoformat()
+        else:
+            trade.pop('excluded', None)
+            trade.pop('excluded_at', None)
+        self.save()
+        return True
+
+    def _fold_in_deleted(self):
+        """Trades deleted before exclusion existed sit in DELETED_FILE beside
+        the ledger: put them back, excluded, and move the file aside."""
         archive = os.path.join(os.path.dirname(self.filename) or '.',
                                os.path.basename(DELETED_FILE))
+        if not os.path.exists(archive):
+            return
         try:
             with open(archive, 'r', encoding='utf-8') as f:
                 deleted = json.load(f)
-            if not isinstance(deleted, list):
-                deleted = []
         except (OSError, ValueError):
-            deleted = []
-        deleted.append(dict(trade, deleted_at=now_local().isoformat()))
+            return
+        known = {t.get('watch_id') for t in self.trades}
+        added = 0
+        for t in deleted if isinstance(deleted, list) else []:
+            if isinstance(t, dict) and t.get('watch_id') not in known:
+                t = dict(t, excluded=True)
+                t['excluded_at'] = t.pop('deleted_at', None) or now_local().isoformat()
+                self.trades.append(t)
+                known.add(t['watch_id'])
+                added += 1
+        if added:
+            self.trades.sort(key=lambda t: t.get('opened_at') or '')
+            self.save()
         try:
-            os.makedirs(os.path.dirname(archive) or '.', exist_ok=True)
-            with open(archive, 'w', encoding='utf-8') as f:
-                json.dump(deleted, f, indent=2)
-        except OSError as e:
-            # Better to keep the trade than to lose it for good.
-            print(f"Error archiving deleted paper trade: {e}")
-            return False
-        # A new list rather than remove(): this runs on a dashboard request
-        # while the scan thread may be looping over the ledger.
-        self.trades = [t for t in self.trades if t is not trade]
-        del self._by_id[watch_id]
-        self.save()
-        return True
+            os.replace(archive, archive + '.merged')
+        except OSError:
+            pass
 
     # --- recording -----------------------------------------------------
 
@@ -300,10 +321,12 @@ class PaperTrader:
         self.save()
         return trade
 
-    def mark_price(self, watch_id, price):
+    def mark_price(self, watch_id, price, low=None, high=None):
         """Note a price observed while the position is open, updating the
-        best and worst it has been. Called from the watch check for every
-        open watch, including the ones that are not resolving.
+        best and worst it has been - from `low` and `high` too when given
+        (the range of the minute bars since the last check). Called from the
+        watch check for every open watch, including the ones that are not
+        resolving.
 
         Deliberately does not close anything. The ledger observes the app's
         strategy; it does not overlay a different one.
@@ -311,9 +334,11 @@ class PaperTrader:
         trade = self._find(watch_id)
         if not trade or trade['status'] != 'OPEN' or not price:
             return
-        move = _pct_move(trade['direction'], trade['entry_price'], price)
-        trade['mfe_pct'] = max(trade['mfe_pct'], move)
-        trade['mae_pct'] = min(trade['mae_pct'], move)
+        for p in (price, low, high):
+            if p:
+                move = _pct_move(trade['direction'], trade['entry_price'], p)
+                trade['mfe_pct'] = max(trade['mfe_pct'], move)
+                trade['mae_pct'] = min(trade['mae_pct'], move)
         trade['price_checks'] += 1
         # Not saved here - the caller saves once after marking every watch,
         # rather than rewriting the file once per open position per check.
@@ -345,7 +370,12 @@ class PaperTrader:
         trade['closed_at'] = watch.get('closed_at') or now_local().isoformat()
         trade['reason'] = watch.get('reason')
         trade['gross_pct'] = round(gross, 6)
-        trade['net_pct'] = round(gross - self.cost_pct, 6)
+        # Fees and currency conversion (costs.py), on the size this
+        # position was opened with.
+        trade['cost_pct'] = round(costs.round_trip_pct(trade, base_pct=self.cost_pct), 6)
+        trade['net_pct'] = round(gross - trade['cost_pct'], 6)
+        if watch.get('exit_price_stale'):
+            trade['exit_price_stale'] = True
         trade['benchmark_exit'] = benchmark_price
 
         if trade.get('benchmark_entry') and benchmark_price:
@@ -375,8 +405,23 @@ class PaperTrader:
 
     # --- reporting -----------------------------------------------------
 
+    def counted(self):
+        """The trades every figure is built from: all but the excluded."""
+        return [t for t in self.trades if not t.get('excluded')]
+
     def closed(self):
-        return [t for t in self.trades if t['status'] == 'CLOSED']
+        return [t for t in self.counted() if t['status'] == 'CLOSED']
+
+    def excluded(self):
+        return [t for t in self.trades if t.get('excluded')]
+
+    def last_mark(self, watch_id):
+        """(epoch seconds, price) of the newest mark of an open position,
+        or (None, None)."""
+        for ts, m in reversed(self.marks):
+            if watch_id in m:
+                return ts, m[watch_id]
+        return None, None
 
     def open_trades(self):
         return [t for t in self.trades if t['status'] == 'OPEN']
@@ -444,7 +489,7 @@ class PaperTrader:
         primary = paper_account.settings()['risk_pct']
         out = []
         for risk in paper_account.risk_levels():
-            acct = paper_account.replay(self.trades, self.cost_pct, risk_pct=risk,
+            acct = paper_account.replay(self.counted(), self.cost_pct, risk_pct=risk,
                                         marks=self.marks, prices=prices, curve=curve)
             acct['primary'] = abs(risk - primary) < 1e-12
             out.append(acct)
@@ -454,7 +499,7 @@ class PaperTrader:
         """Size a trade about to open, in the trading account as it stands:
         {'size', 'risk_usd', 'conviction', 'account', 'cash', 'budget'}, or
         {'size': None, 'reason', ...} when the cash can't cover it."""
-        acct = paper_account.replay(self.trades, self.cost_pct, curve=False)
+        acct = paper_account.replay(self.counted(), self.cost_pct, curve=False)
         s = paper_account.settings()
         got = paper_account.position_size(s['budget'] + acct['realised_pnl'], acct['cash'],
                                           stop_pct, confidence, impact, s)
@@ -480,7 +525,8 @@ class PaperTrader:
                 row['current_price'] = price
                 # Valued at what closing would get: the last trade less half
                 # the spread it opened across.
-                row['unrealised_pct'] = round(gross - self.cost_pct - fills.exit_haircut(t), 6)
+                row['unrealised_pct'] = round(gross - costs.round_trip_pct(t, base_pct=self.cost_pct)
+                                              - fills.exit_haircut(t), 6)
                 # How far this position has come toward the exit that would
                 # close it - the "am I nearly there" number the watch card
                 # cannot show.
@@ -525,12 +571,30 @@ class PaperTrader:
         closed_recent = []
         for t in sorted(self.closed(), key=lambda t: t['closed_at'] or '', reverse=True)[:50]:
             size = primary['sizes'].get(t['watch_id']) if primary else None
-            closed_recent.append(dict(t, position_usd=size,
-                                      pnl_usd=round(size * t['net_pct'], 2) if size else None))
+            net = primary['nets'].get(t['watch_id'], t['net_pct']) if primary else t['net_pct']
+            closed_recent.append(dict(t, position_usd=size, net_pct=net,
+                                      pnl_usd=round(size * net, 2) if size else None))
+        # Excluded trades are listed too, flagged, with what leaving them out
+        # did to the account: the same replay with them counted, so the
+        # difference covers knock-on effects (cash they would have tied up).
+        excluded = self.excluded()
+        excluded_effect = None
+        if excluded and primary:
+            everything = paper_account.replay(self.trades, self.cost_pct,
+                                              risk_pct=primary['risk_pct'], marks=self.marks,
+                                              prices=prices, curve=False)
+            excluded_effect = round(primary['equity'] - everything['equity'], 2)
+            for t in excluded:
+                size = everything['sizes'].get(t['watch_id'])
+                net = everything['nets'].get(t['watch_id'], t['net_pct'])
+                closed_recent.append(dict(t, position_usd=size, net_pct=net,
+                                          pnl_usd=round(size * net, 2) if size else None))
+            closed_recent.sort(key=lambda t: t.get('closed_at') or '', reverse=True)
         for a in accounts:
             # Per-trade detail only the rows above need.
             a.pop('skipped', None)
             a.pop('sizes', None)
+            a.pop('nets', None)
 
         marked = [p['unrealised_pct'] for p in positions
                   if p['unrealised_pct'] is not None]
@@ -544,6 +608,10 @@ class PaperTrader:
             "open_count": len(positions),
             "open_avg_pct": (sum(marked) / len(marked)) if marked else None,
             "closed_recent": closed_recent,
+            "excluded_count": len(excluded),
+            # How much higher (+) or lower the account stands for leaving
+            # the excluded trades out.
+            "excluded_effect_usd": excluded_effect,
         }
 
     def stop_loss_study(self, levels=(0.02, 0.03, 0.05, 0.08, 0.10)):

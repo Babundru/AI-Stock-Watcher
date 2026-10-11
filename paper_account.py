@@ -25,10 +25,16 @@ Sizing (position_size)
   shows the model's confidence is calibrated. The ledger keeps confidence
   per trade so that can be checked, and the nudge widened if it earns it.
 - Capped at PAPER_MAX_POSITION_PCT of the account and at the cash free; a
-  position that would come out under PAPER_MIN_POSITION is refused.
+  position that would come out under PAPER_MIN_POSITION is refused, and so
+  is one so small that the broker's fixed fees (costs.py) would cost more
+  than PAPER_MAX_FEE_PCT of it.
+
+Every trade is costed the same way (costs.py: the fixed fee on the size
+given here, currency conversion, PAPER_COST_PCT), closed ones included -
+the account is the record under today's rules, as its sizes are.
 
 Costs are charged at the entry (the spread is paid the moment a position
-opens), so an open position is valued at size x (1 + move - cost - half its
+opens), so an open position is valued at size x (1 + move - costs - half its
 spread) - its move measured from the fill it opened at, to the last trade,
 less the other half of the spread closing it would pay (fills.exit_haircut)
 - and a closed one at size x (1 + net_pct), the same figure once it closes.
@@ -37,6 +43,7 @@ less the other half of the spread closing it would pay (fills.exit_haircut)
 import datetime
 
 import config
+import costs
 import fills
 import strategy
 
@@ -68,6 +75,7 @@ def settings(risk_pct=None):
         'risk_pct': float(config.PAPER_RISK_PCT if risk_pct is None else risk_pct),
         'max_position_pct': float(config.PAPER_MAX_POSITION_PCT),
         'min_position': float(config.PAPER_MIN_POSITION),
+        'max_fee_pct': float(config.PAPER_MAX_FEE_PCT or 0),
     }
 
 
@@ -87,6 +95,12 @@ def position_size(account, cash, stop_pct, confidence, impact, s):
         return {'size': None, 'conviction': conv,
                 'reason': (f"not enough cash in the ${s['budget']:,.0f} paper account "
                            f"(${max(cash, 0):,.2f} free, ${s['min_position']:,.0f} minimum per position)")}
+    fees = costs.fixed_fees_pct(size)
+    if s.get('max_fee_pct') and fees > s['max_fee_pct']:
+        return {'size': None, 'conviction': conv,
+                'reason': (f"a ${size:,.2f} position is too small for the broker's fees - "
+                           f"${float(config.PAPER_FEE_PER_ORDER):,.2f} an order would cost "
+                           f"{fees * 100:.1f}% of it (at most {s['max_fee_pct'] * 100:.1f}%)")}
     return {'size': round(size, 2), 'risk_usd': round(size * stop, 2), 'conviction': round(conv, 3)}
 
 
@@ -138,7 +152,7 @@ def replay(trades, cost_pct, risk_pct=None, marks=(), prices=None, now=None, cur
     cash = s['budget']
     realised = 0.0
     held = {}          # watch_id -> {'size', 'trade', 'pct'}
-    sizes, skipped = {}, {}
+    sizes, skipped, nets = {}, {}, {}
     points = []
     peak = s['budget']
     max_dd = 0.0
@@ -167,7 +181,7 @@ def replay(trades, cost_pct, risk_pct=None, marks=(), prices=None, now=None, cur
                 if p and price:
                     t = p['trade']
                     p['pct'] = (strategy.pct_move(t['direction'], t['entry_price'], price)
-                                - cost_pct - fills.exit_haircut(t))
+                                - p['cost'] - fills.exit_haircut(t))
                     moved = True
             if moved:
                 point(ts, 'mark', open=len(held))
@@ -185,18 +199,26 @@ def replay(trades, cost_pct, risk_pct=None, marks=(), prices=None, now=None, cur
             cash -= got['size']
             # Worth, the moment it opens, what selling it straight back would
             # get: the whole spread and the cost down.
-            held[wid] = {'size': got['size'], 'trade': t,
-                         'pct': -cost_pct - 2 * fills.exit_haircut(t)}
+            cost = costs.round_trip_pct(t, got['size'], cost_pct)
+            held[wid] = {'size': got['size'], 'trade': t, 'cost': cost,
+                         'pct': -cost - 2 * fills.exit_haircut(t)}
             point(ts, 'open', ticker=t.get('ticker'), dir=t.get('direction'), size=got['size'])
             if curve:
                 held[wid]['point'] = points[-1]
         elif wid in held:
             p = held.pop(wid)
-            pnl = p['size'] * t['net_pct']
+            # Costed like it was sized: under today's rules, on the size the
+            # replay gave it (costs.py) - not with whatever flat cost was
+            # charged when it closed. A trade with no gross recorded keeps
+            # its net.
+            net = (t['gross_pct'] - p['cost'] if t.get('gross_pct') is not None
+                   else t['net_pct'])
+            nets[wid] = round(net, 6)
+            pnl = p['size'] * net
             realised += pnl
             cash += p['size'] + pnl
             point(ts, 'close', ticker=t.get('ticker'), dir=t.get('direction'),
-                  size=p['size'], net_pct=t['net_pct'], pnl=round(pnl, 2))
+                  size=p['size'], net_pct=round(net, 6), pnl=round(pnl, 2))
 
     # Now: open positions at today's prices, where there are any.
     for p in held.values():
@@ -204,7 +226,7 @@ def replay(trades, cost_pct, risk_pct=None, marks=(), prices=None, now=None, cur
         if price:
             t = p['trade']
             p['pct'] = (strategy.pct_move(t['direction'], t['entry_price'], price)
-                        - cost_pct - fills.exit_haircut(t))
+                        - p['cost'] - fills.exit_haircut(t))
     if events:
         point(max(now_ts, events[-1][0]), 'now', open=len(held))
     # The entries of the positions still open, flagged with where they
@@ -231,6 +253,8 @@ def replay(trades, cost_pct, risk_pct=None, marks=(), prices=None, now=None, cur
         'open': len(held),
         'skipped_cash': len(skipped),
         'sizes': sizes,
+        # Each closed trade's return after the costs above, by watch id.
+        'nets': nets,
         'skipped': skipped,
         'curve': points,
     }

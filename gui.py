@@ -1313,20 +1313,28 @@ class StockAppGUI(ctk.CTk):
             self.after(0, self.refresh_paper_view)
 
     def delete_paper_trade(self, watch_id, ticker, when):
-        """The × on a closed paper trade - takes it out of the record, and so
-        out of every figure (PaperTrader.delete_trade, which archives it).
+        """The × on a closed paper trade - leaves it out of every figure
+        (PaperTrader.exclude_trade; it stays listed, and can be restored).
         Through the backend's ledger when there is one: that copy is the one
         that writes, and would otherwise save the trade straight back."""
         if not messagebox.askyesno(
-                "Delete trade",
-                f"Delete the {ticker} trade closed {when} from the record?\n\n"
-                f"It will no longer count towards the results or the win rate."):
+                "Exclude trade",
+                f"Leave the {ticker} trade closed {when} out of the record?\n\n"
+                f"It will no longer count towards the results or the win rate. "
+                f"It stays listed, marked excluded, and can be restored."):
             return
         ledger = self.backend.paper if self.backend and self.backend.paper else self.paper
-        if ledger.delete_trade(watch_id):
-            self.log_queue.put(f"Deleted the {ticker} paper trade from the record")
+        if ledger.exclude_trade(watch_id):
+            self.log_queue.put(f"Excluded the {ticker} paper trade from the record")
         else:
-            messagebox.showerror("Delete trade", "That trade isn't in the closed record any more.")
+            messagebox.showerror("Exclude trade", "That trade isn't in the closed record any more.")
+        self.refresh_paper_view()
+
+    def restore_paper_trade(self, watch_id, ticker):
+        """Count an excluded trade again."""
+        ledger = self.backend.paper if self.backend and self.backend.paper else self.paper
+        if ledger.exclude_trade(watch_id, excluded=False):
+            self.log_queue.put(f"Restored the {ticker} paper trade to the record")
         self.refresh_paper_view()
 
     def _render_paper(self, prices, pending=False):
@@ -1395,7 +1403,7 @@ class StockAppGUI(ctk.CTk):
                          text_color=COLOR_TEXT_MUTE).pack(pady=14)
 
         self._paper_heading("Closed trades",
-                            f"the record, after {data['cost_pct'] * 100:.2f}% costs")
+                            "the record, after spreads, fees and currency conversion")
         if data['closed_recent']:
             for t in data['closed_recent']:
                 self._paper_row(
@@ -1404,9 +1412,17 @@ class StockAppGUI(ctk.CTk):
                     note={'target_hit': "target hit", 'stop_loss': "stop-loss",
                           'trailing_stop': "trailing stop", 'news_reversal': "news reversal",
                           'horizon_expired': "time stop", 'max_age': "age limit",
-                          'manual': "sold manually"
-                          }.get(t.get('reason'), t.get('reason') or ''),
-                    delete_id=t.get('watch_id'))
+                          'manual': "sold manually", 'no_price': "no price"
+                          }.get(t.get('reason'), t.get('reason') or '')
+                    + (" · excluded" if t.get('excluded') else ""),
+                    delete_id=t.get('watch_id'), excluded=bool(t.get('excluded')))
+            if data.get('excluded_count'):
+                effect = data.get('excluded_effect_usd')
+                ctk.CTkLabel(self.paper_scroll, anchor='w', font=UI(10),
+                             text_color=COLOR_TEXT_MUTE,
+                             text=(f"{data['excluded_count']} excluded trade(s) not counted"
+                                   + (f" - the account is ${effect:+,.2f} for leaving them out"
+                                      if effect is not None else ""))).pack(fill='x', padx=6)
         else:
             ctk.CTkLabel(self.paper_scroll, text="No closed trades yet", font=UI(12),
                          text_color=COLOR_TEXT_MUTE).pack(pady=14)
@@ -1447,7 +1463,7 @@ class StockAppGUI(ctk.CTk):
                      text_color=COLOR_TEXT_MUTE).pack(side='left', padx=10)
 
     def _paper_row(self, ticker, direction, entry, exit_price, pct_value, when, note="",
-                   watch_id=None, delete_id=None):
+                   watch_id=None, delete_id=None, excluded=False):
         is_short = direction == 'SHORT'
         accent = COLOR_DANGER if is_short else COLOR_SUCCESS
         row = ctk.CTkFrame(self.paper_scroll, fg_color=COLOR_PANEL, corner_radius=RADIUS,
@@ -1477,8 +1493,14 @@ class StockAppGUI(ctk.CTk):
                           fg_color=COLOR_ACCENT_SOFT, border_width=0,
                           text_color=COLOR_ACCENT, hover_color=COLOR_PANEL_HI,
                           corner_radius=RADIUS_SM, font=UI(10, "bold")).pack(side='right', padx=(6, 12))
-        # A closed trade (delete_id given) can be taken out of the record.
-        if delete_id:
+        # A closed trade (delete_id given) can be left out of the record -
+        # or, once it is, counted again.
+        if delete_id and excluded:
+            ctk.CTkButton(row, text="Restore", width=60, height=26, fg_color="transparent",
+                          text_color=COLOR_TEXT_MUTE, hover_color=COLOR_PANEL_HI, font=UI(10),
+                          command=lambda wid=delete_id, t=ticker:
+                              self.restore_paper_trade(wid, t)).pack(side='right', padx=(6, 12))
+        elif delete_id:
             ctk.CTkButton(row, text="×", width=30, height=26, fg_color="transparent",
                           text_color=COLOR_TEXT_MUTE, hover_color=COLOR_PANEL_HI, font=UI(16),
                           command=lambda wid=delete_id, t=ticker, w=when:

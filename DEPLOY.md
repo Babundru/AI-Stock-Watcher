@@ -162,6 +162,15 @@ WorkingDirectory=/home/<your-user>/stocks-ai
 ExecStart=/home/<your-user>/stocks-ai/venv/bin/python server.py
 Restart=on-failure
 RestartSec=30
+# Log lines reach journald as they are written. Block-buffered, they came
+# out in bursts stamped with the time of the flush, not of the event.
+Environment=PYTHONUNBUFFERED=1
+# Planned restart every two days. The process grows slowly with uptime
+# (October 2026: past MemoryHigh after 2.7-4.6 days, killed at ~4.5 - see
+# handoff/incidents.md); restarting well before that keeps the box healthy.
+# Reaching the limit counts as a failure, so Restart=on-failure brings it
+# back; server.py saves its state on the SIGTERM first.
+RuntimeMaxSec=2d
 
 # THE IMPORTANT PART on a 1GB VM. Without a cap, this process growing past
 # what the box has does not kill *this* service - it takes down sshd,
@@ -171,6 +180,11 @@ RestartSec=30
 MemoryAccounting=yes
 MemoryHigh=420M
 MemoryMax=550M
+# MemoryMax caps RAM only, not swap: in October 2026 the process went on into
+# zram (374M RAM + 406M swap) until the whole VM ran out and thrashed for ~19
+# hours before the kernel killed it. Capping swap makes the cgroup kill this
+# service instead, in minutes.
+MemorySwapMax=100M
 OOMPolicy=stop
 
 # Let sshd and tailscaled win every contest for CPU and disk. Losing a scan
@@ -187,8 +201,9 @@ limit; `MemoryMax` is the hard kill. Confirm both took effect - a typo here
 silently gives you no protection at all:
 
 ```bash
-systemctl show stocks-ai -p MemoryHigh -p MemoryMax -p OOMPolicy
+systemctl show stocks-ai -p MemoryHigh -p MemoryMax -p MemorySwapMax -p OOMPolicy -p RuntimeMaxUSec
 systemctl status stocks-ai | grep -i memory      # shows live usage
+journalctl -u stocks-ai | grep "Memory in use"   # the app's own reading, once per scan
 ```
 
 ```bash

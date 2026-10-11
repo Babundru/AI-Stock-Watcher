@@ -36,8 +36,11 @@ def trade(wid, opened, closed=None, net=None, stop=0.04, confidence=80, impact="
     return t
 
 
+# Fees off: these tests are about sizing and the replay; costs.py's fees
+# are tested on their own (FeeTest).
 SETTINGS = dict(PAPER_BUDGET=1000.0, PAPER_RISK_PCT=0.01,
-                PAPER_MAX_POSITION_PCT=0.25, PAPER_MIN_POSITION=20.0)
+                PAPER_MAX_POSITION_PCT=0.25, PAPER_MIN_POSITION=20.0,
+                PAPER_FEE_PER_ORDER=0.0, PAPER_FX_FEE_PCT=0.0, PAPER_MAX_FEE_PCT=0.0)
 
 
 class SizingTest(unittest.TestCase):
@@ -191,31 +194,46 @@ class LedgerTest(unittest.TestCase):
         self.assertEqual(len(data['accounts']), 1)
         self.assertNotIn('sizes', data['accounts'][0])
 
-    def test_a_deleted_trade_drops_out_of_every_figure_and_is_archived(self):
+    def test_an_excluded_trade_drops_out_of_every_figure_but_stays_listed(self):
         self.paper.trades = [trade("win", 0, 2, 0.05, ticker="A"),
                              trade("bad", 3, 5, -0.55, ticker="B")]
         self.paper._by_id = {t['watch_id']: t for t in self.paper.trades}
         self.assertEqual(self.paper.stats()['trades'], 2)
 
-        self.assertTrue(self.paper.delete_trade("bad"))
+        self.assertTrue(self.paper.exclude_trade("bad"))
         self.assertEqual(self.paper.stats()['trades'], 1)
-        self.assertEqual([t['ticker'] for t in self.paper.overview({})['closed_recent']], ["A"])
         self.assertGreater(self.paper.accounts(curve=False)[0]['equity'], 1000)
-        # Gone from the saved ledger, kept in the archive beside it.
+        data = self.paper.overview({})
+        # Still listed, flagged, with what leaving it out did to the account.
+        self.assertEqual([(t['ticker'], bool(t.get('excluded'))) for t in data['closed_recent']],
+                         [("B", True), ("A", False)])
+        self.assertEqual(data['excluded_count'], 1)
+        # Sized after the win: (1000 + 250 x 5%) x 1% / 4% = 253.125.
+        self.assertAlmostEqual(data['excluded_effect_usd'], round(253.125 * 0.55, 2))
+        # Kept in the saved ledger, and put back with one call.
         self.paper.reload()
-        self.assertEqual([t['watch_id'] for t in self.paper.trades], ["win"])
-        with open(os.path.join(os.path.dirname(self.paper.filename),
-                               'paper_trades_deleted.json'), encoding='utf-8') as f:
-            archived = json.load(f)
-        self.assertEqual([t['watch_id'] for t in archived], ["bad"])
-        self.assertIn('deleted_at', archived[0])
-        self.assertFalse(self.paper.delete_trade("bad"))
+        self.assertEqual([t['watch_id'] for t in self.paper.trades], ["win", "bad"])
+        self.assertTrue(self.paper.exclude_trade("bad", excluded=False))
+        self.assertEqual(self.paper.stats()['trades'], 2)
+        self.assertEqual(self.paper.overview({})['excluded_count'], 0)
 
-    def test_an_open_trade_is_not_deleted(self):
+    def test_trades_deleted_before_exclusion_come_back_excluded(self):
+        folder = os.path.dirname(self.paper.filename)
+        self.paper.trades = [trade("win", 0, 2, 0.05, ticker="A")]
+        self.paper.save()
+        with open(os.path.join(folder, 'paper_trades_deleted.json'), 'w', encoding='utf-8') as f:
+            json.dump([dict(trade("bad", 3, 5, -0.55, ticker="B"), deleted_at=at(6))], f)
+        paper = PaperTrader(filename=self.paper.filename)
+        self.assertEqual([(t['watch_id'], bool(t.get('excluded'))) for t in paper.trades],
+                         [("win", False), ("bad", True)])
+        self.assertEqual(paper.stats()['trades'], 1)
+        self.assertFalse(os.path.exists(os.path.join(folder, 'paper_trades_deleted.json')))
+
+    def test_an_open_trade_is_not_excluded(self):
         self.paper.trades = [trade("a", 0)]
         self.paper._by_id = {"a": self.paper.trades[0]}
-        self.assertFalse(self.paper.delete_trade("a"))
-        self.assertEqual(len(self.paper.trades), 1)
+        self.assertFalse(self.paper.exclude_trade("a"))
+        self.assertFalse(self.paper.trades[0].get('excluded'))
 
 
 

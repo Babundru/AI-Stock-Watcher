@@ -140,6 +140,9 @@ class StockAppBackend:
         self.notifier = Notifier()
         self.portfolio_mgr = portfolio_mgr or PortfolioManager()
         self.watch_mgr = WatchManager()
+        # Trading hours of exchanges outside markets.py's table, looked up
+        # from Yahoo on earlier runs (price_lookup.learn_market).
+        markets.load_learned()
         # Passive record of every watch's round trip, for judging whether the
         # alerts are actually worth acting on. Changes nothing about how the
         # app behaves - see paper_trader.py.
@@ -565,6 +568,10 @@ class StockAppBackend:
                 rss = _process_rss_mb()
                 if rss is not None:
                     self.log(f"   💾 Memory in use: {rss:.0f} MB")
+                    # Also to stdout, i.e. journald on the VM: the dashboard's
+                    # log is in memory only and gone after the restart a
+                    # memory problem ends in - the one time it is needed.
+                    print(f"Memory in use: {rss:.0f} MB", flush=True)
 
                 # --- SCHEDULER ---
                 # Longer at weekends, when the market is shut. The next
@@ -902,8 +909,16 @@ class StockAppBackend:
         # on a pre-market print after a 60% crash, rallied through its 8% stop
         # within minutes, and the stop could first fire at 09:35, at -55%.
         # Not followed as a skipped trade either, since it would open on that
-        # same print. An exchange markets.py doesn't model (None) trades as before.
-        if strategy.market_open(ticker) is False:
+        # same print. An exchange markets.py doesn't model has its hours
+        # looked up from Yahoo first; one whose hours can't be found isn't
+        # traded at all - there would be no telling when its stop works.
+        if markets.needs_learning(ticker):
+            price_lookup.learn_market(ticker)
+        session = strategy.market_open(ticker)
+        if session is None:
+            return no(f"{ticker} is listed on an exchange whose trading hours couldn't be "
+                      f"found - no position without them")
+        if session is False:
             return no(f"{ticker}'s market is closed - positions only open during its "
                       f"regular session")
         if direction == SHORT:
@@ -1032,7 +1047,7 @@ class StockAppBackend:
             article.get('published_ts'))
         return fill
 
-    def _exit_fill(self, position, price, quote=None):
+    def _exit_fill(self, position, price, quote=None, at_level=False):
         """The price closing `position` would get: the bid for a long, the
         ask for a short (fills.exit_fill), from a fresh quote unless one is
         given. `price` is the last trade the exit fired on."""
@@ -1040,7 +1055,7 @@ class StockAppBackend:
             quote = price_lookup.fetch_quote(position['ticker'])
         return fills.exit_fill(position.get('direction', LONG), price, quote,
                                strategy.market_open(position['ticker']),
-                               fallback_spread=position.get('spread_pct'))
+                               fallback_spread=position.get('spread_pct'), at_level=at_level)
 
     def _follow_skipped(self, ticker, company, direction, impact, horizon, confidence,
                         trust, title, url, context, plan, fill=None):
@@ -1082,12 +1097,15 @@ class StockAppBackend:
             self._close_position(watch, 'news_reversal', price,
                                  prices.get(benchmark), now_local())
 
-    def _close_position(self, watch, reason, price, benchmark_price, now, quote=None):
+    def _close_position(self, watch, reason, price, benchmark_price, now, quote=None,
+                        at_level=False):
         """Close a watch, record the paper trade and send the exit signal.
         `price` is the last trade the exit fired on; the position closes at
-        the side of the quote a real order would hit (fills.py). Returns the
-        exit price, or None if the watch was no longer open."""
-        fill = self._exit_fill(watch, price, quote)
+        the side of the quote a real order would hit (fills.py) - or, with
+        `at_level` (a stop triggered between two checks), half the spread
+        beyond `price`. Returns the exit price, or None if the watch was no
+        longer open."""
+        fill = self._exit_fill(watch, price, quote, at_level)
         price = fill['price']
         closed = self.watch_mgr.close_watch(watch['id'], reason, price)
         if not closed:
@@ -1180,20 +1198,34 @@ class StockAppBackend:
         return sold
 
     def _check_watches(self):
-        """Check every open watch's current price against its exits and close
-        + notify any that fire - a sell signal for longs, a buy-back signal
-        for shorts. Skipped trades (shadow_trades.py) go through the same
-        exits in the same pass, silently. The rules are in strategy.py."""
+        """Check every open watch against its exits and close + notify any
+        that fire - a sell signal for longs, a buy-back signal for shorts.
+        Skipped trades (shadow_trades.py) go through the same exits in the
+        same pass, silently. The rules are in strategy.py.
+
+        Every 1-minute bar since the last pass is checked, not only the
+        newest price: a stop order is triggered by any trade through its
+        level, and fills there (strategy.update_exit_bar). Only bars from
+        the stock's own regular session count, and only bars at all - the
+        stale close price_lookup falls back to when the minute chart has
+        nothing is never acted on. A position that gets no price for
+        config.NO_PRICE_CLOSE_SESSIONS sessions is closed at its last one.
+        """
         open_watches = self.watch_mgr.get_open_watches()
         skipped = self.shadows.open_records() if self.shadows else []
         if not open_watches and not skipped:
             return
 
+        tickers = sorted({w['ticker'] for w in open_watches} | {s['ticker'] for s in skipped})
+        # An exchange markets.py doesn't model has its hours looked up from
+        # Yahoo once (price_lookup.learn_market); until then it has none.
+        for ticker in tickers:
+            if markets.needs_learning(ticker):
+                price_lookup.learn_market(ticker)
         # Each position is gated on its own exchange's session, not on New
         # York's: a London holding is managed 08:00-16:30 London time, of
         # which New York is open for barely an hour and a half.
-        sessions = {t: strategy.market_open(t)
-                    for t in {w['ticker'] for w in open_watches} | {s['ticker'] for s in skipped}}
+        sessions = {t: strategy.market_open(t) for t in tickers}
         if open_watches:
             # Said plainly, because "checking for exit signals" overnight
             # would read as "no exit was due" when in fact none could fire.
@@ -1207,71 +1239,77 @@ class StockAppBackend:
             else:
                 state = "marking prices only - exits wait for the open"
             self.log(f"👀 {len(open_watches)} open watch(es): {state}")
-        # One batched price call for all of it: skipped trades ride along
-        # with the real positions instead of costing requests of their own,
-        # and so does each market's benchmark - two at most, and only the
-        # ones an open position is actually measured against.
-        tickers = list(sessions)
+        # One batched call for all of it: skipped trades ride along with the
+        # real positions instead of costing requests of their own, and so
+        # does each market's benchmark - two at most, and only the ones an
+        # open position is actually measured against.
         benchmarks = {t: markets.benchmark_for(t) for t in tickers} if self.paper else {}
-        tickers += sorted(set(benchmarks.values()))
-        prices = price_lookup.fetch_prices(tickers)
+        bars = price_lookup.fetch_bars(tickers + sorted(set(benchmarks.values())))
         now = now_local()
         cost = self.paper.cost_pct if self.paper else config.PAPER_COST_PCT
 
         def benchmark_price_for(ticker):
-            return prices.get(benchmarks[ticker]) if self.paper else None
+            rows = bars.get(benchmarks[ticker]) if self.paper else None
+            return rows[-1][4] if rows else None
 
         # This pass's in-session prices of the open positions, for the paper
         # account's marked-to-market graph (PaperTrader.record_marks).
         marks = {}
         for watch in open_watches:
-            price = prices.get(watch['ticker'])
-            if not price:
-                continue
-            if sessions[watch['ticker']] is not False:
-                marks[watch['id']] = price
+            ticker = watch['ticker']
+            self._seed_last_price(watch)
+            seen = self._run_bars(watch, bars.get(ticker) or [], now, cost)
+            if seen['close'] is not None:
+                if seen['in_session']:
+                    marks[watch['id']] = seen['close']
+                # Note how far this position has run either way before
+                # deciding whether it resolves - the worst point a trade
+                # passed through is what a later stop-loss study needs, and
+                # it is unrecoverable if not captured live.
+                if self.paper:
+                    self.paper.mark_price(watch['id'], seen['close'], seen['low'], seen['high'])
+            if seen['reached'] and not seen['reason']:
+                self._notify_target_reached(watch, seen['close'])
 
-            # Note how far this position has run either way before deciding
-            # whether it resolves - the worst point a trade passed through is
-            # what a later stop-loss study needs, and it is unrecoverable if
-            # not captured live.
-            if self.paper:
-                self.paper.mark_price(watch['id'], price)
-
-            reason, target_reached = self._exit_reason(
-                watch, price, now, sessions[watch['ticker']], cost)
+            reason, price, at_level = seen['reason'], seen['price'], True
+            if not reason:
+                reason, price, at_level = self._time_exit(watch, now, sessions[ticker])
             if reason == 'max_age':
-                self.log(f"  📅 {watch['company']} ({watch['ticker']}) open past the age "
+                self.log(f"  📅 {watch['company']} ({ticker}) open past the age "
                          f"limit - closing at {price:.2f}")
-            if target_reached and not reason:
-                self._notify_target_reached(watch, price)
+            elif reason == 'no_price':
+                self.log(f"  ⚠ {watch['company']} ({ticker}) has had no price for "
+                         f"{config.NO_PRICE_CLOSE_SESSIONS}+ sessions - closing at its last, "
+                         f"{price:.2f}")
             if reason:
-                self._close_position(watch, reason, price,
-                                     benchmark_price_for(watch['ticker']), now)
+                self._close_position(watch, reason, price, benchmark_price_for(ticker), now,
+                                     at_level=at_level)
 
         for record in skipped:
-            price = prices.get(record['ticker'])
-            if not price:
-                continue
-            self.shadows.mark_price(record, price)
-            reason, _ = self._exit_reason(record, price, now, sessions[record['ticker']], cost)
+            ticker = record['ticker']
+            seen = self._run_bars(record, bars.get(ticker) or [], now, cost)
+            if seen['close'] is not None:
+                for p in (seen['low'], seen['high'], seen['close']):
+                    self.shadows.mark_price(record, p)
+            reason, price = seen['reason'], seen['price']
+            if not reason:
+                reason, price, _ = self._time_exit(record, now, sessions[ticker])
             if reason:
                 # Out at the other side of the spread it went in across -
                 # assumed from the entry rather than a quote request per
                 # skipped trade. Records from before fills were modelled
                 # went in at the last trade and come out at it too.
                 if record.get('spread_pct') is not None:
-                    price = fills.exit_fill(record['direction'], price, {},
-                                            sessions[record['ticker']],
+                    price = fills.exit_fill(record['direction'], price, {}, sessions[ticker],
                                             fallback_spread=record['spread_pct'])['price']
-                self.shadows.close(record, reason, price,
-                                   benchmark_price_for(record['ticker']), now)
-                self.log(f"  👻 Skipped trade {record['ticker']} ({record['skip_rule']}) would have "
+                self.shadows.close(record, reason, price, benchmark_price_for(ticker), now)
+                self.log(f"  👻 Skipped trade {ticker} ({record['skip_rule']}) would have "
                          f"closed at {price:.2f}: {record['net_pct'] * 100:+.2f}% after costs ({reason})")
 
-        # One write per file for the whole pass: update_exit and mark_price
-        # only mutate in memory, so without this every still-open position's
-        # ratcheted stop and excursions would be lost on restart.
+        # One write per file for the whole pass: the exit rules and
+        # mark_price only mutate in memory, so without this every
+        # still-open position's ratcheted stop and excursions would be lost
+        # on restart.
         if open_watches:
             self.watch_mgr.save()
             if self.paper:
@@ -1288,46 +1326,109 @@ class StockAppBackend:
         # stays resident until the next scan finishes.
         _release_memory()
 
+    def _seed_last_price(self, watch):
+        """A position opened before last prices were kept on it starts from
+        its newest mark, so the no-price clock doesn't start at its entry."""
+        if watch.get('last_price_at') or not self.paper:
+            return
+        ts, price = self.paper.last_mark(watch['id'])
+        if ts:
+            watch['last_price'] = price
+            watch['last_price_at'] = datetime.datetime.fromtimestamp(
+                ts, datetime.timezone.utc).isoformat()
+
     @staticmethod
-    def _exit_reason(position, price, now, market_open, cost):
-        """Ratchet a position's stop from `price` and say which exit fires,
-        if any: (reason or None, target_just_reached). The same rules for a
-        real position and a skipped trade.
+    def _run_bars(position, rows, now, cost):
+        """Put the 1-minute bars `position` hasn't seen yet through its exit
+        rules, oldest first, stopping at the first exit. Mutates `position`
+        (stop ratchet, last_bar_ts, last_price, last_price_at).
 
-        `market_open` is this position's own exchange's session - True,
-        False, or None when the exchange isn't one markets.py models, in
-        which case there is nothing to wait for and the exits run as they
-        did before any of them were gated.
+        Only finished bars are used (the newest is usually still forming),
+        and only ones from after the minute the position opened in - the
+        rest of that minute traded before it existed. When the exits are
+        gated on the session (config.EXITS_REGULAR_HOURS_ONLY) only bars from
+        the stock's own regular session move the stop or fire it: outside it
+        they are a handful of shares at a spread no real exit would cross,
+        and an overnight gap is still there at the open - the first price
+        the position could really have got.
 
-        Every exit waits for that regular session - see
-        config.EXITS_REGULAR_HOURS_ONLY. Prices come from the 1-minute
-        chart with prepost=True, so outside it (09:30-16:00 ET in New York,
-        09:00-17:30 CET in Frankfurt) they are prints - often a handful of
-        shares at a spread no real exit would have crossed. Acting on one
-        records a fill nobody could have got: a stop "hit" at 3am on a
-        single thin print goes into the ledger as fact, and the ledger then
-        measures the quote feed rather than the strategy.
+        Returns {'reason', 'price' (the exit's trigger level), 'reached'
+        (target just reached), 'close', 'low', 'high' (of the bars seen),
+        'in_session' (whether they were from the session)}.
+        """
+        out = {'reason': None, 'price': None, 'reached': False, 'close': None,
+               'low': None, 'high': None, 'in_session': False}
+        now_ts = now.timestamp()
+        after = position.get('last_bar_ts')
+        if after is None:
+            # Never checked against bars: from the end of the opening minute,
+            # or - a position older than that - the last pass's worth.
+            opened = _parse_time(position.get('opened_at'), now).timestamp()
+            after = max(opened // 60 * 60, now_ts - 2 * WATCH_CHECK_INTERVAL)
+        gated = config.EXITS_REGULAR_HOURS_ONLY
+        ticker = position['ticker']
+        if not position.get('last_price_at'):
+            # Kept from the first pass on: the newest session price there is,
+            # so a quiet stock isn't taken for one with no price at all.
+            for ts, o, h, l, c in reversed(rows):
+                when = datetime.datetime.fromtimestamp(ts, datetime.timezone.utc)
+                if ts + 60 <= now_ts and strategy.market_open(ticker, when) is not False:
+                    position['last_price'] = c
+                    position['last_price_at'] = when.isoformat()
+                    break
+        for ts, o, h, l, c in rows:
+            if ts <= after or ts + 60 > now_ts:
+                continue
+            position['last_bar_ts'] = ts
+            when = datetime.datetime.fromtimestamp(ts, datetime.timezone.utc)
+            in_session = strategy.market_open(ticker, when) is not False
+            if gated and not in_session:
+                out.update(close=c, in_session=False)
+                continue
+            out['low'] = l if out['low'] is None else min(out['low'], l)
+            out['high'] = h if out['high'] is None else max(out['high'], h)
+            out.update(close=c, in_session=True)
+            position['last_price'] = c
+            position['last_price_at'] = when.isoformat()
+            reason, level, reached = strategy.update_exit_bar(position, (o, h, l, c), cost)
+            out['reached'] = out['reached'] or reached
+            if reason:
+                position['last_price'] = level
+                out.update(reason=reason, price=level)
+                break
+        return out
 
-        Nothing is lost by waiting. An overnight gap is still there at the
-        open, and that is the first moment it could have been traded, so
-        the first in-session check exits at the price the position would
-        really have got. The stop's ratchet is held back along with the
-        exit, not merely the exit itself: letting an after-hours spike
-        raise peak_gain would pull the trailing stop up to a level that
-        never traded, and stop the position out against it at the open.
+    @staticmethod
+    def _time_exit(position, now, market_open):
+        """The exits that don't need the price to do anything: the time
+        exit, the age limit and - when the stock has had no price for
+        config.NO_PRICE_CLOSE_SESSIONS sessions - 'no_price'. Returns
+        (reason, price, at_level) or (None, None, None).
 
         Time exits are gated on the session whoever your broker is - one
-        fired at 03:00 would close on a stale print either way.
+        fired at 03:00 would close on a stale print either way. They close
+        at the stock's last price from today's session; with none yet today
+        (a holiday markets.py doesn't model, a halt) they wait. A price that
+        never comes - a takeover closed and the stock delisted, a ticker
+        Yahoo dropped - would otherwise hold the position open forever, as
+        no exit at all can fire without one: after enough sessions it is
+        closed at the last price it had, flagged exit_price_stale.
         """
-        if config.EXITS_REGULAR_HOURS_ONLY and market_open is False:
-            return None, False
-        reason, target_reached = strategy.update_exit(position, price, cost)
-        if not reason and market_open is not False:
+        if market_open is False:
+            return None, None, None
+        last = position.get('last_price')
+        last_at = _parse_time(position.get('last_price_at') or position.get('opened_at'), now)
+        if last and strategy.session_started(position['ticker'], last_at, now):
             if WatchManager.over_age_limit(position, now):
-                reason = 'max_age'
-            elif now >= _parse_time(position.get('expires_at'), now):
-                reason = 'horizon_expired'
-        return reason, target_reached
+                return 'max_age', last, False
+            if now >= _parse_time(position.get('expires_at'), now):
+                return 'horizon_expired', last, False
+            return None, None, None
+        missed = strategy.sessions_without_price(position['ticker'], last_at, now)
+        if missed >= config.NO_PRICE_CLOSE_SESSIONS:
+            position['exit_price_stale'] = True
+            return 'no_price', last or position['entry_price'], True
+        return None, None, None
 
     def _notify_target_reached(self, watch, price):
         """A let-it-run position reached its target: it stays open, with its

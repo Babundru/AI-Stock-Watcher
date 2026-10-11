@@ -80,7 +80,16 @@ import markets
 # (a pre-market entry had no working stop until the open), and a move past
 # config.EXHAUSTED_MAX_ATR_MULT daily ranges is exhausted whatever the
 # expected move - v6 shorted QURE after a 60% pre-market crash and lost 55%.
-STRATEGY_VERSION = "v7"
+# v8: stops (and targets) are checked against every 1-minute bar between two
+# watch checks and fill at their own level, or at the open past it after a
+# gap - v7 saw one last trade every five minutes, missing dips a real stop
+# order would have caught and filling the ones it did catch wherever the
+# price had got to by then. Exits only ever act on a bar from the session,
+# never on the stale close the price lookup falls back to. Each trade also
+# pays a fixed fee per order and a currency-conversion fee (costs.py) on
+# top of PAPER_COST_PCT, and positions open only on an exchange whose
+# session is known (markets.py, learned from Yahoo for ones it doesn't model).
+STRATEGY_VERSION = "v8"
 LEGACY_STRATEGY = "v1"
 
 # Normal daily range assumed for a stock whose ATR couldn't be worked out.
@@ -338,6 +347,34 @@ def time_exit_at(opened_at, horizon, ticker=None):
     return exit_local.astimezone(opened_at.tzinfo)
 
 
+def sessions_without_price(ticker, last_price_at, now):
+    """How many of `ticker`'s exchange's sessions have closed since the day
+    of its last price (`last_price_at`, tz-aware) without one - weekdays
+    whose close is past by `now`. Holidays count, not being modelled, which
+    is why config.NO_PRICE_CLOSE_SESSIONS is more than one."""
+    market = markets.market(ticker) or markets.MARKETS[markets.US]
+    day = last_price_at.astimezone(market.tz).date()
+    today = now.astimezone(market.tz).date()
+    count = 0
+    while day < today:
+        day += datetime.timedelta(days=1)
+        if day.weekday() > 4:
+            continue
+        close = market.tz.localize(datetime.datetime.combine(day, market.close_at))
+        if close <= now:
+            count += 1
+    return count
+
+
+def session_started(ticker, when, now):
+    """Whether `when` falls in today's session on `ticker`'s exchange or
+    later - a price from today, not one left over from an earlier day."""
+    market = markets.market(ticker) or markets.MARKETS[markets.US]
+    local_now = now.astimezone(market.tz)
+    opens = market.tz.localize(datetime.datetime.combine(local_now.date(), market.open_at))
+    return when >= opens
+
+
 def _next_trading_day(day):
     day += datetime.timedelta(days=1)
     while day.weekday() > 4:
@@ -406,5 +443,63 @@ def update_exit(watch, price, cost_pct=0.0):
     if gain <= stop:
         # A stop at or above break-even is protecting a profit, not
         # cutting a loss - reported separately so the record shows which.
-        return ('trailing_stop' if stop >= 0 else 'stop_loss'), target_just_reached
+        return _stop_reason(stop), target_just_reached
     return None, target_just_reached
+
+
+def _stop_reason(stop):
+    return 'trailing_stop' if stop >= 0 else 'stop_loss'
+
+
+def update_exit_bar(watch, bar, cost_pct=0.0):
+    """update_exit for one 1-minute bar (open, high, low, close) instead of
+    one price: what a resting stop order (and, without LET_WINNERS_RUN, a
+    target limit order) would have done during that minute. Mutates `watch`
+    like update_exit.
+
+    Returns (reason or None, exit price or None, target_just_reached). The
+    exit price is the level the order was triggered at - the stop's or the
+    target's price - or the bar's open when the price gapped straight past
+    it, as a stop does fill at the first trade beyond it. It is a last-trade
+    price; the bid/ask side is applied by the caller (fills.exit_fill).
+
+    Within a bar the order of the high and the low is unknown, so the stop
+    is checked against the bar's worst price before the bar's best price is
+    allowed to ratchet it - the pessimistic reading. A stop raised by the
+    bar's best price is then checked against its close, which came after.
+    """
+    o, h, l, c = bar
+    direction = watch.get('direction', LONG)
+    entry = watch['entry_price']
+    worst_px, best_px = (h, l) if direction == SHORT else (l, h)
+    g_open = pct_move(direction, entry, o)
+    g_worst = pct_move(direction, entry, worst_px)
+    distance = watch.get('stop_pct') or max_stop_pct()
+    stop = watch.get('stop_gain')
+    if stop is None:
+        stop = -distance
+    target = watch.get('target_pct') or DEFAULT_TARGET_PCT
+
+    def done(reason, gain):
+        return reason, round(price_at_gain(direction, entry, gain), 6), False
+
+    if g_open <= stop:
+        return done(_stop_reason(stop), g_open)
+    if not watch.get('let_run') and g_open >= target:
+        return done('target_hit', g_open)
+    if g_worst <= stop:
+        return done(_stop_reason(stop), stop)
+    if not watch.get('let_run') and pct_move(direction, entry, best_px) >= target:
+        watch['peak_gain'] = round(max(watch.get('peak_gain') or 0.0, target), 6)
+        return done('target_hit', target)
+
+    reason, reached = update_exit(watch, best_px, cost_pct)
+    if reason:
+        # Only possible through the ratchet just applied - the best price
+        # itself is above any stop it sets.
+        stop = watch['stop_gain']
+        return reason, round(price_at_gain(direction, entry, stop), 6), reached
+    stop = watch['stop_gain']
+    if pct_move(direction, entry, c) <= stop:
+        return _stop_reason(stop), round(price_at_gain(direction, entry, stop), 6), reached
+    return None, None, reached
