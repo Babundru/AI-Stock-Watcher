@@ -10,6 +10,42 @@ them before pasting (bash reads a literal `<zone>` as a redirect).
 
 ---
 
+## 2026-10-24: memory full again - the October unit fixes were never applied
+
+### What it looked like
+
+SSH timed out and Tailscale had shown the VM offline for 3 days. The serial
+log showed the app still scanning, but DNS and the metadata server were
+unreachable (`dial tcp 169.254.169.254:80: connect: network is
+unreachable`), and `google-guest-agent-manager` was at restart counter
+2,628, logging `Found left-over process ... (core_plugin)` on every start.
+
+### Diagnosis
+
+- `systemctl show stocks-ai` on the VM: `RuntimeMaxUSec=infinity`,
+  `MemorySwapMax=infinity`. The unit was still the September version. The
+  `RuntimeMaxSec=2d` / `MemorySwapMax=100M` / `PYTHONUNBUFFERED=1` lines
+  from the incident below were committed to `DEPLOY.md` but never applied.
+  The app ran 11 days (Oct 12 - 23) without a restart and grew into zram.
+- journald `Under memory pressure`: 1-21 a day from Oct 12 to Oct 19, then
+  ~5,000 a day from Oct 20. That is the same livelock as September.
+- The guest agent's crash loop (100ms `RestartSec`, `KillMode=process`)
+  orphaned its plugins on each of the 2,628 restarts. It started only ~7h
+  before the stop, so it made things worse but did not start them.
+
+### Changes
+
+- VM: `stocks-ai.service` brought up to date with `DEPLOY.md` section 6.
+- VM: a drop-in for `google-guest-agent-manager` (`KillMode=control-group`,
+  `RestartSec=30s`, `MemoryMax=200M`), now in `DEPLOY.md`.
+- Recovered with `stop` / `start`.
+
+**Lesson:** after changing the unit in `DEPLOY.md`, check
+`systemctl show stocks-ai -p RuntimeMaxUSec -p MemorySwapMax` on the VM.
+A `git pull` does not update `/etc/systemd/system`.
+
+---
+
 ## 2026-10: "RAM full at weekends" - OOM kill after ~4.5 days of uptime
 
 ### What it looked like

@@ -216,6 +216,32 @@ journalctl -u stocks-ai -f           # tail its output
 Now it starts on boot, restarts on crash, and keeps scanning even with no
 dashboard open anywhere.
 
+### Contain the Google guest agent too
+
+The stock `google-guest-agent-manager.service` ships with `Restart=always`,
+a 100ms restart delay and `KillMode=process`. If the metadata server becomes
+unreachable, it crash-loops, and every restart leaves its `core_plugin` /
+`guest_telemetry` children orphaned in the cgroup. Thousands of restarts
+later those orphans fill the RAM. A drop-in kills the whole cgroup on
+restart, slows the loop down and caps its memory:
+
+```bash
+sudo mkdir -p /etc/systemd/system/google-guest-agent-manager.service.d
+sudo tee /etc/systemd/system/google-guest-agent-manager.service.d/override.conf >/dev/null <<'EOF'
+[Unit]
+StartLimitIntervalSec=0
+
+[Service]
+KillMode=control-group
+RestartSec=30s
+MemoryAccounting=yes
+MemoryHigh=150M
+MemoryMax=200M
+EOF
+sudo systemctl daemon-reload
+systemctl show google-guest-agent-manager -p KillMode -p RestartUSec -p MemoryMax
+```
+
 ## 7. Use it
 
 From your phone or any other device on your Tailscale network, open
