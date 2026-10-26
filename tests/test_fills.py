@@ -212,6 +212,22 @@ class DecideTradeFillTest(unittest.TestCase):
         self.assertEqual(trade['entry_last'], 100.0)
         self.assertEqual(trade['spread_source'], 'quote')
 
+    def test_the_trade_records_model_prompt_and_timings(self):
+        with mock.patch.object(self.main.price_lookup, 'fetch_context', return_value=self.ctx), \
+             mock.patch.object(self.main.price_lookup, 'fetch_quote', return_value=self.quote), \
+             mock.patch.object(self.main.strategy, 'market_open', return_value=True):
+            analysis = {'horizon': 'DAYS', 'model': 'openai/gpt-6-luna', 'prompt_version': 'p1',
+                        'analysed_at': '2026-10-26T15:00:30+02:00'}
+            article = {'source': 'Custom/PR Newswire', 'published_ts': '2026-10-26T13:00:00+00:00'}
+            self.assertTrue(self.b._decide_trade("AAA", "Acme", "LONG", "HIGH", "RALLY", 0.08, 80,
+                                                 analysis, article, "u", "t")['opened'])
+        trade = self.b.paper.trades[0]
+        self.assertEqual(trade['model'], 'openai/gpt-6-luna')
+        self.assertEqual(trade['prompt_version'], 'p1')
+        self.assertEqual(trade['news_source'], 'Custom/PR Newswire')
+        self.assertEqual(trade['published_at'], '2026-10-26T13:00:00+00:00')
+        self.assertEqual(trade['analysed_at'], '2026-10-26T15:00:30+02:00')
+
     def test_nothing_opens_while_the_market_is_shut(self):
         d = self.decide(market_open=False)
         self.assertFalse(d['opened'])

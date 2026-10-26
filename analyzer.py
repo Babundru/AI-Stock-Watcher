@@ -1,5 +1,5 @@
 import config
-from llm_prompts import AnalysisUnavailable, build_market_prompt, parse_json_response
+from llm_prompts import PROMPT_VERSION, AnalysisUnavailable, build_market_prompt, parse_json_response
 import requests
 
 class MarketAnalyzer:
@@ -47,6 +47,8 @@ class MarketAnalyzer:
             # the notifier.
             return None
 
+        data['model'] = config.LOCAL_MODEL_NAME
+        data['prompt_version'] = PROMPT_VERSION
         return data
 
     def _analyze_local(self, prompt):

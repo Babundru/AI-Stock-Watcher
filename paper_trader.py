@@ -49,6 +49,22 @@ from local_time import now_local
 
 LEDGER_FILE = "data/paper_trades.json"
 
+# What every trade and skipped trade records about the signal behind it, on
+# top of the price context (main._signal_info builds them):
+#   model, prompt_version  - which model of the CLOUD_AI_MODEL list judged the
+#                            story, under which llm_prompts.PROMPT_VERSION
+#   news_source            - the feed or custom source it came from
+#   published_at           - the article's publish time (UTC), when the feed
+#                            gave one
+#   analysed_at            - when the verdict came back; with opened_at, the
+#                            detection latency the strategy lives on
+#   event_type             - the model's category for the story (M&A,
+#                            earnings, FDA, ...), what results are split by
+#   reported_move_pct      - a move the headline itself reports ("jumps 30%")
+# Absent (None) on records from before they were kept.
+SIGNAL_FIELDS = ('model', 'prompt_version', 'news_source', 'published_at', 'analysed_at',
+                 'event_type', 'reported_move_pct')
+
 # Where deleted trades used to be archived, before an x kept them in the
 # ledger flagged 'excluded' (PaperTrader.exclude_trade). Read once on load,
 # its trades put back as excluded, and renamed out of the way.
@@ -268,6 +284,10 @@ class PaperTrader:
             # the decision was based on - so the record can be split by the
             # rules in force and by how confident the AI was.
             "strategy": watch.get('strategy', 'v1'),
+            # Which model judged the story and on which prompt, where it came
+            # from, and when it was published and analysed - so detection
+            # latency (published -> analysed -> opened_at) can be measured.
+            **{key: watch.get(key) for key in SIGNAL_FIELDS},
             "confidence": watch.get('confidence'),
             "source_trust": watch.get('source_trust'),
             "expected_move_pct": watch.get('expected_move_pct'),
@@ -478,6 +498,17 @@ class PaperTrader:
             "by_horizon": _group(trades, lambda t: t.get('horizon') or '?'),
             "by_reason": _group(trades, lambda t: t.get('reason') or '?'),
             "by_confidence": _group(trades, _confidence_bucket),
+            # Recorded from Oct 2026 (SIGNAL_FIELDS); older trades show '?'.
+            "by_model": _group(trades, lambda t: t.get('model') or '?'),
+            "by_prompt": _group(trades, lambda t: t.get('prompt_version') or '?'),
+            "by_event_type": _group(trades, lambda t: t.get('event_type') or '?'),
+            "by_source": _group(trades, lambda t: (t.get('news_source') or '?').replace('Custom/', '')),
+            # Minutes from publication to the verdict and to the position,
+            # median over the trades that recorded both ends.
+            "latency_analysed_min": _median([_minutes_between(t.get('published_at'), t.get('analysed_at'))
+                                             for t in trades]),
+            "latency_opened_min": _median([_minutes_between(t.get('published_at'), t.get('opened_at'))
+                                           for t in trades]),
         }
 
     # --- the account ---------------------------------------------------
@@ -686,6 +717,29 @@ def _confidence_bucket(trade):
 
 def _avg(values):
     return (sum(values) / len(values)) if values else None
+
+
+def _median(values):
+    values = sorted(v for v in values if v is not None)
+    if not values:
+        return None
+    mid = len(values) // 2
+    return values[mid] if len(values) % 2 else (values[mid - 1] + values[mid]) / 2
+
+
+def _minutes_between(start, end):
+    """Minutes from one ISO timestamp to another, or None if either is
+    missing or unreadable. A naive timestamp is taken as UTC."""
+    try:
+        a = datetime.datetime.fromisoformat(start)
+        b = datetime.datetime.fromisoformat(end)
+    except (TypeError, ValueError):
+        return None
+    if a.tzinfo is None:
+        a = a.replace(tzinfo=datetime.timezone.utc)
+    if b.tzinfo is None:
+        b = b.replace(tzinfo=datetime.timezone.utc)
+    return (b - a).total_seconds() / 60
 
 
 def _group(trades, key):

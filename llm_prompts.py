@@ -14,6 +14,12 @@ from reddit_source import SOURCE_PREFIX, is_reddit_article
 # that can't be tuned, and can't verify a rumour either.
 
 
+# Recorded on every trade next to strategy.STRATEGY_VERSION, so results from
+# different prompts aren't pooled. Bump it with any change to what the model
+# is asked or told - ANALYSIS_INSTRUCTIONS or build_market_prompt. p1: the
+# prompt as of strategy v8.
+PROMPT_VERSION = "p1"
+
 # Stands in for the article text when only the headline could be got.
 HEADLINE_ONLY = ("(Only the headline is available - the article itself could not be retrieved. "
                  "Judge the headline alone: rate it relevant only if it states a concrete company "

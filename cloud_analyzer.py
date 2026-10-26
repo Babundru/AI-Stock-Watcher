@@ -1,6 +1,6 @@
 import config
 from cloud_providers import PROVIDERS
-from llm_prompts import AnalysisUnavailable, build_market_prompt, parse_json_response
+from llm_prompts import PROMPT_VERSION, AnalysisUnavailable, build_market_prompt, parse_json_response
 
 # Ollama gets a JSON-mode flag to force this; hosted chat APIs don't have an
 # equivalent, so the constraint is stated in a system prompt instead.
@@ -68,8 +68,8 @@ class CloudAnalyzer:
         (self.ai_log_callback or print)(msg)
 
     def _ask(self, prompt):
-        """The parsed JSON reply of the first model, in priority order, that
-        gives one - or None if none did.
+        """(model, parsed JSON reply) from the first model, in priority
+        order, that gives one - or (None, None) if none did.
 
         No model is ever taken out of the queue or held back for later
         requests: every request starts again at the preferred model, so a
@@ -90,13 +90,13 @@ class CloudAnalyzer:
                               f"(attempt {attempt + 1} of {MODEL_ATTEMPTS})")
             data = parse_json_response(text)
             if data:
-                return data
+                return model, data
             if i + 1 < len(self.providers):
                 nxt = self.providers[i + 1][0]
                 reason = ("failed every attempt" if text is None
                           else "gave no usable reply")
                 self._log(f"   ↪ {model} {reason} - trying {nxt}")
-        return None
+        return None, None
 
     def analyze_article(self, company, article, open_markets, portfolio_tickers=None):
         """The analysis dict, or None if the article isn't relevant (or has
@@ -109,11 +109,16 @@ class CloudAnalyzer:
         if not prompt:
             return None
 
-        data = self._ask(prompt)
+        model, data = self._ask(prompt)
         if not data:
             tried = f" (tried {len(self.providers)} models)" if len(self.providers) > 1 else ""
             raise AnalysisUnavailable(f"no usable reply from cloud AI{tried}")
         if not data.get('is_relevant', False):
             return None
 
+        # Which model of the fallback list judged it, and against which
+        # prompt - recorded on the trade, so results from different models
+        # aren't pooled.
+        data['model'] = model
+        data['prompt_version'] = PROMPT_VERSION
         return data

@@ -83,6 +83,14 @@ def main():
               f"every return ({stats['spread_trades']} of {n} trades filled at bid/ask)")
     if stats['avg_holding_hours'] is not None:
         print(f"  Avg hold         {stats['avg_holding_hours']:.1f}h")
+    if stats['latency_opened_min'] is not None:
+        # The speed a news strategy lives on: how old the story was by the
+        # time the app had a verdict, and by the time it was in the trade.
+        analysed = stats['latency_analysed_min']
+        print(f"  Detection        median {analysed:.0f} min published → analysed, "
+              f"{stats['latency_opened_min']:.0f} min → opened"
+              if analysed is not None else
+              f"  Detection        median {stats['latency_opened_min']:.0f} min published → opened")
 
     # The verdict line. Everything above is detail; this is the number that
     # says whether acting on the alerts made or lost money per trade.
@@ -116,7 +124,11 @@ def main():
                        ("By impact", "by_impact"),
                        ("By horizon", "by_horizon"),
                        ("By exit reason", "by_reason"),
-                       ("By AI confidence", "by_confidence")):
+                       ("By AI confidence", "by_confidence"),
+                       ("By model", "by_model"),
+                       ("By prompt version", "by_prompt"),
+                       ("By event type", "by_event_type"),
+                       ("By news source", "by_source")):
         print(f"\n  {label}:")
         for name, row in stats[key].items():
             print(f"    {name:<18} {row['trades']:>3} trades  "

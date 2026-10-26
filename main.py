@@ -754,6 +754,8 @@ class StockAppBackend:
         # during an outage - the collector never offers a seen URL again.
         self._mark_processed(url, title)
         self.stats['scanned'] += 1
+        if analysis:
+            analysis['analysed_at'] = now_local().isoformat()
         if not analysis:
             self.log(f"   ⊘ No analysis results (article may not match criteria)")
             self.stats['skipped'] += 1
@@ -900,6 +902,7 @@ class StockAppBackend:
         # equivalent in the small hours of the user's evening.
         decision = {'opened': False, 'direction': direction, 'ticker': ticker,
                     'reason': None, 'watch': None}
+        signal = self._signal_info(analysis, article)
 
         def no(reason):
             decision['reason'] = reason
@@ -967,7 +970,7 @@ class StockAppBackend:
         if not plan['ok']:
             if tracked:
                 self._follow_skipped(ticker, company, direction, impact, horizon, confidence,
-                                     trust, title, url, context, plan, fill)
+                                     trust, title, url, context, plan, fill, signal)
             return no(plan['reason'])
         if not fill:
             return no(f"couldn't price {ticker}")
@@ -981,7 +984,7 @@ class StockAppBackend:
             if tracked:
                 self._follow_skipped(ticker, company, direction, impact, horizon, confidence,
                                      trust, title, url, context,
-                                     dict(plan, rule=rule, reason=reason), fill)
+                                     dict(plan, rule=rule, reason=reason), fill, signal)
             return no(reason)
         entry = fill['price']
         benchmark_entry = context.get('market_price')
@@ -1007,7 +1010,7 @@ class StockAppBackend:
             if sizing['size'] is None:
                 self._follow_skipped(ticker, company, direction, impact, horizon, confidence,
                                      trust, title, url, context,
-                                     dict(plan, rule='cash', reason=sizing['reason']), fill)
+                                     dict(plan, rule='cash', reason=sizing['reason']), fill, signal)
                 return no(sizing['reason'])
             decision.update(position_usd=sizing['size'], risk_usd=sizing['risk_usd'],
                             account_usd=sizing['account'])
@@ -1032,6 +1035,7 @@ class StockAppBackend:
                 'spread_pct': fill['spread_pct'],
                 'spread_source': fill['spread_source'],
                 **extra_sizing,
+                **signal,
             },
         )
         if not watch:
@@ -1042,6 +1046,21 @@ class StockAppBackend:
             self.broker.open_position(watch)
         decision.update(opened=True, watch=watch, expires_at=watch['expires_at'])
         return decision
+
+    def _signal_info(self, analysis, article):
+        """paper_trader.SIGNAL_FIELDS for a trade or skipped trade on this
+        analysis: which model and prompt judged it, where the story came
+        from, and when it was published and analysed."""
+        return {
+            # The keyword engine names no model; its name stands in.
+            'model': analysis.get('model') or self.engine_name(),
+            'prompt_version': analysis.get('prompt_version'),
+            'news_source': article.get('source'),
+            'published_at': article.get('published_ts'),
+            'analysed_at': analysis.get('analysed_at'),
+            'event_type': analysis.get('event_type'),
+            'reported_move_pct': analysis.get('reported_move_pct'),
+        }
 
     def _entry_fill(self, ticker, direction, context, article):
         """The price a position in `ticker` would open at now, and whether
@@ -1071,11 +1090,11 @@ class StockAppBackend:
                                fallback_spread=position.get('spread_pct'), at_level=at_level)
 
     def _follow_skipped(self, ticker, company, direction, impact, horizon, confidence,
-                        trust, title, url, context, plan, fill=None):
+                        trust, title, url, context, plan, fill=None, signal=None):
         """Follow a signal the entry rules refused as if it had been traded,
         so the rule that refused it can be judged later (shadow_trades.py).
         Opened at `fill` - the price a real entry would have paid - when
-        there is one. Never notified."""
+        there is one. Never notified. `signal` is _signal_info's."""
         if not self.shadows:
             return
         ctx = context or {}
@@ -1083,7 +1102,7 @@ class StockAppBackend:
             ticker, company, direction, fill['price'] if fill else ctx.get('price'), plan,
             horizon=horizon, impact=impact, confidence=confidence, source_trust=trust,
             headline=title, url=url, benchmark_price=ctx.get('market_price'),
-            spread_pct=fill['spread_pct'] if fill else None)
+            spread_pct=fill['spread_pct'] if fill else None, signal=signal)
         if record:
             self.log(f"   👻 Following it as a skipped trade ({plan['rule']}) to see "
                      f"whether the rule was right")

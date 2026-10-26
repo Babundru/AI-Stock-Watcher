@@ -28,6 +28,7 @@ import markets
 import paper_account
 import strategy
 from local_time import now_local
+from paper_trader import SIGNAL_FIELDS
 
 SHADOW_FILE = "data/shadow_trades.json"
 
@@ -101,13 +102,14 @@ class ShadowBook:
 
     def track(self, ticker, company, direction, entry_price, plan, horizon=None,
               impact=None, confidence=None, source_trust=None, headline=None,
-              url=None, benchmark_price=None, spread_pct=None):
+              url=None, benchmark_price=None, spread_pct=None, signal=None):
         """Start following a signal strategy.plan_trade refused. Returns the
         record, or None when there is no price, the ticker is already being
         followed (one story tends to arrive as several articles), or
         MAX_SHADOW_POSITIONS are open already. `entry_price` is the fill a
         real entry would have got (fills.py) and `spread_pct` the spread it
-        crossed, which the exit pays again on the way out."""
+        crossed, which the exit pays again on the way out. `signal` holds
+        paper_trader.SIGNAL_FIELDS - the model, prompt and timings."""
         if not ticker or not entry_price or self.has_open(ticker) or self.is_full():
             return None
         horizon = (horizon or '').upper()
@@ -121,6 +123,7 @@ class ShadowBook:
             "company": company or ticker,
             "direction": direction,
             "strategy": strategy.STRATEGY_VERSION,
+            **{key: (signal or {}).get(key) for key in SIGNAL_FIELDS},
             # Which rule refused it, and why - what the results are split by.
             "skip_rule": plan.get('rule'),
             "skip_reason": plan.get('reason'),
