@@ -967,6 +967,8 @@ class StockAppBackend:
             needs_confirmation=trust == OPINION,
             capped=strategy.parse_flag(analysis.get('value_is_capped')) is True,
             reported_pct=reported, event_type=analysis.get('event_type'))
+        # A merger-arbitrage plan sets its own horizon (strategy._merger_arb).
+        horizon = plan.get('horizon') or horizon
         # What the trade would really have opened at - the ask for a long,
         # the bid for a short - worked out from the context's last trade,
         # which was fetched seconds ago from the same 1-minute chart the
@@ -1040,6 +1042,9 @@ class StockAppBackend:
                 'entry_last': fill['last'],
                 'spread_pct': fill['spread_pct'],
                 'spread_source': fill['spread_source'],
+                # None for an ordinary news trade; 'merger_arb' for a
+                # takeover target held for a better bid.
+                'mode': plan.get('mode'),
                 **extra_sizing,
                 **signal,
             },

@@ -120,6 +120,7 @@ def main():
               f"{acct['taken']} taken, {acct['skipped_cash']} skipped for cash{flag}")
 
     for label, key in (("By strategy version", "by_strategy"),
+                       ("By mode", "by_mode"),
                        ("By direction", "by_direction"),
                        ("By impact", "by_impact"),
                        ("By horizon", "by_horizon"),

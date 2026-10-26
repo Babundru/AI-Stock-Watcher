@@ -25,6 +25,7 @@ class RulesMixin:
     SETTINGS = dict(STOP_LOSS_PCT=0.08, STOP_ATR_MULT=1.5, STOP_MIN_PCT=0.02, MIN_REWARD_RISK=1.2,
                     MIN_MOVE_ATR_MULT=1.2, EXHAUSTED_ATR_MULT=3.0, EXHAUSTED_MAX_ATR_MULT=6.0, AGAINST_NEWS_ATR_MULT=0.5, CONFIRM_ATR_MULT=0.5,
                     MAX_SHADOW_POSITIONS=20, LET_WINNERS_RUN=True, BREAKEVEN_AT=0.5, REPORTED_MOVE_MAX_PCT=0.05,
+                    MERGER_ARB=True, MERGER_ARB_STOP_PCT=0.05, MERGER_ARB_TARGET_PCT=0.05,
                     PAPER_FEE_PER_ORDER=0.0, PAPER_FX_FEE_PCT=0.0, PAPER_MAX_FEE_PCT=0.0)
 
     def setUp(self):
@@ -131,7 +132,23 @@ class PlanTradeTests(RulesMixin, unittest.TestCase):
         self.assertEqual(strategy.plan_trade('LONG', 'HIGH', 0.09, {})['rule'], 'reward_risk')
 
     def test_capped_news_is_skipped(self):
+        config.MERGER_ARB = False
         self.assertEqual(self.plan(0.0, capped=True)['rule'], 'capped')
+
+    def test_capped_news_is_merger_arb_for_a_long(self):
+        # C5: held for a better bid - however far it has jumped already.
+        plan = self.plan(0.30, capped=True)
+        self.assertTrue(plan['ok'], plan['reason'])
+        self.assertEqual(plan['mode'], 'merger_arb')
+        self.assertEqual(plan['horizon'], 'WEEKS')
+        self.assertAlmostEqual(plan['stop_pct'], 0.05)
+        self.assertAlmostEqual(plan['target_pct'], 0.05)
+
+    def test_merger_arb_still_refuses_a_target_falling_against_the_bid(self):
+        self.assertEqual(self.plan(-0.02, capped=True)['rule'], 'against')
+
+    def test_a_capped_short_is_still_skipped(self):
+        self.assertEqual(self.plan(0.0, capped=True, direction='SHORT')['rule'], 'capped')
 
     def test_story_too_small_for_the_stock(self):
         # 3% daily range: the story needs 1.2 of them, 3.6%.

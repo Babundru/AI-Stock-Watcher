@@ -228,6 +228,20 @@ class DecideTradeFillTest(unittest.TestCase):
         self.assertEqual(trade['published_at'], '2026-10-26T13:00:00+00:00')
         self.assertEqual(trade['analysed_at'], '2026-10-26T15:00:30+02:00')
 
+    def test_a_takeover_target_opens_as_merger_arb_over_weeks(self):
+        with mock.patch.object(config, 'MERGER_ARB', True), \
+             mock.patch.object(self.main.price_lookup, 'fetch_context', return_value=self.ctx), \
+             mock.patch.object(self.main.price_lookup, 'fetch_quote', return_value=self.quote), \
+             mock.patch.object(self.main.strategy, 'market_open', return_value=True):
+            d = self.b._decide_trade("AAA", "Acme", "LONG", "HIGH", "RALLY", 0.08, 80,
+                                     {'horizon': 'DAYS', 'value_is_capped': True,
+                                      'event_type': 'M&A'}, {}, "u", "t")
+        self.assertTrue(d['opened'], d['reason'])
+        trade = self.b.paper.trades[0]
+        self.assertEqual(trade['mode'], 'merger_arb')
+        self.assertEqual(trade['horizon'], 'WEEKS')
+        self.assertEqual(trade['event_type'], 'M&A')
+
     def test_nothing_opens_while_the_market_is_shut(self):
         d = self.decide(market_open=False)
         self.assertFalse(d['opened'])

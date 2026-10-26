@@ -288,6 +288,9 @@ class PaperTrader:
             # from, and when it was published and analysed - so detection
             # latency (published -> analysed -> opened_at) can be measured.
             **{key: watch.get(key) for key in SIGNAL_FIELDS},
+            # 'merger_arb' for a takeover target held for a better bid
+            # (strategy._merger_arb); None for an ordinary news trade.
+            "mode": watch.get('mode'),
             "confidence": watch.get('confidence'),
             "source_trust": watch.get('source_trust'),
             "expected_move_pct": watch.get('expected_move_pct'),
@@ -493,6 +496,7 @@ class PaperTrader:
             "avg_holding_hours": _avg([t['holding_hours'] for t in trades
                                        if t.get('holding_hours') is not None]),
             "by_strategy": _group(trades, lambda t: t.get('strategy') or 'v1'),
+            "by_mode": _group(trades, lambda t: t.get('mode') or 'news'),
             "by_direction": _group(trades, lambda t: t['direction']),
             "by_impact": _group(trades, lambda t: t.get('impact') or '?'),
             "by_horizon": _group(trades, lambda t: t.get('horizon') or '?'),

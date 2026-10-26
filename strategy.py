@@ -24,7 +24,9 @@ stock's normal daily range (14-day ATR):
     source_manager.article_trust) needs the price to have confirmed it
     already, by at least CONFIRM_ATR_MULT daily ranges its way.
   * Capped: the news pins the stock to a set price (a cash takeover's
-    target), so there is nothing left to ride.
+    target), so there is nothing left to ride - unless config.MERGER_ARB,
+    which holds a long in the target for a raised or rival bid instead
+    (_merger_arb).
   * Reported: the headline itself reports the move ("jumps 30%") by at
     least REPORTED_MOVE_MAX_PCT - by the time a feed says so the move is
     done. Not applied to M&A, where a bid can still be raised or topped.
@@ -95,7 +97,9 @@ import markets
 # session is known (markets.py, learned from Yahoo for ones it doesn't model).
 # v9 (Oct 2026 review, CHANGE.md): a headline that reports the move is
 # refused ('reported', not for M&A), EXHAUSTED_MAX_ATR_MULT 6 -> 4, and a
-# CRITICAL rating shrinks a position instead of growing it.
+# CRITICAL rating shrinks a position instead of growing it. A takeover target
+# ('capped') is held as merger arbitrage (mode 'merger_arb') rather than
+# refused, when config.MERGER_ARB is on.
 STRATEGY_VERSION = "v9"
 LEGACY_STRATEGY = "v1"
 
@@ -131,6 +135,11 @@ HORIZON_TRADING_DAYS = {
 DEFAULT_HORIZON = "DAYS"
 
 ET = pytz.timezone("US/Eastern")
+
+# A position held as merger arbitrage (config.MERGER_ARB) carries this as
+# its 'mode', and is held over this horizon.
+MERGER_ARB_MODE = "merger_arb"
+MERGER_ARB_HORIZON = "WEEKS"
 
 # The event_type the prompt gives a takeover story: a continuation setup,
 # where a reported move is the start (a bid can be raised or topped) rather
@@ -351,6 +360,8 @@ def plan_trade(direction, impact, expected_pct, context, needs_confirmation=Fals
         return plan
 
     if capped:
+        if direction == LONG and config.MERGER_ARB:
+            return _merger_arb(plan, moved, daily, atr)
         return skip('capped', "the news pins the stock to a set price (a cash takeover, say) - "
                               "nothing left to ride")
     # Before any price check: a feed only writes "surges 22%" once the 22%
@@ -400,6 +411,31 @@ def plan_trade(direction, impact, expected_pct, context, needs_confirmation=Fals
                                    f"- needs {need * 100:.1f}%")
 
     plan['ok'] = True
+    return plan
+
+
+def _merger_arb(plan, moved, daily, atr):
+    """plan_trade for the target of an agreed takeover (config.MERGER_ARB):
+    held for a raised or rival bid rather than refused as 'capped'.
+
+    The price has jumped to just under the offer by now, so the usual entry
+    rules don't apply: the move being "spent" is the point, and the expected
+    move is the chance of a better bid, not the story's size. What still
+    applies is a fall against the news - the market doubting the deal. The
+    stop is fixed (MERGER_ARB_STOP_PCT, a calm post-bid stock's ATR would
+    put it inside the spread to the offer), the target is a typical bump
+    (MERGER_ARB_TARGET_PCT, the trailing stop takes over there), and the
+    horizon is WEEKS. A deal that breaks is news against the position and
+    closes it (main._close_on_reversal), or the stop does."""
+    if moved is not None and moved <= -config.AGAINST_NEWS_ATR_MULT * daily:
+        unit = "its normal daily range" if atr else f"a typical {daily * 100:.0f}% daily range"
+        plan['rule'] = 'against'
+        plan['reason'] = (f"takeover target moved {abs(moved) * 100:.1f}% against the bid "
+                          f"({abs(moved) / daily:.1f}x {unit}) - the market doubts the deal")
+        return plan
+    plan.update(ok=True, mode=MERGER_ARB_MODE, horizon=MERGER_ARB_HORIZON,
+                stop_pct=round(config.MERGER_ARB_STOP_PCT, 6),
+                target_pct=round(config.MERGER_ARB_TARGET_PCT, 6))
     return plan
 
 

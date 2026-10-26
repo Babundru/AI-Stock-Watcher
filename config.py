@@ -343,6 +343,18 @@ EXHAUSTED_MAX_ATR_MULT = 4.0
 # headline reports a move, the move is done. 0 turns the rule off.
 REPORTED_MOVE_MAX_PCT = 0.05
 
+# Merger arbitrage. The target of an agreed cash takeover ("capped" - its
+# price pinned just under the offer) used to be refused, and those refusals,
+# followed as skipped trades, did better than anything the app traded: the
+# first bid is often raised, or topped by a rival. On: such a story opens a
+# long held for that, over a WEEKS horizon, with a fixed stop under the
+# post-bid price (a broken deal falls back towards the pre-bid price) and a
+# target at a typical bump, past which the stop trails. Longs only - a short
+# against an agreed deal is not this trade.
+MERGER_ARB = True
+MERGER_ARB_STOP_PCT = 0.05
+MERGER_ARB_TARGET_PCT = 0.05
+
 # A move the other way is the warning sign: the market reads the story
 # differently. Beyond this many daily ranges against it, the trade is skipped.
 AGAINST_NEWS_ATR_MULT = 0.5
@@ -582,6 +594,7 @@ USER_SETTINGS = {
     "ENTRY_MAX_PRICE_AGE_MIN": _FLOAT,
     "MIN_CONFIDENCE": _INT,
     "REPORTED_MOVE_MAX_PCT": _FLOAT,
+    "MERGER_ARB": _BOOL,
     "MAX_OPEN_POSITIONS": _INT,
     "ALLOW_SHORTS": _BOOL,
     "NOTIFY_SHORTS": _BOOL,
