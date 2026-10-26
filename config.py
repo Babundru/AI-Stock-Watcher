@@ -355,6 +355,30 @@ MERGER_ARB = True
 MERGER_ARB_STOP_PCT = 0.05
 MERGER_ARB_TARGET_PCT = 0.05
 
+# Entries wait this many minutes into the session on news day: the first
+# minutes after the open swing hardest, and the Oct 2026 review had 5
+# stop-outs within 6 hours of the news. A signal that comes in earlier waits
+# (main._pending_entries) and has its price rules checked then, on the price
+# of that moment. 0 opens as soon as the session does.
+ENTRY_DELAY_AFTER_OPEN_MIN = 20
+
+# Whether news that arrives while its market is shut - before the open, as
+# most results do, or overnight - waits for the next session (and the delay
+# above) instead of being passed over. Only for the first session after the
+# story. Before strategy v9 such news raised its alert but never traded.
+ENTRY_WAIT_FOR_SESSION = True
+
+# On news day the stop starts this many times wider than usual and settles
+# to the usual STOP_ATR_MULT distance after the first session. The position
+# is sized on the wider stop, so the money at risk is unchanged - it is
+# smaller instead. 1 turns it off.
+FIRST_DAY_STOP_MULT = 1.5
+
+# Whether stories rated INTRADAY (an effect gone within the session) are
+# skipped. They averaged -0.4% a trade in the Oct 2026 review - too little
+# time for the move to beat the costs. Followed as skipped trades either way.
+SKIP_INTRADAY = True
+
 # A move the other way is the warning sign: the market reads the story
 # differently. Beyond this many daily ranges against it, the trade is skipped.
 AGAINST_NEWS_ATR_MULT = 0.5
@@ -595,6 +619,10 @@ USER_SETTINGS = {
     "MIN_CONFIDENCE": _INT,
     "REPORTED_MOVE_MAX_PCT": _FLOAT,
     "MERGER_ARB": _BOOL,
+    "ENTRY_DELAY_AFTER_OPEN_MIN": _INT,
+    "ENTRY_WAIT_FOR_SESSION": _BOOL,
+    "FIRST_DAY_STOP_MULT": _FLOAT,
+    "SKIP_INTRADAY": _BOOL,
     "MAX_OPEN_POSITIONS": _INT,
     "ALLOW_SHORTS": _BOOL,
     "NOTIFY_SHORTS": _BOOL,

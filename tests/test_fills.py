@@ -176,7 +176,9 @@ class DecideTradeFillTest(unittest.TestCase):
         patcher = mock.patch.multiple(config, PAPER_BUDGET=1000.0, PAPER_RISK_PCT=0.01,
                                       PAPER_MAX_POSITION_PCT=0.25, ENTRY_MAX_PRICE_AGE_MIN=10,
                                       ENTRY_MAX_SPREAD_PCT=0.015, ALLOW_SHORTS=True,
-                                      MAX_OPEN_POSITIONS=20, PAPER_FEE_PER_ORDER=0.0, PAPER_FX_FEE_PCT=0.0, PAPER_MAX_FEE_PCT=0.0)
+                                      MAX_OPEN_POSITIONS=20, PAPER_FEE_PER_ORDER=0.0, PAPER_FX_FEE_PCT=0.0, PAPER_MAX_FEE_PCT=0.0,
+                                      FIRST_DAY_STOP_MULT=1.0, ENTRY_DELAY_AFTER_OPEN_MIN=0,
+                                      ENTRY_WAIT_FOR_SESSION=False)
         patcher.start()
         self.addCleanup(patcher.stop)
         tmp = tempfile.TemporaryDirectory()
@@ -186,6 +188,7 @@ class DecideTradeFillTest(unittest.TestCase):
         b.paper = PaperTrader(filename=os.path.join(tmp.name, 'paper_trades.json'), cost_pct=0.001)
         b.watch_mgr = WatchManager(filename=os.path.join(tmp.name, 'watches.json'))
         b.shadows = mock.Mock()
+        b._pending_entries = []
         self.b = b
         self.main = main
         self.ctx = {'price': 100.0, 'atr_pct': 0.02, 'change_since_close_pct': 0.0,

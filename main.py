@@ -56,6 +56,12 @@ MAX_REDDIT_BACKLOG = 60
 # Recent headlines remembered, to catch one story under a second URL.
 MAX_STORED_TITLES = 500
 
+# Most signals waiting for their entry time at once (_queue_entry). Each
+# holds its article - up to news_collector.MAX_CONTENT_CHARS of text - and
+# costs a price-context fetch when it comes due, so the bound is memory and
+# a burst of requests at the open both.
+MAX_PENDING_ENTRIES = 20
+
 
 def _process_rss_mb():
     """This process's resident memory in MB, or None where unavailable.
@@ -202,6 +208,9 @@ class StockAppBackend:
         # title_key()s of recently analysed articles, oldest evicted first.
         self.processed_titles = collections.deque(maxlen=MAX_STORED_TITLES)
         self.processed_titles_set = set()
+        # Signals waiting for their entry time (_queue_entry), soonest
+        # first. In memory only: a restart drops them, like an alert missed.
+        self._pending_entries = []
 
     @staticmethod
     def engine_name():
@@ -558,6 +567,11 @@ class StockAppBackend:
                 # error the next one reaches back past the last good one.
                 prev_scan_start = scan_start
 
+                # --- QUEUED ENTRIES ---
+                # Signals that came in too early in their session, or while
+                # it was shut, open now if their time has come.
+                self._run_pending_entries()
+
                 # --- WATCH CHECK (sell signals) ---
                 # Coarser cadence than the news scan - price doesn't need to
                 # be polled every minute, and it's a batched API call per
@@ -887,7 +901,7 @@ class StockAppBackend:
         return reasons
 
     def _decide_trade(self, ticker, company, direction, impact, prediction,
-                      expected_pct, confidence, analysis, article, url, title):
+                      expected_pct, confidence, analysis, article, url, title, queued=False):
         """Turn an alert into a position, or say why not.
 
         Cheapest checks first: the price context costs a few requests, so it
@@ -896,6 +910,10 @@ class StockAppBackend:
         entry/target/stop (a short that is notified but not paper-traded
         still shows its setup in the notification). A signal the price rules
         refuse is followed as a skipped trade (shadow_trades.py).
+
+        A signal that comes too early in its session, or while its market is
+        shut, is queued for its entry time instead (_queue_entry); `queued`
+        marks the call that runs it then.
         """
         # 'ticker' rides along so the notification can show the time exit on the
         # exchange's own clock - 17:15 CET for a Frankfurt position, not its ET
@@ -927,8 +945,11 @@ class StockAppBackend:
         # one has no working stop until the open: QURE was shorted at 07:34 ET
         # on a pre-market print after a 60% crash, rallied through its 8% stop
         # within minutes, and the stop could first fire at 09:35, at -55%.
-        # Not followed as a skipped trade either, since it would open on that
-        # same print. An exchange markets.py doesn't model has its hours
+        # Since v9 such a signal waits for the session (and
+        # ENTRY_DELAY_AFTER_OPEN_MIN into it) instead - see _queue_entry -
+        # and is judged on the price of that moment; one it won't wait for
+        # is not followed as a skipped trade, since it would open on that
+        # same thin print. An exchange markets.py doesn't model has its hours
         # looked up from Yahoo first; one whose hours can't be found isn't
         # traded at all - there would be no telling when its stop works.
         if markets.needs_learning(ticker):
@@ -937,9 +958,10 @@ class StockAppBackend:
         if session is None:
             return no(f"{ticker} is listed on an exchange whose trading hours couldn't be "
                       f"found - no position without them")
-        if session is False:
-            return no(f"{ticker}'s market is closed - positions only open during its "
-                      f"regular session")
+        closed = (f"{ticker}'s market is closed - positions only open during its "
+                  f"regular session")
+        if session is False and queued:
+            return no(closed)
         if direction == SHORT:
             if not config.ALLOW_SHORTS and not config.NOTIFY_SHORTS:
                 return no("short selling is off in settings")
@@ -950,6 +972,19 @@ class StockAppBackend:
         tracked = direction == LONG or config.ALLOW_SHORTS
         if tracked and self.watch_mgr.open_count() >= config.MAX_OPEN_POSITIONS:
             return no(f"position limit reached ({config.MAX_OPEN_POSITIONS} open)")
+        if not queued:
+            # Too early in the session, or the market shut: the signal
+            # waits for its entry time (strategy.entry_ready_at), when this
+            # runs again from the top with the price of that moment.
+            ready = strategy.entry_ready_at(
+                ticker, datetime.datetime.now(datetime.timezone.utc),
+                _parse_time(article.get('published_ts'), None))
+            if ready is False:
+                return no(closed)
+            if ready is not None:
+                return no(self._queue_entry(ready, decision, (
+                    ticker, company, direction, impact, prediction, expected_pct, confidence,
+                    analysis, article, url, title)))
 
         self.status(f"Checking price action: {ticker}")
         # The index this listing is judged against - SPY for a US symbol,
@@ -966,7 +1001,7 @@ class StockAppBackend:
             direction, impact, expected_pct, context,
             needs_confirmation=trust == OPINION,
             capped=strategy.parse_flag(analysis.get('value_is_capped')) is True,
-            reported_pct=reported, event_type=analysis.get('event_type'))
+            reported_pct=reported, event_type=analysis.get('event_type'), horizon=horizon)
         # A merger-arbitrage plan sets its own horizon (strategy._merger_arb).
         horizon = plan.get('horizon') or horizon
         # What the trade would really have opened at - the ask for a long,
@@ -1045,6 +1080,11 @@ class StockAppBackend:
                 # None for an ordinary news trade; 'merger_arb' for a
                 # takeover target held for a better bid.
                 'mode': plan.get('mode'),
+                # The wider news-day stop gives way to this one after the
+                # first session (strategy.stop_distance).
+                'settled_stop_pct': plan.get('settled_stop_pct'),
+                'first_day_until': (strategy.first_session_end(now_local(), ticker).isoformat()
+                                    if plan.get('settled_stop_pct') else None),
                 **extra_sizing,
                 **signal,
             },
@@ -1057,6 +1097,52 @@ class StockAppBackend:
             self.broker.open_position(watch)
         decision.update(opened=True, watch=watch, expires_at=watch['expires_at'])
         return decision
+
+    def _queue_entry(self, ready, decision, args):
+        """Hold a signal until `ready` (strategy.entry_ready_at), when
+        _run_pending_entries puts it through _decide_trade again. `args` are
+        _decide_trade's. Returns the no-trade-yet reason for the alert."""
+        ticker = args[0]
+        local = ready.astimezone(markets.timezone(ticker))
+        when = f"{local:%a %H:%M} {markets.tz_label(ticker)}"
+        if any(p['ticker'] == ticker for p in self._pending_entries):
+            return f"an entry in {ticker} is already waiting for {when}"
+        if len(self._pending_entries) >= MAX_PENDING_ENTRIES:
+            return f"{MAX_PENDING_ENTRIES} entries are already waiting for their session"
+        self._pending_entries.append({'ticker': ticker, 'ready_at': ready, 'args': args})
+        self._pending_entries.sort(key=lambda p: p['ready_at'])
+        decision['pending_until'] = ready.isoformat()
+        return (f"entry waits until {when}, {config.ENTRY_DELAY_AFTER_OPEN_MIN} min into the "
+                f"session - a BUY/SHORT alert follows then if the price still allows it")
+
+    def _run_pending_entries(self):
+        """Put every queued signal whose entry time has come through
+        _decide_trade, and send the entry alert for the ones that open."""
+        now = datetime.datetime.now(datetime.timezone.utc)
+        due = [p for p in self._pending_entries if p['ready_at'] <= now]
+        if not due:
+            return
+        self._pending_entries = [p for p in self._pending_entries if p['ready_at'] > now]
+        for p in due:
+            (ticker, company, direction, impact, prediction, expected_pct, confidence,
+             analysis, article, url, title) = p['args']
+            self.log(f"\n⏰ Entry time for {ticker} ({title[:60]})")
+            try:
+                decision = self._decide_trade(*p['args'], queued=True)
+            except Exception as e:
+                self.log(f"  ✗ Entry check failed: {e}")
+                continue
+            if not decision['opened']:
+                self.log(f"  ✗ No trade: {decision['reason']}")
+                continue
+            watch = decision['watch']
+            self.log(f"  {'BUY' if direction == LONG else 'SHORT'} {ticker} at "
+                     f"{watch['entry_price']:.2f} -> target {watch['target_price']:.2f}, "
+                     f"stop {watch['stop_loss_price']:.2f}")
+            is_owned = self.portfolio_mgr.has_stock(ticker)
+            if direction == SHORT and not is_owned and not config.NOTIFY_SHORTS:
+                continue
+            self.notifier.notify(company, article, analysis, is_owned=is_owned, decision=decision)
 
     def _signal_info(self, analysis, article):
         """paper_trader.SIGNAL_FIELDS for a trade or skipped trade on this
@@ -1435,7 +1521,7 @@ class StockAppBackend:
             out.update(close=c, in_session=True)
             position['last_price'] = c
             position['last_price_at'] = when.isoformat()
-            reason, level, reached = strategy.update_exit_bar(position, (o, h, l, c), cost)
+            reason, level, reached = strategy.update_exit_bar(position, (o, h, l, c), cost, when)
             out['reached'] = out['reached'] or reached
             if reason:
                 position['last_price'] = level
@@ -1498,7 +1584,7 @@ def _parse_time(value, fallback):
     except (TypeError, ValueError):
         return fallback
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=fallback.tzinfo)
+        parsed = parsed.replace(tzinfo=fallback.tzinfo if fallback else datetime.timezone.utc)
     return parsed
 
 

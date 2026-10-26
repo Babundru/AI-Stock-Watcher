@@ -40,7 +40,8 @@ def trade(wid, opened, closed=None, net=None, stop=0.04, confidence=80, impact="
 # are tested on their own (FeeTest).
 SETTINGS = dict(PAPER_BUDGET=1000.0, PAPER_RISK_PCT=0.01,
                 PAPER_MAX_POSITION_PCT=0.25, PAPER_MIN_POSITION=20.0,
-                PAPER_FEE_PER_ORDER=0.0, PAPER_FX_FEE_PCT=0.0, PAPER_MAX_FEE_PCT=0.0)
+                PAPER_FEE_PER_ORDER=0.0, PAPER_FX_FEE_PCT=0.0, PAPER_MAX_FEE_PCT=0.0,
+                FIRST_DAY_STOP_MULT=1.0, ENTRY_DELAY_AFTER_OPEN_MIN=0)
 
 
 class SizingTest(unittest.TestCase):

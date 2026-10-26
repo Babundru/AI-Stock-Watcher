@@ -44,6 +44,7 @@ RULE_LABELS = {
     'unconfirmed': "opinion source, unconfirmed",
     'capped': "price capped by the news",
     'reported': "headline already reports the move",
+    'intraday': "intraday story",
     'reward_risk': "story too small for the stock",
     'cash': "not enough cash in the paper account",
     # fills.entry_problem. A 'stale' record opened at the old price it was
@@ -147,6 +148,10 @@ class ShadowBook:
             "stop_pct": stop_pct,
             "stop_gain": round(-stop_pct, 6),
             "stop_loss_price": round(strategy.price_at_gain(direction, entry_price, -stop_pct), 4),
+            # The first-day stop, as a real position has it (stop_distance).
+            "settled_stop_pct": plan.get('settled_stop_pct'),
+            "first_day_until": (strategy.first_session_end(opened_at, ticker).isoformat()
+                                if plan.get('settled_stop_pct') else None),
             "peak_gain": 0.0,
             "let_run": bool(config.LET_WINNERS_RUN),
             "trailing": False,

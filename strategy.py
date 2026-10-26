@@ -314,15 +314,21 @@ def news_move(direction, context):
     return {'pct': -move if direction == SHORT else move, 'from': since, 'market_pct': market}
 
 
+def _first_day_mult():
+    mult = config.FIRST_DAY_STOP_MULT
+    return mult if mult and mult > 1 else 1.0
+
+
 def plan_trade(direction, impact, expected_pct, context, needs_confirmation=False, capped=False,
-               reported_pct=None, event_type=None):
+               reported_pct=None, event_type=None, horizon=None):
     """Decide whether a signal is worth trading now, and size its exits.
 
     `expected_pct` is the analysis's expected total move (a fraction, or None
     to fall back to the impact bucket). `needs_confirmation` is set for a
     story from an opinion source, `capped` when the analysis says the news
     pins the stock to a set price. `reported_pct` is a move the headline
-    itself reports (reported_move), `event_type` the analysis's category.
+    itself reports (reported_move), `event_type` the analysis's category,
+    `horizon` its INTRADAY/DAYS/WEEKS.
 
     Returns a dict with 'ok'; when not ok, the 'rule' that refused it and a
     readable 'reason'. The sizing is filled in either way, so a refused
@@ -350,7 +356,12 @@ def plan_trade(direction, impact, expected_pct, context, needs_confirmation=Fals
         'moved_from': move['from'] if move else None,
         'market_move_pct': round(move['market_pct'], 6) if move and move['market_pct'] is not None else None,
         'atr_pct': round(atr, 6) if atr else None,
-        'stop_pct': round(stop, 6),
+        # On news day the stop starts FIRST_DAY_STOP_MULT wider and settles
+        # to the usual distance after the first session (stop_distance).
+        # 'stop_pct' is the initial distance - what the position is sized
+        # on, so a stop-out costs the same whichever day it comes.
+        'stop_pct': round(stop * _first_day_mult(), 6),
+        'settled_stop_pct': round(stop, 6) if _first_day_mult() > 1 else None,
         'target_pct': round(target, 6),
     }
 
@@ -373,6 +384,11 @@ def plan_trade(direction, impact, expected_pct, context, needs_confirmation=Fals
             and (event_type or '').upper() != MA_EVENT):
         return skip('reported', f"the headline already reports a {reported_pct * 100:.0f}% move - "
                                 f"the news is in the price")
+    # Stories the model expects to play out within the session averaged
+    # -0.4% (Oct 2026 review): too little time for a move to beat the costs.
+    if config.SKIP_INTRADAY and (horizon or '').upper() == 'INTRADAY':
+        return skip('intraday', "an intraday story - its effect is expected to fade within the "
+                                "session, too soon to beat the costs")
     if moved is None:
         if needs_confirmation:
             return skip('unconfirmed', "opinion source, and no price data to confirm it")
@@ -434,7 +450,7 @@ def _merger_arb(plan, moved, daily, atr):
                           f"({abs(moved) / daily:.1f}x {unit}) - the market doubts the deal")
         return plan
     plan.update(ok=True, mode=MERGER_ARB_MODE, horizon=MERGER_ARB_HORIZON,
-                stop_pct=round(config.MERGER_ARB_STOP_PCT, 6),
+                stop_pct=round(config.MERGER_ARB_STOP_PCT, 6), settled_stop_pct=None,
                 target_pct=round(config.MERGER_ARB_TARGET_PCT, 6))
     return plan
 
@@ -459,6 +475,96 @@ def time_exit_at(opened_at, horizon, ticker=None):
         day = _next_trading_day(day)
     exit_local = market.tz.localize(datetime.datetime.combine(day, market.time_exit_at))
     return exit_local.astimezone(opened_at.tzinfo)
+
+
+def _market_for(ticker):
+    return markets.market(ticker) or markets.MARKETS[markets.US]
+
+
+def next_open(ticker, when):
+    """The start of the first regular session on `ticker`'s exchange that
+    opens at or after `when` (tz-aware). Holidays are not modelled."""
+    market = _market_for(ticker)
+    local = when.astimezone(market.tz)
+    day = local.date()
+    if local.weekday() > 4 or local.time() > market.open_at:
+        day = _next_trading_day(day)
+    return market.tz.localize(datetime.datetime.combine(day, market.open_at))
+
+
+def _previous_close(ticker, session_open):
+    """The close of the trading day before the session opening at
+    `session_open`."""
+    market = _market_for(ticker)
+    day = session_open.astimezone(market.tz).date() - datetime.timedelta(days=1)
+    while day.weekday() > 4:
+        day -= datetime.timedelta(days=1)
+    return market.tz.localize(datetime.datetime.combine(day, market.close_at))
+
+
+def first_session_end(opened_at, ticker):
+    """The close of the session a position opened at `opened_at` opened in
+    (the next session's, if opened outside one) - where its first-day stop
+    (config.FIRST_DAY_STOP_MULT) gives way to the settled one."""
+    market = _market_for(ticker)
+    local = opened_at.astimezone(market.tz)
+    day = local.date()
+    if local.weekday() > 4 or local.time() >= market.close_at:
+        day = _next_trading_day(day)
+    return market.tz.localize(datetime.datetime.combine(day, market.close_at))
+
+
+LATE_NEWS_GRACE = datetime.timedelta(minutes=30)
+
+
+def entry_ready_at(ticker, now, published=None):
+    """When a position on a story about `ticker` may open: None for now,
+    a datetime to wait until, or False for not at all (its market is shut
+    and the story isn't one to wait for).
+
+    A position opens no earlier than config.ENTRY_DELAY_AFTER_OPEN_MIN into
+    the session: the first minutes after the open on news day swing hardest,
+    and stops set then were hit within hours (5 stop-outs in 6 hours in the
+    Oct 2026 review). News that arrives while its market is shut waits for
+    that same moment of the next session (config.ENTRY_WAIT_FOR_SESSION) -
+    before strategy v9 it was never traded at all. Either wait is only for
+    the first session after the story: one published before the previous
+    close is a day old by then, and is judged as it stands.
+    """
+    market = _market_for(ticker)
+    delay = datetime.timedelta(minutes=max(config.ENTRY_DELAY_AFTER_OPEN_MIN or 0, 0))
+    local = now.astimezone(market.tz)
+    if market_open(ticker, now):
+        session = market.tz.localize(datetime.datetime.combine(local.date(), market.open_at))
+        fresh = published is None or published >= _previous_close(ticker, session)
+        return session + delay if fresh and session <= now < session + delay else None
+    if not config.ENTRY_WAIT_FOR_SESSION:
+        return False
+    session = next_open(ticker, now)
+    # A story from the session's last minutes - too late to enter on before
+    # the close - still counts as the next session's news.
+    if (published is not None
+            and published < _previous_close(ticker, session) - LATE_NEWS_GRACE):
+        return False
+    return session + delay
+
+
+def stop_distance(watch, when=None):
+    """How far behind the best price a position's stop trails at `when`:
+    the first-day distance (its 'stop_pct') until 'first_day_until', the
+    settled one ('settled_stop_pct') after. A position without the two -
+    opened before strategy v9, or with FIRST_DAY_STOP_MULT at 1 - has one
+    distance throughout. `when` None means after the first day."""
+    settled = watch.get('settled_stop_pct')
+    until = watch.get('first_day_until')
+    if settled and until:
+        try:
+            first_day = when is not None and when < datetime.datetime.fromisoformat(until)
+        except (TypeError, ValueError):
+            first_day = False
+        if not first_day:
+            return settled
+    return watch.get('stop_pct') or max_stop_pct()
 
 
 def sessions_without_price(ticker, last_price_at, now):
@@ -516,10 +622,11 @@ def market_open(ticker, now=None):
 
 # --- exit ------------------------------------------------------------------
 
-def update_exit(watch, price, cost_pct=0.0):
+def update_exit(watch, price, cost_pct=0.0, when=None):
     """Ratchet an open position's stop from the price just seen, and say
     whether a price-based exit fires. Mutates `watch` (peak_gain, stop_gain,
-    stop_loss_price, trailing) - the caller saves it.
+    stop_loss_price, trailing) - the caller saves it. `when` is the price's
+    time, for the first-day stop (stop_distance).
 
     Returns (reason or None, target_just_reached). Time exits are not
     decided here; see main.py:_check_watches.
@@ -529,7 +636,11 @@ def update_exit(watch, price, cost_pct=0.0):
     gain = pct_move(direction, entry, price)
     peak = max(watch.get('peak_gain') or 0.0, gain)
     target = watch.get('target_pct') or DEFAULT_TARGET_PCT
-    distance = watch.get('stop_pct') or max_stop_pct()
+    distance = stop_distance(watch, when)
+    # The tight trail past the target is a fraction of the settled stop,
+    # even on the first day: a position that has made its target has
+    # outrun the opening swings the wide stop is there for.
+    settled = watch.get('settled_stop_pct') or watch.get('stop_pct') or max_stop_pct()
     stop = watch.get('stop_gain')
     if stop is None:
         stop = -distance
@@ -548,7 +659,7 @@ def update_exit(watch, price, cost_pct=0.0):
     if peak >= config.BREAKEVEN_AT * target:
         stop = max(stop, cost_pct)
     if watch.get('trailing'):
-        stop = max(stop, peak - max(config.TRAIL_AFTER_TARGET_MULT * distance, 0.005))
+        stop = max(stop, peak - max(config.TRAIL_AFTER_TARGET_MULT * settled, 0.005))
 
     watch['peak_gain'] = round(peak, 6)
     watch['stop_gain'] = round(stop, 6)
@@ -565,11 +676,11 @@ def _stop_reason(stop):
     return 'trailing_stop' if stop >= 0 else 'stop_loss'
 
 
-def update_exit_bar(watch, bar, cost_pct=0.0):
+def update_exit_bar(watch, bar, cost_pct=0.0, when=None):
     """update_exit for one 1-minute bar (open, high, low, close) instead of
     one price: what a resting stop order (and, without LET_WINNERS_RUN, a
     target limit order) would have done during that minute. Mutates `watch`
-    like update_exit.
+    like update_exit. `when` is the bar's time.
 
     Returns (reason or None, exit price or None, target_just_reached). The
     exit price is the level the order was triggered at - the stop's or the
@@ -607,7 +718,7 @@ def update_exit_bar(watch, bar, cost_pct=0.0):
         watch['peak_gain'] = round(max(watch.get('peak_gain') or 0.0, target), 6)
         return done('target_hit', target)
 
-    reason, reached = update_exit(watch, best_px, cost_pct)
+    reason, reached = update_exit(watch, best_px, cost_pct, when)
     if reason:
         # Only possible through the ratchet just applied - the best price
         # itself is above any stop it sets.
