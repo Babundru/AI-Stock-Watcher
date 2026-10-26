@@ -268,6 +268,13 @@ BREAKEVEN_AT = 0.5
 LET_WINNERS_RUN = True
 TRAIL_AFTER_TARGET_MULT = 0.5
 
+# With LET_WINNERS_RUN: sell half the position at the target and let only
+# the other half run. Trades gave back most of their gains - an average best
+# point of +8.6% against an average close of +2.2% in the Oct 2026 review -
+# and half banked at the target keeps some of it whatever the rest does.
+# Costs a third order's fixed fee.
+TAKE_HALF_AT_TARGET = True
+
 # Whether exits may only fire during the US regular session (09:30-16:00
 # ET). Prices come from the 1-minute chart with extended hours included, so
 # outside those times a "price" can be a handful of shares at a spread no
@@ -613,6 +620,7 @@ USER_SETTINGS = {
     "STOP_LOSS_PCT": _FLOAT,
     "STOP_ATR_MULT": _FLOAT,
     "LET_WINNERS_RUN": _BOOL,
+    "TAKE_HALF_AT_TARGET": _BOOL,
     "EXITS_REGULAR_HOURS_ONLY": _BOOL,
     "ENTRY_MAX_SPREAD_PCT": _FLOAT,
     "ENTRY_MAX_PRICE_AGE_MIN": _FLOAT,

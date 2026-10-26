@@ -154,6 +154,7 @@ class ShadowBook:
                                 if plan.get('settled_stop_pct') else None),
             "peak_gain": 0.0,
             "let_run": bool(config.LET_WINNERS_RUN),
+            "take_half": bool(config.LET_WINNERS_RUN and config.TAKE_HALF_AT_TARGET),
             "trailing": False,
             "opened_at": opened_at.isoformat(),
             "expires_at": strategy.time_exit_at(opened_at, horizon, ticker).isoformat(),
@@ -187,7 +188,8 @@ class ShadowBook:
 
     def close(self, record, reason, price, benchmark_price=None, now=None):
         """Settle a record whose exit fired. Not saved here, like mark_price."""
-        gross = strategy.pct_move(record['direction'], record['entry_price'], price)
+        gross = strategy.blended_gain(
+            record, strategy.pct_move(record['direction'], record['entry_price'], price))
         cost = costs.round_trip_pct(record, size=_nominal_size(record), base_pct=self.cost_pct)
         record.update(
             status='CLOSED', reason=reason, exit_price=price,

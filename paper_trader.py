@@ -45,6 +45,7 @@ import datetime
 import costs
 import fills
 import paper_account
+import strategy
 from local_time import now_local
 
 LEDGER_FILE = "data/paper_trades.json"
@@ -344,6 +345,15 @@ class PaperTrader:
         self.save()
         return trade
 
+    def note_half_exit(self, watch_id, gain):
+        """Record that an open trade sold half at its target, at `gain`
+        (strategy.update_exit's half_exit_gain), so the account values what
+        is left of it as what it is (paper_account)."""
+        trade = self._find(watch_id)
+        if trade and trade['status'] == 'OPEN' and trade.get('half_exit_gain') is None:
+            trade['half_exit_gain'] = gain
+            self.save()
+
     def mark_price(self, watch_id, price, low=None, high=None):
         """Note a price observed while the position is open, updating the
         best and worst it has been - from `low` and `high` too when given
@@ -382,7 +392,11 @@ class PaperTrader:
             return None
 
         direction = trade['direction']
-        gross = _pct_move(direction, trade['entry_price'], exit_price)
+        if watch.get('half_exit_gain') is not None:
+            trade['half_exit_gain'] = watch['half_exit_gain']
+        # With half sold at the target, the whole position's result
+        # (strategy.blended_gain); the exit price is the second half's.
+        gross = strategy.blended_gain(trade, _pct_move(direction, trade['entry_price'], exit_price))
 
         trade['status'] = 'CLOSED'
         trade['exit_price'] = exit_price

@@ -107,6 +107,12 @@ def position_size(account, cash, stop_pct, confidence, impact, s):
     return {'size': round(size, 2), 'risk_usd': round(size * stop, 2), 'conviction': round(conv, 3)}
 
 
+def _open_gain(trade, price):
+    """An open trade's gain at `price` - on the whole position, when half of
+    it was already sold at the target (strategy.blended_gain)."""
+    return strategy.blended_gain(trade, strategy.pct_move(trade['direction'], trade['entry_price'], price))
+
+
 def _epoch(value):
     try:
         return datetime.datetime.fromisoformat(value).timestamp()
@@ -183,8 +189,7 @@ def replay(trades, cost_pct, risk_pct=None, marks=(), prices=None, now=None, cur
                 p = held.get(wid)
                 if p and price:
                     t = p['trade']
-                    p['pct'] = (strategy.pct_move(t['direction'], t['entry_price'], price)
-                                - p['cost'] - fills.exit_haircut(t))
+                    p['pct'] = (_open_gain(t, price) - p['cost'] - fills.exit_haircut(t))
                     moved = True
             if moved:
                 point(ts, 'mark', open=len(held))
@@ -228,8 +233,7 @@ def replay(trades, cost_pct, risk_pct=None, marks=(), prices=None, now=None, cur
         price = (prices or {}).get(p['trade']['ticker'])
         if price:
             t = p['trade']
-            p['pct'] = (strategy.pct_move(t['direction'], t['entry_price'], price)
-                        - p['cost'] - fills.exit_haircut(t))
+            p['pct'] = (_open_gain(t, price) - p['cost'] - fills.exit_haircut(t))
     if events:
         point(max(now_ts, events[-1][0]), 'now', open=len(held))
     # The entries of the positions still open, flagged with where they

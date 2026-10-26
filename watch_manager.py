@@ -126,6 +126,10 @@ class WatchManager:
             # Captured at open, like the stop, so changing the setting
             # later doesn't rewrite how an existing position is managed.
             "let_run": bool(strategy.config.LET_WINNERS_RUN),
+            # Sell half at the target and let the rest run (strategy v9,
+            # config.TAKE_HALF_AT_TARGET) - captured at open like let_run.
+            "take_half": bool(strategy.config.LET_WINNERS_RUN
+                              and strategy.config.TAKE_HALF_AT_TARGET),
             "trailing": False,
             "impact": impact,
             "horizon": horizon,

@@ -1566,13 +1566,18 @@ class StockAppBackend:
         stop now trailing close behind. Worth telling the user - their
         broker-side stop should follow."""
         direction = watch.get('direction', LONG)
+        half = watch.get('half_exit_gain') is not None
         self.log(f"  🎯 {watch['company']} ({watch['ticker']}) reached its target at "
-                 f"{price:.2f} - holding, trailing stop now {watch['stop_loss_price']:.2f}")
+                 f"{price:.2f} - {'half sold, the rest' if half else 'holding'}, trailing stop "
+                 f"now {watch['stop_loss_price']:.2f}")
+        if half and self.paper:
+            self.paper.note_half_exit(watch['id'], watch['half_exit_gain'])
         if direction == SHORT and not config.NOTIFY_SHORTS:
             return
         self.notifier.notify_target_reached(
             watch['ticker'], watch['company'], direction, watch['entry_price'],
-            price, watch['stop_loss_price'], article_url=watch.get('article_url'))
+            price, watch['stop_loss_price'], article_url=watch.get('article_url'),
+            take_half=half)
 
 
 def _parse_time(value, fallback):

@@ -650,6 +650,11 @@ def update_exit(watch, price, cost_pct=0.0, when=None):
         if peak >= target and not watch.get('trailing'):
             watch['trailing'] = True
             target_just_reached = True
+            if watch.get('take_half'):
+                # Half sold at the target, as a limit order there would
+                # (config.TAKE_HALF_AT_TARGET); the rest trails. See
+                # blended_gain for what the position then makes.
+                watch['half_exit_gain'] = round(target, 6)
     elif gain >= target:
         watch['peak_gain'] = round(peak, 6)
         return 'target_hit', False
@@ -670,6 +675,18 @@ def update_exit(watch, price, cost_pct=0.0, when=None):
         # cutting a loss - reported separately so the record shows which.
         return _stop_reason(stop), target_just_reached
     return None, target_just_reached
+
+
+def blended_gain(position, final_gain):
+    """The whole position's gain, given `final_gain` on what is left: with
+    half of it sold at the target (half_exit_gain, recorded by update_exit),
+    the average of that half - less half the spread it opened across, as
+    the exit side of the quote - and the rest. `final_gain` unchanged for a
+    position that sold nothing early."""
+    half = position.get('half_exit_gain')
+    if half is None:
+        return final_gain
+    return 0.5 * (half - (position.get('spread_pct') or 0) / 2) + 0.5 * final_gain
 
 
 def _stop_reason(stop):

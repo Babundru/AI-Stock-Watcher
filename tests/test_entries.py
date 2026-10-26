@@ -127,6 +127,48 @@ class FirstDayStopTests(unittest.TestCase):
                                             horizon='INTRADAY')['ok'])
 
 
+class HalfAtTargetTests(unittest.TestCase):
+
+    def setUp(self):
+        p = mock.patch.multiple(config, BREAKEVEN_AT=0.5, TRAIL_AFTER_TARGET_MULT=0.5,
+                                PAPER_COST_PCT=0.0, PAPER_FEE_PER_ORDER=1.0, PAPER_FX_FEE_PCT=0.0)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def watch(self, take_half=True):
+        return {'id': 'w1', 'ticker': 'AAA', 'company': 'Acme', 'direction': 'LONG',
+                'entry_price': 100.0, 'target_pct': 0.06, 'stop_pct': 0.03, 'stop_gain': -0.03,
+                'let_run': True, 'take_half': take_half, 'spread_pct': 0.002,
+                'opened_at': et(26, 10, 0).isoformat()}
+
+    def test_half_is_sold_at_the_target(self):
+        w = self.watch()
+        _, _, reached = strategy.update_exit_bar(w, (105.0, 107.0, 105.0, 106.5))
+        self.assertTrue(reached)
+        self.assertEqual(w['half_exit_gain'], 0.06)
+        # Without take_half the whole position runs, as before.
+        w = self.watch(take_half=False)
+        strategy.update_exit_bar(w, (105.0, 107.0, 105.0, 106.5))
+        self.assertNotIn('half_exit_gain', w)
+
+    def test_the_result_averages_both_halves(self):
+        w = dict(self.watch(), half_exit_gain=0.06)
+        # Half at 6% less half the 0.2% spread, half at +2%.
+        self.assertAlmostEqual(strategy.blended_gain(w, 0.02), 0.5 * 0.059 + 0.5 * 0.02)
+        self.assertEqual(strategy.blended_gain(self.watch(), 0.02), 0.02)
+
+    def test_the_ledger_books_the_blend_and_a_third_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paper = PaperTrader(filename=os.path.join(tmp, 'paper_trades.json'), cost_pct=0.0)
+            w = dict(self.watch(), position_usd=100.0)
+            paper.open_trade(w)
+            paper.note_half_exit('w1', 0.06)
+            w.update(half_exit_gain=0.06, status='CLOSED', reason='trailing_stop')
+            trade = paper.close_trade(w, 102.0)
+        self.assertAlmostEqual(trade['gross_pct'], 0.5 * 0.059 + 0.5 * 0.02)
+        self.assertAlmostEqual(trade['cost_pct'], 3 * 1.0 / 100.0)
+
+
 class QueuedEntryTests(unittest.TestCase):
     """A signal for a shut market waits in main._pending_entries and opens,
     with its entry alert, once its time has come."""

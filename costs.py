@@ -24,21 +24,23 @@ def is_foreign(ticker):
     return markets.market_key(ticker) != markets.US
 
 
-def fixed_fees_pct(size):
-    """Both orders' fixed fees as a fraction of a position of `size`
-    dollars; 0 with no fee or no size."""
+def fixed_fees_pct(size, orders=2):
+    """`orders` orders' fixed fees - both of a round trip by default - as a
+    fraction of a position of `size` dollars; 0 with no fee or no size."""
     fee = float(config.PAPER_FEE_PER_ORDER or 0)
     if fee <= 0 or not size or size <= 0:
         return 0.0
-    return 2 * fee / size
+    return orders * fee / size
 
 
 def round_trip_pct(trade, size=None, base_pct=None):
     """Everything a trade pays besides the spread, as a fraction of its
     position: `base_pct` (PAPER_COST_PCT when None), the fixed fees on
     `size` dollars (the trade's own position_usd when None) and, for a
-    foreign listing, the conversion both ways."""
+    foreign listing, the conversion both ways. A trade that sold half at
+    its target (half_exit_gain) placed a third order."""
     base = float(config.PAPER_COST_PCT if base_pct is None else base_pct)
     size = size if size is not None else trade.get('position_usd')
     fx = 2 * float(config.PAPER_FX_FEE_PCT or 0) if is_foreign(trade.get('ticker')) else 0.0
-    return base + fixed_fees_pct(size) + fx
+    orders = 3 if trade.get('half_exit_gain') is not None else 2
+    return base + fixed_fees_pct(size, orders) + fx

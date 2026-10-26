@@ -199,18 +199,24 @@ class Notifier:
         return f"No trade: {d.get('reason')}."
 
     def notify_target_reached(self, ticker, company, direction, entry_price,
-                              current_price, stop_price, article_url=None):
+                              current_price, stop_price, article_url=None, take_half=False):
         """A position reached its target and is being left to run with a
         trailing stop (config.LET_WINNERS_RUN) - no action needed except
-        moving a broker-side stop up to match."""
+        moving a broker-side stop up to match, and, with `take_half`
+        (config.TAKE_HALF_AT_TARGET), selling half of it."""
         is_short = (direction or "LONG").upper() == "SHORT"
         move = ((current_price - entry_price) / entry_price * 100) if entry_price else 0.0
         position_pct = -move if is_short else move
         locked = ((entry_price - stop_price) if is_short else (stop_price - entry_price)) / entry_price * 100 \
             if entry_price else 0.0
         title = f"{company} ({ticker}) - TARGET REACHED"
+        if take_half:
+            hold = (f"{'Buy back' if is_short else 'Sell'} HALF the position now; "
+                    f"the other half is left to run.")
+        else:
+            hold = "Holding to let it run."
         message = (
-            f"🎯 Target reached ({position_pct:+.1f}% on the position). Holding to let it run.\n\n"
+            f"🎯 Target reached ({position_pct:+.1f}% on the position). {hold}\n\n"
             f"Trailing stop now {stop_price:.2f} (locks in {locked:+.1f}%) - move your stop there.\n"
             f"A {'BUY BACK' if is_short else 'SELL'} alert follows when it's hit."
         )
