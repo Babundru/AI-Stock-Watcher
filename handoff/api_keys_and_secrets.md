@@ -29,6 +29,7 @@ overlay on top of it.
 | `DASHBOARD_USERNAME` / `DASHBOARD_PASSWORD` | Web dashboard login (`server.py` only, `gui.py` ignores these) | Empty password = no login prompt at all - `server.py` prints a startup warning if unset |
 | `USE_CLOUD_AI`, `CLOUD_AI_PROVIDER`, `CLOUD_AI_MODEL`, `CLOUD_AI_API_KEY`, `CLOUD_AI_BASE_URL` | Cloud AI engine | See `ai_engines.md` for current provider/model choice |
 | `USE_LOCAL_LLM`, `LOCAL_MODEL_NAME`, `OLLAMA_NUM_THREADS` | Local Ollama engine | Desktop-only in practice, see `ai_engines.md` |
+| `SEC_USER_AGENT` | SEC 8-K filings as a news source (`edgar.py`) | SEC 403s requests without a contact in the User-Agent: "Name you@example.com". Empty = EDGAR not polled. Not a secret, but personal - settings.json only |
 | `NOTIFY_OWNERSHIP` | Whether a NEGATIVE alert on an owned stock gets `[OWNED]` in the *push notification* itself | Off by default - the ntfy topic is public, this would leak holdings to anyone who finds the topic |
 
 Settings **not** overridable via `data/settings.json` (edit `config.py`

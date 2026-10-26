@@ -47,6 +47,8 @@ noise, or a full structured object for real news:
   "is_new_information": true,
   "is_company_specific": true,
   "value_is_capped": false,
+  "event_type": "M&A|EARNINGS|GUIDANCE|CLINICAL|REGULATORY|CONTRACT|OFFERING|LEGAL|MANAGEMENT|ANALYST|PRODUCT|RESTRUCTURING|MACRO|OTHER",
+  "reported_move_pct": null,
   "explanation": "...",
   "prediction": "GAP UP|GAP DOWN|RALLY|DROP|FLAT",
   "horizon": "INTRADAY|DAYS|WEEKS"
@@ -62,6 +64,15 @@ the target), and `value_is_capped` its `capped` rule (a cash takeover's
 target is pinned to the offer price - nothing left to ride). The prompt
 also gets the article's publish time and a calibration paragraph ("most
 news moves a large-cap < 2%").
+
+`event_type` (normalised by `strategy.parse_event_type`) and
+`reported_move_pct` (the move the article says already happened, combined
+with `strategy.headline_move_pct`'s regex) arrived with prompt `p2` (Oct
+2026): the first is what results are split by (C9), the second feeds the
+`reported` entry rule. The prompt also now says a reported move or dramatic
+wording is not a CRITICAL catalyst. **`llm_prompts.PROMPT_VERSION`** is
+recorded on every trade with the `model` of the fallback list that answered
+(set by the engine on its reply) - bump it with any prompt change.
 
 An article with no text at all - no scraped body and no feed summary -
 is analysed on its headline alone, with `HEADLINE_ONLY` in place of the
@@ -93,6 +104,31 @@ old `data/settings.json` is ignored.
 salience-weighted regex scorer (see `data_sources.md` for its algorithm),
 returning the same shape but computed from `data/keywords.json` weights
 instead of model reasoning.
+
+## Screener, agent panel, weekly reviewer (Oct 2026, `CHANGE.md` C10/C12)
+
+- **Screener** (`main._screen`, `SCREENER_MODE`): the keyword engine's
+  relevance test run in front of the model. Default `shadow` - it decides
+  nothing, its verdict is counted (`stats.json`: `screened`,
+  `screened_out`, `screener_missed_alerts`) and recorded on every trade as
+  `screened_out`. `on` skips the model for what it rejects. On headlines
+  alone it would have dropped 38 of the 52 past trades, so don't switch it
+  on before its shadow record says otherwise.
+- **Agent panel** (`panel.py`, `PANEL_MODE`, default `shadow`): for every
+  alert that reaches the price check, five short calls - catalyst analyst,
+  "priced-in" skeptic (gets the price context the screening prompt never
+  sees, may veto), event specialist (per-`event_type` prompt), historian
+  (base rates from the ledger), devil's advocate (reads the other four) -
+  each on its own model of `CLOUD_AI_MODEL`'s list (2 tried at most). A
+  fixed rule (`PANEL_MIN_AGREE` 3 of 4, no veto) gives the panel's call.
+  Runs on a worker thread (~70s per alert), writes `data/panel_votes.json`
+  (newest 1000), changes no trade. `paper_report.py` scores each agent:
+  average result when it said TRADE vs PASS.
+- **Weekly reviewer** (`weekly_review.py`, `WEEKLY_REVIEW`): at the weekend,
+  once a week, one call with the ledger's breakdowns, the skipped trades by
+  rule and the panel scores; writes proposed rule changes to
+  `data/reviews/review-<date>.md` and notifies. Nothing is applied.
+  `py weekly_review.py` writes one now.
 
 ## Engine 1: Local (`analyzer.py` + `ollama_manager.py`)
 

@@ -53,10 +53,22 @@ opened at 07:34 ET on a pre-market print right after a 60% crash, the stock
 rallied through its 8% stop within minutes, and the stop - gated to the
 regular session like every exit - could first fire at 09:35. Positions now
 open only in the regular session too, and a move past
-`EXHAUSTED_MAX_ATR_MULT` (6) daily ranges is `exhausted` whatever the
+`EXHAUSTED_MAX_ATR_MULT` (then 6) daily ranges is `exhausted` whatever the
 AI's expected move (which had just repeated the headline's "65%").
+Strategy `v9` (Oct 2026, from the review in `CHANGE.md`) changed entries
+and exits together - each part has its own setting, so it can be switched
+off and judged on its own: a headline that reports the move is refused
+(`reported`), `EXHAUSTED_MAX_ATR_MULT` 6 -> 4, CRITICAL sizes a position
+down, takeover targets are held as merger arbitrage, entries wait 20
+minutes into the session (and out-of-hours news waits for the open instead
+of being dropped), the stop is wider on news day, half the position is sold
+at the target, INTRADAY stories and illiquid or out-of-scope listings are
+skipped, and confidence no longer sizes trades.
 
 **Entry** (`main.py:_decide_trade`, cheapest checks first):
+- Only exchanges `markets.py` models (US + the European venues), narrowed by
+  `ALLOWED_MARKETS`; anything else (Sydney, Seoul, Tokyo...) only with
+  `TRADE_OTHER_EXCHANGES`. Not followed as a skipped trade.
 - Short gates: `ALLOW_SHORTS` / `NOTIFY_SHORTS` (both off = negative news
   on an unowned stock is skipped outright) and `SHORT_MIN_IMPACT`
   (default CRITICAL). `ALLOW_SHORTS` off with `NOTIFY_SHORTS` on sends the
@@ -66,10 +78,18 @@ AI's expected move (which had just repeated the headline's "65%").
   Seoul, Tokyo, Toronto...) has its hours looked up once from Yahoo's chart
   metadata (`price_lookup.learn_market` -> `markets.learn`, saved to
   `data/exchange_sessions.json`, loaded at startup); if that fails nothing
-  opens. Out of hours the alert still goes out, but nothing opens and
-  nothing is followed as a skipped trade. `.T` and `.V` are exchanges, not
-  share classes (`markets.OTHER_EXCHANGE_LETTERS`).
+  opens. `.T` and `.V` are exchanges, not share classes
+  (`markets.OTHER_EXCHANGE_LETTERS`).
 - One position per ticker; at most `MAX_OPEN_POSITIONS` (20) open.
+- **Entry time** (`strategy.entry_ready_at`, v9): no earlier than
+  `ENTRY_DELAY_AFTER_OPEN_MIN` (20) into the session. A signal that comes
+  earlier - or while its market is shut (`ENTRY_WAIT_FOR_SESSION`) - waits
+  in `main._pending_entries` (max 20, one per ticker, in memory only) and is
+  put through `_decide_trade` again from the top at that time, on the price
+  of that moment (`_run_pending_entries`, once per scan). The alert says it
+  is waiting; the BUY/SHORT notification follows when it opens. Only for the
+  first session after the story (with 30 minutes' grace before a close);
+  older news out of hours is passed over as before.
 - `price_lookup.fetch_context(ticker, published, benchmark=SPY)` (two
   small single-ticker requests each for the stock and for SPY), then
   `strategy.plan_trade`. "Moved" is the story's own move
@@ -78,14 +98,25 @@ AI's expected move (which had just repeated the headline's "65%").
   while the market was shut (the gap is the reaction), minus SPY's move
   over the same window. In multiples of the 14-day ATR (the "daily range",
   2% when unknown), first match wins:
-  - `capped` - the screen said `value_is_capped` (a cash takeover's target).
+  - `capped` - the screen said `value_is_capped` (a cash takeover's target)
+    on a short, or with `MERGER_ARB` off. With it on (the default) a long is
+    **merger arbitrage** (`strategy._merger_arb`, `mode: merger_arb`): held
+    over WEEKS for a raised or rival bid, fixed `MERGER_ARB_STOP_PCT` (5%)
+    stop, `MERGER_ARB_TARGET_PCT` (5%) target, no `exhausted`/`reward_risk`
+    check - only `against` (the market doubting the deal). A broken deal is
+    negative news and closes it (`news_reversal`).
+  - `reported` - the headline itself reports a move of at least
+    `REPORTED_MOVE_MAX_PCT` (5%) - the model's `reported_move_pct` or
+    `strategy.headline_move_pct`'s regex, whichever is larger. Not for
+    `event_type` M&A.
+  - `intraday` - the model's horizon is INTRADAY (`SKIP_INTRADAY`).
   - `against` - moved more than `AGAINST_NEWS_ATR_MULT` (0.5) daily ranges
     against the news: the market reads it differently.
   - `exhausted` - moved with it past both `EXHAUSTED_ATR_MULT` (3) daily
     ranges and the whole expected move: the move is spent. (Both, so a big
     story on a calm stock isn't cut off after 3% - a plain 3x ATR limit was
-    stricter than v2 there.) Or past `EXHAUSTED_MAX_ATR_MULT` (6) daily
-    ranges alone - the expected move can simply echo a headline's move.
+    stricter than v2 there.) Or past `EXHAUSTED_MAX_ATR_MULT` (4 since v9)
+    daily ranges alone - the expected move can simply echo a headline's move.
   - `unconfirmed` - a story from an opinion source (X, Reddit - see
     `data_sources.md`) that hasn't moved the price at least
     `CONFIRM_ATR_MULT` (0.5) daily ranges its way, or can't be priced.
@@ -97,9 +128,17 @@ AI's expected move (which had just repeated the headline's "65%").
   doesn't count against the trade. Stop = `STOP_ATR_MULT` (1.5) x ATR
   clamped to [`STOP_MIN_PCT`, `STOP_LOSS_PCT`]; target = expected move
   minus what has already happened, but at least `MIN_REWARD_RISK` x the
-  stop, clamped to 1.5-20%. A refused signal is followed as a skipped trade
-  (below).
-- Entry pricing (`fetch_prices`, with SPY in the same call).
+  stop, clamped to 1.5-20%. On news day the stop starts
+  `FIRST_DAY_STOP_MULT` (1.5) x wider (`stop_pct`, what the position is
+  sized on) and settles to the usual distance (`settled_stop_pct`) after
+  the first session (`first_day_until`, `strategy.stop_distance`). A
+  refused signal is followed as a skipped trade (below).
+- Entry pricing (`fetch_prices`, with SPY in the same call), then
+  `illiquid` (`main._universe_problem`): market cap under
+  `MIN_MARKET_CAP_USD` ($150M) or average daily turnover under
+  `MIN_DAILY_TURNOVER_USD` ($1M), from the quote and the context's
+  `avg_turnover` at rough FX rates (`costs.approx_usd` - London turnover is
+  in pence, its market cap in pounds). Followed as a skipped trade.
 - An alert whose direction contradicts an open position in the same
   ticker closes it first (`news_reversal`).
 
@@ -124,7 +163,13 @@ AI's expected move (which had just repeated the headline's "65%").
   `TRAIL_AFTER_TARGET_MULT` (0.5) x the distance once the target is hit
   (`trailing: true`, one "TARGET REACHED" notification). Fires as
   `stop_loss` below break-even, `trailing_stop` at or above it.
-- **Target** closes the watch only when `let_run` is false.
+- **Target** closes the watch only when `let_run` is false. With
+  `TAKE_HALF_AT_TARGET` (`take_half`, v9) half is sold there: the target's
+  level is recorded as `half_exit_gain` on the position (and the paper
+  trade, `note_half_exit`), the notification says to sell half, and the
+  close books `strategy.blended_gain` - half at the target less half the
+  spread, half at the exit - with a third order's fee (`costs.py`). The
+  IBKR mirror (`broker.py`) does not place the half order.
 - **Time exit**: `expires_at` = 15:45 ET on the Nth trading day after the
   opening session (INTRADAY 0, DAYS 3, WEEKS 15; a position opened after
   12:00 ET or at a weekend counts from the next session). Time exits,
@@ -203,7 +248,9 @@ kept in the browser's localStorage.
 - **Size** = account x risk % x conviction / stop distance. The stop comes
   from the stock's ATR, so a jumpy stock gets a smaller position and every
   stopped-out trade costs about the same. Conviction is a small nudge:
-  confidence 60 -> x0.75 .. 100 -> x1.25, CRITICAL x1.15. Capped at
+  CRITICAL x0.85 (x1.15 before v9). Confidence scaled it too (60 -> x0.75 ..
+  100 -> x1.25) until the ledger showed it predicting results backwards;
+  that scale is flat now, waiting for sizing by event type (C9). Capped at
   `PAPER_MAX_POSITION_PCT` (25%, "Maximum per position %" in Settings) of
   the account and at the free cash;
   under `PAPER_MIN_POSITION` ($20) the trade is refused, and so is one whose

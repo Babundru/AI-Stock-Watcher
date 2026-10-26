@@ -2,7 +2,8 @@
 
 From a review on 2026-10-24 of the code and of the live data on the VM
 (`paper_trades.json`, `shadow_trades.json`, `settings.json`, the journal).
-Nothing here is implemented yet.
+Implemented on branch `change-md-strategy-review` (Oct 26) except where marked;
+strategy v9 / prompt p2.
 
 Status: **proposed** / **in progress** / **done** / **rejected** (with the reason).
 
@@ -59,7 +60,9 @@ Takeaways:
 
 ---
 
-## C1. Fix the dead feeds - proposed
+## C1. Fix the dead feeds - done
+
+> **Done** (branch `change-md-strategy-review`): Yahoo US replaced by Seeking Alpha market news, Yahoo UK moved to `rss/topstories` (the only Yahoo URL still answering), Investing.com dropped from the built-in feeds. A feed with no entries for `FEED_DEAD_AFTER_SCANS` (30) scans is reported once to the journal and the dashboard log, and its per-scan error lines are muted. The VM's `data/news_sources.json` still lists Yahoo and Investing.com as custom sources - remove them in the dashboard.
 
 `news_collector.py: US_RSS_FEEDS / EU_RSS_FEEDS`
 
@@ -72,7 +75,9 @@ returned nothing for N scans in a row so this is noticed in hours, not weeks.
 Investing.com article pages return 403, so its stories are always judged on
 the headline alone; consider dropping it or replacing it.
 
-## C2. Add primary news sources - proposed
+## C2. Add primary news sources - done (except RNS)
+
+> **Done (except RNS)** (branch `change-md-strategy-review`): PR Newswire, GlobeNewswire (`rss.` host - the main one 403s the VM) and Business Wire (`SCAN_PRESS_RELEASES`), and SEC 8-Ks via `edgar.py` once `SEC_USER_AGENT` is set (routine items dropped by number, the model reads the EX-99 press release). Law-firm class-action spam is a noise headline. LSE RNS: no free feed was found that answers - not done. More articles mean more model calls; see C10.
 
 `news_collector.py`, `source_manager.py`
 
@@ -87,7 +92,9 @@ used:
 Speed is the edge for a news strategy. This is likely worth more than any
 prompt change.
 
-## C3. Record the model and the publish time on every trade - proposed
+## C3. Record the model and the publish time on every trade - done
+
+> **Done** (branch `change-md-strategy-review`): `model`, `prompt_version`, `news_source`, `published_at`, `analysed_at` (plus `event_type`, `reported_move_pct`, `screened_out`) on every watch, paper trade and skipped trade (`paper_trader.SIGNAL_FIELDS`); `paper_report.py` splits by model, prompt, event type, source and prints the median detection latency.
 
 `paper_trader.py`, `shadow_trades.py`, `watch_manager.py`
 
@@ -100,7 +107,9 @@ prompt change.
 
 Also record a prompt version next to `STRATEGY_VERSION`.
 
-## C4. Stop chasing moves the headline already reports - proposed
+## C4. Stop chasing moves the headline already reports - done (price context to the model moved to C12)
+
+> **Done (price context to the model moved to C12)** (branch `change-md-strategy-review`): Rule `reported` (headline move >= `REPORTED_MOVE_MAX_PCT` 5%, not for M&A; checked against the ledger: such trades averaged -2.2% vs +7.6%), `EXHAUSTED_MAX_ATR_MULT` 6 -> 4, CRITICAL sizes x0.85 instead of x1.15, prompt p2 (event_type, reported_move_pct, CRITICAL warning; verified live). The screening prompt still can't see the price - the ticker isn't known before it runs - so the price context goes to the panel's skeptic (C12) instead.
 
 `llm_prompts.py`, `strategy.py: plan_trade`, `config.py`
 
@@ -112,7 +121,9 @@ Also record a prompt version next to `STRATEGY_VERSION`.
 - Lower `EXHAUSTED_MAX_ATR_MULT` (currently 6.0).
 - Treat CRITICAL with suspicion rather than as the strongest signal.
 
-## C5. Lean into M&A - proposed
+## C5. Lean into M&A - done
+
+> **Done** (branch `change-md-strategy-review`): `MERGER_ARB` (on): a capped long is held over WEEKS with a 5% stop and 5% target (then trailing), exiting on `against` or deal-break news. Note the +9% for `capped` skips is mostly one trade (SGR-UN.TO +63%).
 
 `strategy.py: plan_trade` (`capped` rule)
 
@@ -121,7 +132,9 @@ would have averaged +9.0%. Replace the blanket refusal with a small
 merger-arbitrage mode: hold the target for a raised or rival bid, with a
 wider horizon, and exit if the deal breaks.
 
-## C6. Cut shorts back - proposed
+## C6. Cut shorts back - pending your OK
+
+> **Pending your OK** (branch `change-md-strategy-review`): Code default is already `CRITICAL`; the VM's `settings.json` overrides it to `HIGH`. Needs the VM setting removed (or `ALLOW_SHORTS` false) - not changed without approval.
 
 `data/settings.json` on the VM
 
@@ -129,7 +142,9 @@ The VM overrides `SHORT_MIN_IMPACT` to `HIGH` (default `CRITICAL`), and shorts
 are the losing side (-2.0% avg). Restore `CRITICAL`, or set
 `ALLOW_SHORTS = False`, until shorts show positive results on their own.
 
-## C7. Change entries and exits - proposed
+## C7. Change entries and exits - done
+
+> **Done** (branch `change-md-strategy-review`): Entries wait `ENTRY_DELAY_AFTER_OPEN_MIN` (20) into the session; out-of-hours news now waits for the first session after it (`ENTRY_WAIT_FOR_SESSION`) instead of never trading. First-day stop `FIRST_DAY_STOP_MULT` (1.5x, sized on it), settling after the first session. `TAKE_HALF_AT_TARGET` sells half at the target. `SKIP_INTRADAY` refuses INTRADAY stories (followed as skipped). Each has its own setting so it can be judged or reverted separately.
 
 `strategy.py`, `main.py: _decide_trade`, `config.py`
 
@@ -139,7 +154,9 @@ are the losing side (-2.0% avg). Restore `CRITICAL`, or set
 - At the target, sell half and trail the rest, to keep more of the MFE.
 - Drop INTRADAY-horizon trades (-0.4% avg).
 
-## C8. Filter the universe - proposed
+## C8. Filter the universe - done
+
+> **Done** (branch `change-md-strategy-review`): Only exchanges in `markets.py` (`ALLOWED_MARKETS` narrows them, `TRADE_OTHER_EXCHANGES` off), `MIN_MARKET_CAP_USD` $150M and `MIN_DAILY_TURNOVER_USD` $1M (rule `illiquid`, followed as skipped). Set `ALLOWED_MARKETS` to what the broker offers.
 
 `main.py: _decide_trade`, `price_lookup.py`, `markets.py`
 
@@ -150,7 +167,9 @@ offered as CFDs by the broker. Add:
 - a minimum average daily dollar volume and market cap;
 - an allow-list of exchanges the broker supports.
 
-## C9. Replace self-reported confidence - proposed
+## C9. Replace self-reported confidence - partly done - waiting for data
+
+> **Partly done - waiting for data** (branch `change-md-strategy-review`): Every alert is tagged with `event_type` (prompt p2) and results split by it; confidence no longer sizes positions. Sizing by category expectancy needs ~30 trades per type first.
 
 `main.py: _alert_skip_reasons`, `paper_trader.py`
 
@@ -159,7 +178,9 @@ lawsuit, management change, ...) and score it by that category's actual
 results instead of the model's confidence. Once there is enough data, size
 positions by category expectancy rather than a flat `PAPER_RISK_PCT`.
 
-## C10. Cheap screener before the full prompt - proposed
+## C10. Cheap screener before the full prompt - in progress - shadow mode
+
+> **In progress - shadow mode** (branch `change-md-strategy-review`): The keyword engine runs as a screener in `SCREENER_MODE` `shadow`: verdicts counted in `stats.json` and recorded per trade, nothing skipped. On past headlines alone it would have dropped 38 of 52 trades, so `on` needs its shadow record first. A small-model screener is not built.
 
 `main.py: _process_article`, `cloud_analyzer.py`
 
@@ -167,7 +188,9 @@ positions by category expectancy rather than a flat `PAPER_RISK_PCT`.
 call. Put a cheap first pass (a small model asked only "is this a company
 event?", or the keyword scorer) in front of the full analysis.
 
-## C11. Small cleanups - proposed
+## C11. Small cleanups - partly done
+
+> **Partly done** (branch `change-md-strategy-review`): Call transcripts (VGZ, TLX) are caught by `is_noise_headline` (tested). `AI_TRADE_CONFIRM: true` is still in the VM's `settings.json` - ignored by the code, removal pending your OK.
 
 - `AI_TRADE_CONFIRM: true` is still in the VM's `settings.json` but is ignored
   - remove it.
@@ -176,7 +199,9 @@ event?", or the keyword scorer) in front of the full analysis.
 
 ---
 
-## C12. Multi-agent analysis panel - proposed
+## C12. Multi-agent analysis panel - in progress - stage 1 (shadow mode)
+
+> **In progress - stage 1 (shadow mode)** (branch `change-md-strategy-review`): `panel.py`: catalyst, skeptic (with price context, can veto), event specialist, historian (ledger base rates), devil's advocate, each on its own model; rule 3-of-4 with no veto. Runs in the background on every alert that reaches the price check, writes `data/panel_votes.json`, decides nothing; `paper_report.py` scores each agent (step 2). `weekly_review.py` is the weekly reviewer (writes `data/reviews/`, never applies). Verified live (~70s an alert). Steps 2-3 need closed trades.
 
 `llm_prompts.py`, `cloud_analyzer.py`, `main.py`, a new `panel.py`
 

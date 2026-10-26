@@ -55,8 +55,11 @@ Sundays, New York time:
    company-specific news -> close any open position the news contradicts
    -> `_decide_trade` (short settings, price context, the price rules in
    `strategy.plan_trade`) opens a watch (LONG for POSITIVE, SHORT for
-   NEGATIVE), or records why not and follows the refused signal as a
-   skipped trade (`shadow_trades.py`) -> notify
+   NEGATIVE), queues it for its entry time (`_queue_entry` - early in the
+   session or out of hours; `_run_pending_entries` runs them after each
+   pass), or records why not and follows the refused signal as a skipped
+   trade (`shadow_trades.py`) -> notify -> the agent panel votes on it in
+   the background (`panel.py`, shadow mode)
 5. Every `WATCH_CHECK_INTERVAL` (5 min) - checked between articles as
    well as after the pass, so a long pass doesn't hold exits back:
    `_check_watches` prices every
@@ -96,7 +99,8 @@ writes against a disk with ~45 write IOPS.
 ```
 main.py              StockAppBackend - the scan loop, orchestrates everything below
 ├── news_collector.py    Fetches/scrapes articles (RSS, webpage, Twitter/Nitter)
-│   └── reddit_source.py     Subreddit posts + comments via Reddit's rate-limited feeds (data/reddit_state.json)
+│   ├── reddit_source.py     Subreddit posts + comments via Reddit's rate-limited feeds (data/reddit_state.json)
+│   └── edgar.py             SEC 8-K filings: item filter, headline, the filing's press release
 ├── source_manager.py     User-added custom sources (data/news_sources.json)
 ├── analyzer.py           Local Ollama analysis engine
 ├── cloud_analyzer.py     Cloud AI analysis engine
@@ -113,6 +117,8 @@ main.py              StockAppBackend - the scan loop, orchestrates everything be
 │   └── paper_account.py     The ledger replayed as a $ account per risk level: sizing, cash, graphs
 ├── broker.py              The paper trades mirrored on an IBKR paper account, real fills vs simulated (data/broker_orders.json)
 ├── shadow_trades.py       Skipped trades: refused signals followed as if traded (data/shadow_trades.json)
+├── panel.py               Agent panel in shadow mode: five agents vote on each alert (data/panel_votes.json)
+├── weekly_review.py       Weekly reviewer: proposed rule changes for approval (data/reviews/)
 ├── price_lookup.py        Batched yfinance quote lookup, shared by watch-checking + portfolio summary
 └── portfolio_history.py  Reconstructs daily portfolio value history via yfinance (server.py only)
 
@@ -151,6 +157,8 @@ tickers/sources/keywords/watches, single-process access).
 | `data/paper_trades.json` | `paper_trader.py` | No - personal, never trimmed |
 | `data/paper_marks.json` | `paper_trader.py` | No - open-position price snapshots, thinned with age |
 | `data/shadow_trades.json` | `shadow_trades.py` | No - runtime, newest 1000 closed |
+| `data/panel_votes.json` | `panel.py` | No - runtime, newest 1000 |
+| `data/reviews/*.md` | `weekly_review.py` | No - one a week |
 | `data/processed_urls.json` | `main.py` directly | No - runtime cache |
 | `data/stats.json` | `main.py` directly | No - runtime counters |
 | `data/keywords.json` | `keyword_manager.py` | Yes - just tuning, no secrets |
