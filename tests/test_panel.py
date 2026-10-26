@@ -146,5 +146,36 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(scores['panel rule']['PASS']['n'], 2)
 
 
+class WeeklyReviewTests(unittest.TestCase):
+
+    def setUp(self):
+        import weekly_review
+        self.wr = weekly_review
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.saved = weekly_review.REVIEW_DIR
+        weekly_review.REVIEW_DIR = os.path.join(tmp.name, 'reviews')
+        self.addCleanup(setattr, weekly_review, 'REVIEW_DIR', self.saved)
+        from paper_trader import PaperTrader
+        from shadow_trades import ShadowBook
+        self.paper = PaperTrader(filename=os.path.join(tmp.name, 'p.json'), cost_pct=0.0)
+        self.shadows = ShadowBook(filename=os.path.join(tmp.name, 's.json'), cost_pct=0.0)
+
+    def test_prompt_and_review_file(self):
+        prompt = self.wr.build_prompt(self.paper, self.shadows, {})
+        self.assertIn("EXHAUSTED_MAX_ATR_MULT =", prompt)
+        self.assertIn("none closed yet", prompt)
+        self.assertTrue(self.wr.due())
+
+        class Model:
+            def complete(self, prompt, system=None):
+                return "## What the data says\nToo few trades."
+
+        path = self.wr.write_review([("m", Model())], self.paper, self.shadows, {},
+                                    log=lambda m: None)
+        self.assertIn("Too few trades.", open(path, encoding='utf-8').read())
+        self.assertFalse(self.wr.due())
+
+
 if __name__ == '__main__':
     unittest.main()

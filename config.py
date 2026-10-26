@@ -358,6 +358,12 @@ SCREENER_MODE = "shadow"
 # Cloud AI only; five calls per alert, a few hundred a month.
 PANEL_MODE = "shadow"
 
+# The weekly reviewer (weekly_review.py): at the weekend, once a week, a
+# model reads the closed and skipped trades and the panel's record and
+# writes proposed rule changes to data/reviews/ - for a human to approve;
+# nothing is applied. One call a week. Cloud AI only.
+WEEKLY_REVIEW = True
+
 # --- STRATEGY: ENTRIES ---
 # The AI rates its own confidence (0-100) in direction and size. Alerts
 # below this are dropped before they notify or trade.
@@ -673,6 +679,7 @@ USER_SETTINGS = {
     "STOP_ATR_MULT": _FLOAT,
     "LET_WINNERS_RUN": _BOOL,
     "TAKE_HALF_AT_TARGET": _BOOL,
+    "WEEKLY_REVIEW": _BOOL,
     "PANEL_MODE": lambda v: "off" if str(v).strip().lower() == "off" else "shadow",
     "SCREENER_MODE": lambda v: str(v).strip().lower() if str(v).strip().lower() in ("off", "shadow", "on") else "shadow",
     "EXITS_REGULAR_HOURS_ONLY": _BOOL,

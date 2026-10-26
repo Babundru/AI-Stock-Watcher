@@ -19,6 +19,7 @@ import costs
 import fills
 import markets
 import panel
+import weekly_review
 import price_lookup
 import reddit_source
 import strategy
@@ -214,6 +215,8 @@ class StockAppBackend:
         # Signals waiting for their entry time (_queue_entry), soonest
         # first. In memory only: a restart drops them, like an alert missed.
         self._pending_entries = []
+        # Whether a weekly review is being written (_maybe_weekly_review).
+        self._review_running = False
 
     @staticmethod
     def engine_name():
@@ -583,6 +586,9 @@ class StockAppBackend:
                 # be polled every minute, and it's a batched API call per
                 # open watch.
                 self._maybe_check_watches()
+
+                # --- WEEKLY REVIEW (weekends) ---
+                self._maybe_weekly_review()
 
                 # --- RECLAIM MEMORY ---
                 # A cycle churns through a lot of short-lived HTML and parse
@@ -1238,6 +1244,37 @@ class StockAppBackend:
                            decision.get('_plan'), history)
             except Exception as e:
                 self.log(f"   (panel failed: {e})")
+        self._panel_pool.submit(job)
+
+    def _maybe_weekly_review(self):
+        """At the weekend, when the last review is a week old, have the
+        weekly reviewer (weekly_review.py) propose rule changes - on the
+        panel's worker thread - and say when it is ready."""
+        analyzer = getattr(self, 'analyzer', None)
+        if (not config.WEEKLY_REVIEW or not is_weekend() or self._review_running
+                or not isinstance(analyzer, CloudAnalyzer) or not analyzer.providers
+                or not weekly_review.due()):
+            return
+        self._review_running = True
+        if getattr(self, '_panel_pool', None) is None:
+            self._panel_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='panel')
+        providers = list(analyzer.providers)
+
+        def job():
+            try:
+                scores = panel.agent_scores(panel.Panel([]).load(),
+                                            weekly_review.outcomes(self.paper, self.shadows))
+                path = weekly_review.write_review(providers, self.paper, self.shadows, scores,
+                                                  log=self.log)
+                if path:
+                    self.notifier.notify_system(
+                        "Weekly review ready",
+                        f"Proposed rule changes are in {path} on the server - nothing has been "
+                        f"applied.")
+            except Exception as e:
+                self.log(f"📝 Weekly review failed: {e}")
+            finally:
+                self._review_running = False
         self._panel_pool.submit(job)
 
     def _signal_info(self, analysis, article):

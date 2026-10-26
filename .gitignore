@@ -31,6 +31,9 @@ data/reddit_state.json
 data/alerts_history.json
 data/broker_orders.json
 data/broker_orders.json.tmp
+data/panel_votes.json
+data/panel_votes.json.tmp
+data/reviews/
 
 
 # Environments / tooling
