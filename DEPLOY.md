@@ -258,6 +258,42 @@ over SSH. Every change applies to the running service immediately.
 Notifications still go out via ntfy exactly as before, independent of
 whether the dashboard is open.
 
+## Optional: mirror the paper trades on an IBKR paper account
+
+`broker.py` can place every paper trade as a real order on an Interactive
+Brokers **paper** (demo) account and record the fill IBKR gave next to the
+one the app simulated (`data/broker_orders.json`, `slippage_pct` per order).
+It changes no decision - the paper ledger still runs everything.
+
+IBKR has no API keys for personal accounts. The app talks to **IB Gateway**,
+which holds the login:
+
+1. In IBKR Client Portal, open a paper trading account (Settings -> Paper
+   Trading Account) and note its username and its account id (`DU...`).
+2. Install IB Gateway (stable) and log in with the **paper** username. In
+   Configure -> Settings -> API -> Settings: enable "ActiveX and Socket
+   Clients", turn off "Read-Only API", keep port 4002, and allow
+   connections from 127.0.0.1 only.
+3. `pip install ib_async`, then in `data/settings.json`:
+
+   ```json
+   "IBKR_ENABLED": true,
+   "IBKR_PORT": 4002,
+   "IBKR_ACCOUNT": "DU1234567"
+   ```
+
+4. Restart the monitoring. The log shows `🏦 IBKR connected - paper account DU...`.
+
+The app refuses any account that isn't a paper one (`DU...`), so a Gateway
+logged in to the live account by mistake is never sent an order.
+
+**Not on the e2-micro.** IB Gateway is a Java program that wants ~600-800MB
+on its own; next to this service on a 1GB box it brings back the memory
+incidents above. Run it on a machine with room (your desktop, or a bigger
+VM) and point `IBKR_HOST` at it over Tailscale - then also add that address
+to the Gateway's trusted IPs. The Gateway logs itself out once a day; tools
+such as IBC restart and log it back in unattended.
+
 ## Updating
 
 ```bash

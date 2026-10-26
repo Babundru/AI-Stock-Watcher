@@ -12,6 +12,7 @@ from ollama_manager import OllamaManager
 from portfolio_manager import PortfolioManager
 from watch_manager import WatchManager
 from paper_trader import PaperTrader
+from broker import Broker
 from shadow_trades import ShadowBook
 from source_manager import article_trust, OPINION
 import fills
@@ -152,6 +153,11 @@ class StockAppBackend:
         # traded, so the rules themselves can be judged - see
         # shadow_trades.py. Part of the paper record, so the same switch.
         self.shadows = ShadowBook(cost_pct=PAPER_COST_PCT) if PAPER_TRADING else None
+        # The paper trades mirrored on an IBKR paper account, to check the
+        # simulated fills against real ones - see broker.py. Follows the
+        # paper ledger, so needs it on.
+        self.broker = (Broker(log=self.log)
+                       if config.IBKR_ENABLED and PAPER_TRADING else None)
         self._last_watch_check = 0
         self.processed_urls_file = 'data/processed_urls.json'
         # Oldest processed URLs are forgotten past this. Was 120: Reddit
@@ -346,6 +352,8 @@ class StockAppBackend:
         # Attaches to an already-running Ollama rather than starting a second.
         if self.ollama:
             self.ollama.start()
+        if self.broker:
+            self.broker.start()
         self.log(f"Monitoring started. Check interval: {CHECK_INTERVAL // 60} min, "
                  f"{WEEKEND_CHECK_INTERVAL // 60} min at weekends (New York time)")
         self.thread = threading.Thread(target=self._run_loop, args=(self._generation,))
@@ -361,6 +369,8 @@ class StockAppBackend:
         # is left alone.
         if self.ollama:
             self.ollama.stop()
+        if self.broker:
+            self.broker.stop()
         self.log("Monitoring stopped. Processed URLs saved.")
 
     def _alive(self, generation):
@@ -1027,6 +1037,8 @@ class StockAppBackend:
             return no(f"already holding a position in {ticker}")
         if self.paper:
             self.paper.open_trade(watch, benchmark_entry, benchmark=benchmark)
+        if getattr(self, 'broker', None):
+            self.broker.open_position(watch)
         decision.update(opened=True, watch=watch, expires_at=watch['expires_at'])
         return decision
 
@@ -1117,6 +1129,8 @@ class StockAppBackend:
             if trade:
                 self.log(f"  📒 Paper trade #{len(self.paper.closed())}: "
                          f"{trade['net_pct'] * 100:+.2f}% after costs")
+        if getattr(self, 'broker', None):
+            self.broker.close_position(closed, reason, price)
 
         direction = watch.get('direction', LONG)
         signal = 'COVER SHORT' if direction == SHORT else 'SELL'

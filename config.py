@@ -202,6 +202,27 @@ PAPER_MAX_POSITION_PCT = 0.25
 # be given less (the cash is nearly all tied up) is refused instead.
 PAPER_MIN_POSITION = 20.0
 
+# --- IBKR PAPER ACCOUNT (broker.py) ---
+# Mirrors every paper trade as a real order on an Interactive Brokers paper
+# (demo) account, so the fills fills.py simulates can be checked against
+# fills a broker actually gave. The paper ledger stays the app's record and
+# decides everything; the broker only follows it. See broker.py.
+#
+# IBKR has no API keys for individual accounts. The app talks to IB Gateway
+# (or TWS), which you run and log in to with your *paper* username and
+# password; the app then only needs where to find it. Off by default, and
+# read at start: changing these takes a restart of the monitoring.
+IBKR_ENABLED = False
+IBKR_HOST = "127.0.0.1"
+# IB Gateway listens on 4002 for a paper login (4001 live); TWS on 7497
+# (7496 live).
+IBKR_PORT = 4002
+# Any number not used by another program connected to the same Gateway.
+IBKR_CLIENT_ID = 17
+# The paper account to trade in ("DU1234567"), for a login that sees more
+# than one. Blank uses the only one there is.
+IBKR_ACCOUNT = ""
+
 # --- STRATEGY: RISK PER TRADE (stop-loss) ---
 # Every position has a stop-loss; there is no "off" any more. The old rules
 # closed winners at a fixed +5/10% target but gave losers no floor (or, with
@@ -564,12 +585,18 @@ USER_SETTINGS = {
     "PAPER_FEE_PER_ORDER": _FLOAT,
     "PAPER_FX_FEE_PCT": _FLOAT,
     "PAPER_MAX_FEE_PCT": _FLOAT,
+    "IBKR_ENABLED": _BOOL,
+    "IBKR_HOST": _STR,
+    "IBKR_PORT": _INT,
+    "IBKR_CLIENT_ID": _INT,
+    "IBKR_ACCOUNT": _STR,
 }
 
 # Settings whose value must not be emptied by a blank entry: a blank model
 # name or thread count in the dialog means "leave the default", not "none".
 _KEEP_DEFAULT_IF_BLANK = {"LOCAL_MODEL_NAME", "OLLAMA_NUM_THREADS", "OLLAMA_NUM_CTX",
-                          "OLLAMA_URL", "CLOUD_AI_PROVIDER", "CLOUD_AI_MODEL"}
+                          "OLLAMA_URL", "CLOUD_AI_PROVIDER", "CLOUD_AI_MODEL",
+                          "IBKR_HOST", "IBKR_PORT", "IBKR_CLIENT_ID"}
 
 # The shipped defaults, captured before the file is applied, so a key that
 # is later removed from the file (or blanked) falls back to them.

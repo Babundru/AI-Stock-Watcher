@@ -111,6 +111,7 @@ main.py              StockAppBackend - the scan loop, orchestrates everything be
 ├── strategy.py            Entry and exit rules, pure functions (plan_trade, update_exit)
 ├── paper_trader.py        Paper-trading ledger of every watch's round trip (data/paper_trades.json)
 │   └── paper_account.py     The ledger replayed as a $ account per risk level: sizing, cash, graphs
+├── broker.py              The paper trades mirrored on an IBKR paper account, real fills vs simulated (data/broker_orders.json)
 ├── shadow_trades.py       Skipped trades: refused signals followed as if traded (data/shadow_trades.json)
 ├── price_lookup.py        Batched yfinance quote lookup, shared by watch-checking + portfolio summary
 └── portfolio_history.py  Reconstructs daily portfolio value history via yfinance (server.py only)

@@ -18,3 +18,5 @@ flask
 waitress
 yfinance
 pandas
+# IBKR paper-account mirror (broker.py) - only used with IBKR_ENABLED.
+ib_async

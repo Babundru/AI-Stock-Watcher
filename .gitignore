@@ -29,6 +29,8 @@ data/paper_marks.json.tmp
 data/shadow_trades.json
 data/reddit_state.json
 data/alerts_history.json
+data/broker_orders.json
+data/broker_orders.json.tmp
 
 
 # Environments / tooling

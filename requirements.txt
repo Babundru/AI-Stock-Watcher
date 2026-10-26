@@ -11,3 +11,4 @@ anthropic
 openai
 flask
 waitress
+ib_async
