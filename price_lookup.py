@@ -263,6 +263,8 @@ def fetch_context(ticker, published_at=None, benchmark=None):
       change_since_publish_pct  price vs price_at_publish
       change_5d_pct             ref_close vs the close five sessions earlier
       atr_pct                   14-day average true range / ref_close
+      avg_turnover              average daily close x volume over the last
+                                20 sessions, in the quote's currency unit
       published_in_session      whether `published_at` fell in a regular
                                 session on this ticker's own exchange
                                 (absent without one)
@@ -346,6 +348,13 @@ def _context_for(ticker, published_at, session=None):
 
         if daily is None or daily.empty:
             return ctx
+        if "Volume" in daily:
+            # Average daily turnover over the month, in the quote's own
+            # currency unit - the liquidity floor's input (main._universe_problem).
+            turnover = (daily["Close"] * daily["Volume"]).dropna()
+            turnover = turnover[turnover > 0]
+            if not turnover.empty:
+                ctx['avg_turnover'] = float(turnover.tail(20).mean())
         daily = daily[["High", "Low", "Close"]].dropna()
 
         pub = None

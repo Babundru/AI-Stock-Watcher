@@ -15,6 +15,7 @@ from paper_trader import PaperTrader
 from broker import Broker
 from shadow_trades import ShadowBook
 from source_manager import article_trust, OPINION
+import costs
 import fills
 import markets
 import price_lookup
@@ -939,6 +940,17 @@ class StockAppBackend:
             # The alert still went out; only the position is refused, for a
             # broker that can't deal outside the US.
             return no(f"{ticker} is listed in Europe, which is off in settings")
+        # Only exchanges the broker deals on (C8): the ones markets.py models
+        # - New York and the main European venues - narrowed further by
+        # ALLOWED_MARKETS. Seoul, Mumbai, Tokyo and Sydney listings were
+        # traded before: no modelled session, FX fees, and likely no CFD.
+        key = markets.market_key(ticker)
+        if key is None and not config.TRADE_OTHER_EXCHANGES:
+            return no(f"{ticker} is listed on an exchange outside the ones traded")
+        allowed = config.allowed_markets()
+        if key is not None and allowed and key not in allowed:
+            return no(f"{ticker} is listed on {markets.MARKETS[key].name}, which is not among "
+                      f"the exchanges traded (ALLOWED_MARKETS)")
         # Positions open only while the stock's own exchange is in its
         # regular session - the same gate every exit waits for. Outside it
         # the price is a thin extended-hours print, and a position opened on
@@ -1029,6 +1041,15 @@ class StockAppBackend:
                                      trust, title, url, context,
                                      dict(plan, rule=rule, reason=reason), fill, signal)
             return no(reason)
+        # Too small or too thinly traded to trade at a real broker (C8):
+        # followed as a skipped trade, so what the floor costs shows up.
+        thin = self._universe_problem(context, fill)
+        if thin:
+            if tracked:
+                self._follow_skipped(ticker, company, direction, impact, horizon, confidence,
+                                     trust, title, url, context,
+                                     dict(plan, rule='illiquid', reason=thin), fill, signal)
+            return no(thin)
         entry = fill['price']
         benchmark_entry = context.get('market_price')
 
@@ -1080,6 +1101,8 @@ class StockAppBackend:
                 # None for an ordinary news trade; 'merger_arb' for a
                 # takeover target held for a better bid.
                 'mode': plan.get('mode'),
+                'market_cap_usd': fill.get('market_cap_usd'),
+                'turnover_usd': fill.get('turnover_usd'),
                 # The wider news-day stop gives way to this one after the
                 # first session (strategy.stop_distance).
                 'settled_stop_pct': plan.get('settled_stop_pct'),
@@ -1174,7 +1197,30 @@ class StockAppBackend:
         fill['problem'] = fills.entry_problem(
             fill, context.get('price_time'), quote.get('delay_min'),
             article.get('published_ts'))
+        # For the liquidity floors (_universe_problem), from the same quote.
+        fill['market_cap'] = quote.get('market_cap')
+        fill['currency'] = quote.get('currency')
         return fill
+
+    @staticmethod
+    def _universe_problem(context, fill):
+        """Why a stock is too small or too thin to trade - under
+        MIN_MARKET_CAP_USD, or under MIN_DAILY_TURNOVER_USD traded a day -
+        or None. A figure Yahoo doesn't have doesn't count against it."""
+        currency = fill.get('currency')
+        cap = costs.approx_usd(fill.get('market_cap'), currency, minor_units=False)
+        turnover = costs.approx_usd((context or {}).get('avg_turnover'), currency)
+        fill['market_cap_usd'] = round(cap) if cap is not None else None
+        fill['turnover_usd'] = round(turnover) if turnover is not None else None
+        floor = config.MIN_MARKET_CAP_USD
+        if floor and cap is not None and cap < floor:
+            return (f"market cap ~${cap / 1e6:,.0f}M is under the ${floor / 1e6:,.0f}M "
+                    f"floor (MIN_MARKET_CAP_USD)")
+        floor = config.MIN_DAILY_TURNOVER_USD
+        if floor and turnover is not None and turnover < floor:
+            return (f"only ~${turnover / 1e6:,.2f}M traded a day, under the "
+                    f"${floor / 1e6:,.1f}M floor (MIN_DAILY_TURNOVER_USD)")
+        return None
 
     def _exit_fill(self, position, price, quote=None, at_level=False):
         """The price closing `position` would get: the bid for a long, the

@@ -24,6 +24,35 @@ def is_foreign(ticker):
     return markets.market_key(ticker) != markets.US
 
 
+# Rough dollars per unit of the currencies the app trades in (Oct 2026), for
+# the liquidity floors in main._universe_problem - a floor needs the order of
+# magnitude, not today's rate, so no live FX lookup.
+APPROX_USD_PER_UNIT = {
+    "USD": 1.0, "EUR": 1.08, "GBP": 1.27, "CHF": 1.12, "SEK": 0.095, "NOK": 0.093,
+    "DKK": 0.145, "PLN": 0.25, "CZK": 0.043, "HUF": 0.0028, "CAD": 0.73, "AUD": 0.66,
+    "JPY": 0.0067, "HKD": 0.128, "ILS": 0.27, "ZAR": 0.055,
+}
+# Yahoo quotes some listings in the minor unit - London in pence ("GBp").
+# Their prices, and so their turnover, are in it; their market cap is not.
+MINOR_UNITS = {"GBp": ("GBP", 100), "GBX": ("GBP", 100), "ILA": ("ILS", 100), "ZAc": ("ZAR", 100)}
+
+
+def approx_usd(amount, currency, minor_units=True):
+    """`amount` in `currency` as rough dollars, or None for an unknown
+    currency. `minor_units`: the amount is in the quote's own unit (a price
+    or turnover - pence for "GBp"); False for Yahoo's market cap, which is
+    in the major unit."""
+    if amount is None:
+        return None
+    currency = currency or "USD"
+    if currency in MINOR_UNITS:
+        major, per = MINOR_UNITS[currency]
+        amount = amount / per if minor_units else amount
+        currency = major
+    rate = APPROX_USD_PER_UNIT.get(currency.upper())
+    return amount * rate if rate else None
+
+
 def fixed_fees_pct(size, orders=2):
     """`orders` orders' fixed fees - both of a round trip by default - as a
     fraction of a position of `size` dollars; 0 with no fee or no size."""

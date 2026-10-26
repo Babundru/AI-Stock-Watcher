@@ -53,6 +53,25 @@ GLOBAL_SCAN = True
 # to look at all is decided here.
 SCAN_EUROPE = True
 
+# --- THE STOCKS TRADED (main._decide_trade) ---
+# Which of the exchanges markets.py models positions may open on: their keys
+# (US, LSE, XETRA, EURONEXT, SIX, ...), comma-separated. Empty means all of
+# them - New York and the main European venues. Narrow it to what your
+# broker offers as CFDs. The alert goes out either way.
+ALLOWED_MARKETS = ""
+
+# Listings anywhere else (Sydney, Seoul, Mumbai, Tokyo, Toronto...) have no
+# modelled session, pay currency conversion and are unlikely to be offered
+# as CFDs; until Oct 2026 the app traded them anyway. Off: never traded.
+TRADE_OTHER_EXCHANGES = False
+
+# Floors under which a stock is too small or too thinly traded to trade at a
+# real broker - AIM small-caps, mostly. Rule 'illiquid', followed as a
+# skipped trade. In dollars (other currencies at rough rates, costs.py); 0
+# turns a floor off. A figure Yahoo doesn't report doesn't count against it.
+MIN_MARKET_CAP_USD = 150e6
+MIN_DAILY_TURNOVER_USD = 1e6
+
 # Whether the press-release wires (PR Newswire, GlobeNewswire, Business Wire)
 # are polled alongside the news feeds: the companies' own announcements, as
 # they are published, rather than the reporting that follows them. See
@@ -505,6 +524,11 @@ IMPACT_LEVELS = ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
 MIN_IMPACT = "HIGH"
 
 
+def allowed_markets():
+    """ALLOWED_MARKETS as a set of market keys, upper-cased; empty for all."""
+    return {part.strip().upper() for part in str(ALLOWED_MARKETS or "").split(",") if part.strip()}
+
+
 def impact_rank(level):
     """Position of an impact rating in IMPACT_LEVELS, or -1 if unknown.
 
@@ -612,6 +636,10 @@ def _MODELS(value):
 USER_SETTINGS = {
     "SCAN_EUROPE": _BOOL,
     "SCAN_PRESS_RELEASES": _BOOL,
+    "ALLOWED_MARKETS": _STR,
+    "TRADE_OTHER_EXCHANGES": _BOOL,
+    "MIN_MARKET_CAP_USD": _FLOAT,
+    "MIN_DAILY_TURNOVER_USD": _FLOAT,
     "SEC_USER_AGENT": _STR,
     "NTFY_TOPIC": _STR,
     "NOTIFICATIONS_ENABLED": _BOOL,

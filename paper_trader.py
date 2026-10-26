@@ -292,6 +292,9 @@ class PaperTrader:
             # 'merger_arb' for a takeover target held for a better bid
             # (strategy._merger_arb); None for an ordinary news trade.
             "mode": watch.get('mode'),
+            # Size and liquidity in rough dollars (main._universe_problem).
+            "market_cap_usd": watch.get('market_cap_usd'),
+            "turnover_usd": watch.get('turnover_usd'),
             "confidence": watch.get('confidence'),
             "source_trust": watch.get('source_trust'),
             "expected_move_pct": watch.get('expected_move_pct'),

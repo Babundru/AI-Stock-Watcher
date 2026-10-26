@@ -169,6 +169,55 @@ class HalfAtTargetTests(unittest.TestCase):
         self.assertAlmostEqual(trade['cost_pct'], 3 * 1.0 / 100.0)
 
 
+class UniverseTests(unittest.TestCase):
+    """C8: only the exchanges and the sizes a broker would deal in."""
+
+    def setUp(self):
+        import main
+        self.main = main
+        p = mock.patch.multiple(config, MIN_MARKET_CAP_USD=150e6, MIN_DAILY_TURNOVER_USD=1e6,
+                                ALLOWED_MARKETS="", TRADE_OTHER_EXCHANGES=False, SCAN_EUROPE=True)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def problem(self, cap, turnover, currency="USD"):
+        return self.main.StockAppBackend._universe_problem(
+            {'avg_turnover': turnover}, {'market_cap': cap, 'currency': currency})
+
+    def test_floors(self):
+        self.assertIsNone(self.problem(2e9, 5e7))
+        self.assertIn("market cap", self.problem(5e7, 5e7))
+        self.assertIn("traded a day", self.problem(2e9, 5e5))
+        # Unknown figures don't count against a stock.
+        self.assertIsNone(self.problem(None, None))
+
+    def test_london_turnover_is_in_pence_and_market_cap_in_pounds(self):
+        # 86.7M pence a day is about $1.1M; a GBP 529M market cap ~$670M.
+        self.assertIsNone(self.problem(529e6, 86.7e6, "GBp"))
+        self.assertIn("traded a day", self.problem(529e6, 50e6, "GBp"))
+
+    def test_approx_usd(self):
+        import costs
+        self.assertAlmostEqual(costs.approx_usd(100, "GBp"), 1.27)
+        self.assertAlmostEqual(costs.approx_usd(100, "GBp", minor_units=False), 127.0)
+        self.assertIsNone(costs.approx_usd(100, "XYZ"))
+
+    def decide(self, ticker):
+        b = self.main.StockAppBackend.__new__(self.main.StockAppBackend)
+        b.status_callback = b.log_callback = None
+        return b._decide_trade(ticker, "Acme", "LONG", "HIGH", "RALLY", 0.08, 80,
+                               {'horizon': 'DAYS'}, {}, "u", "t")
+
+    def test_other_exchanges_are_not_traded(self):
+        for ticker in ("TLX.AX", "005930.KS", "6594.T"):
+            self.assertIn("outside the ones traded", self.decide(ticker)['reason'], ticker)
+
+    def test_allowed_markets_narrows_the_list(self):
+        config.ALLOWED_MARKETS = "US, lse"
+        self.assertEqual(config.allowed_markets(), {"US", "LSE"})
+        self.assertIn("not among the exchanges traded", self.decide("BMW.DE")['reason'])
+
+
 class QueuedEntryTests(unittest.TestCase):
     """A signal for a shut market waits in main._pending_entries and opens,
     with its entry alert, once its time has come."""
