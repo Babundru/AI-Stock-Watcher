@@ -52,8 +52,10 @@ class SizingTest(unittest.TestCase):
         self.s = paper_account.settings()
 
     def test_conviction(self):
-        self.assertAlmostEqual(paper_account.conviction(60, "HIGH"), 0.75)
-        self.assertAlmostEqual(paper_account.conviction(100, "HIGH"), 1.25)
+        # v9: confidence no longer sizes a trade (it predicted results
+        # backwards).
+        self.assertAlmostEqual(paper_account.conviction(60, "HIGH"), 1.0)
+        self.assertAlmostEqual(paper_account.conviction(100, "HIGH"), 1.0)
         # v9: CRITICAL shrinks a position (it used to be x1.15).
         self.assertAlmostEqual(paper_account.conviction(80, "CRITICAL"), 1.0 * 0.85)
         self.assertAlmostEqual(paper_account.conviction(None, None), 1.0)

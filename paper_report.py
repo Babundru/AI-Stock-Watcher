@@ -129,7 +129,8 @@ def main():
                        ("By model", "by_model"),
                        ("By prompt version", "by_prompt"),
                        ("By event type", "by_event_type"),
-                       ("By news source", "by_source")):
+                       ("By news source", "by_source"),
+                       ("By screener verdict", "by_screener")):
         print(f"\n  {label}:")
         for name, row in stats[key].items():
             print(f"    {name:<18} {row['trades']:>3} trades  "

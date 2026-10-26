@@ -62,9 +62,12 @@ LEDGER_FILE = "data/paper_trades.json"
 #   event_type             - the model's category for the story (M&A,
 #                            earnings, FDA, ...), what results are split by
 #   reported_move_pct      - a move the headline itself reports ("jumps 30%")
+#   screened_out           - whether the free screener (config.SCREENER_MODE)
+#                            would have dropped the article before the model;
+#                            None when it wasn't run
 # Absent (None) on records from before they were kept.
 SIGNAL_FIELDS = ('model', 'prompt_version', 'news_source', 'published_at', 'analysed_at',
-                 'event_type', 'reported_move_pct')
+                 'event_type', 'reported_move_pct', 'screened_out')
 
 # Where deleted trades used to be archived, before an x kept them in the
 # ledger flagged 'excluded' (PaperTrader.exclude_trade). Read once on load,
@@ -524,6 +527,10 @@ class PaperTrader:
             "by_prompt": _group(trades, lambda t: t.get('prompt_version') or '?'),
             "by_event_type": _group(trades, lambda t: t.get('event_type') or '?'),
             "by_source": _group(trades, lambda t: (t.get('news_source') or '?').replace('Custom/', '')),
+            # Whether the screener would have let the story through: if the
+            # ones it would drop lose, switching it on costs nothing.
+            "by_screener": _group(trades, lambda t: {True: 'would drop', False: 'would pass'}
+                                  .get(t.get('screened_out'), '?')),
             # Minutes from publication to the verdict and to the position,
             # median over the trades that recorded both ends.
             "latency_analysed_min": _median([_minutes_between(t.get('published_at'), t.get('analysed_at'))

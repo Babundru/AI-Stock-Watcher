@@ -334,6 +334,20 @@ MIN_REWARD_RISK = 1.2
 # app went days without a trade.
 MIN_MOVE_ATR_MULT = 1.2
 
+# --- SCREENER (C10) ---
+# A free first pass in front of the paid model: the keyword engine's
+# relevance test (keyword_analyzer.py) - does the article name a company
+# event at all? Over a month 33,969 articles produced 244 alerts, each
+# article costing a full model call.
+#   "off"    - every article goes to the model, as before.
+#   "shadow" - every article still goes to the model, and the screener's
+#              verdict is only recorded: how many it would have dropped, and
+#              how many of those were alerts (stats.json, the log, and
+#              'screened_out' on every trade). The default, until there is
+#              enough of that record to trust it.
+#   "on"     - articles the screener rejects are not sent to the model.
+SCREENER_MODE = "shadow"
+
 # --- STRATEGY: ENTRIES ---
 # The AI rates its own confidence (0-100) in direction and size. Alerts
 # below this are dropped before they notify or trade.
@@ -649,6 +663,7 @@ USER_SETTINGS = {
     "STOP_ATR_MULT": _FLOAT,
     "LET_WINNERS_RUN": _BOOL,
     "TAKE_HALF_AT_TARGET": _BOOL,
+    "SCREENER_MODE": lambda v: str(v).strip().lower() if str(v).strip().lower() in ("off", "shadow", "on") else "shadow",
     "EXITS_REGULAR_HOURS_ONLY": _BOOL,
     "ENTRY_MAX_SPREAD_PCT": _FLOAT,
     "ENTRY_MAX_PRICE_AGE_MIN": _FLOAT,

@@ -303,7 +303,10 @@ class StockAppBackend:
     
     def _load_stats(self):
         """Load persisted scan/alert/skip counters from disk (survives a restart)."""
-        defaults = {'scanned': 0, 'alerts': 0, 'skipped': 0}
+        # The screener's record (_screen): articles it judged, rejected, and
+        # alerts among the rejected - what it would have cost to switch on.
+        defaults = {'scanned': 0, 'alerts': 0, 'skipped': 0,
+                    'screened': 0, 'screened_out': 0, 'screener_missed_alerts': 0}
         if os.path.exists(self.stats_file):
             try:
                 with open(self.stats_file, 'r', encoding='utf-8') as f:
@@ -752,7 +755,18 @@ class StockAppBackend:
         
         # Get portfolio tickers for context
         portfolio_tickers = list(self.portfolio_mgr.get_portfolio().keys())
-        
+
+        # The free first pass (config.SCREENER_MODE). In "on" mode an
+        # article it rejects never reaches the paid model.
+        screened_out = self._screen(company_hint, article, open_markets)
+        if screened_out and config.SCREENER_MODE == 'on':
+            self.log("   ⊘ Screener: no company event in it - not sent to the AI")
+            self._mark_processed(url, title)
+            self.stats['scanned'] += 1
+            self.stats['skipped'] += 1
+            self.status("Idle")
+            return True
+
         # Analyze
         self.log(f"   🔍 Analyzing with {self.engine_name()}...")
         self.status(f"Analyzing: {title[:48]}")
@@ -771,6 +785,7 @@ class StockAppBackend:
         self.stats['scanned'] += 1
         if analysis:
             analysis['analysed_at'] = now_local().isoformat()
+            analysis['screened_out'] = screened_out
         if not analysis:
             self.log(f"   ⊘ No analysis results (article may not match criteria)")
             self.stats['skipped'] += 1
@@ -805,6 +820,10 @@ class StockAppBackend:
             return
 
         direction = LONG if sentiment == 'POSITIVE' else SHORT
+        if screened_out:
+            # The screener's misses: in "on" mode this alert would not exist.
+            self.stats['screener_missed_alerts'] = self.stats.get('screener_missed_alerts', 0) + 1
+            self.log("   🔎 (the screener would have dropped this article)")
 
         # News that contradicts an open position closes it first - whatever
         # happens next. The old code ignored it ("already has an open
@@ -870,6 +889,25 @@ class StockAppBackend:
                 self.log(f"  (alert view update failed: {e})")
 
         self.status("Idle")
+
+    def _screen(self, company_hint, article, open_markets):
+        """The screener's verdict on an article (config.SCREENER_MODE): True
+        when it would drop it, False when it would pass it on, None when it
+        is off - or when the keyword engine is the analysis engine anyway.
+        Counted in the stats either way."""
+        if config.SCREENER_MODE not in ('shadow', 'on') or isinstance(self.analyzer, KeywordAnalyzer):
+            return None
+        if getattr(self, '_screener', None) is None:
+            self._screener = KeywordAnalyzer()
+        try:
+            dropped = self._screener.analyze_article(company_hint, article, open_markets) is None
+        except Exception as e:
+            self.log(f"   (screener failed: {e})")
+            return None
+        self.stats['screened'] = self.stats.get('screened', 0) + 1
+        if dropped:
+            self.stats['screened_out'] = self.stats.get('screened_out', 0) + 1
+        return dropped
 
     @staticmethod
     def _may_trade_on(article):
@@ -1180,6 +1218,7 @@ class StockAppBackend:
             'analysed_at': analysis.get('analysed_at'),
             'event_type': analysis.get('event_type'),
             'reported_move_pct': analysis.get('reported_move_pct'),
+            'screened_out': analysis.get('screened_out'),
         }
 
     def _entry_fill(self, ticker, direction, context, article):

@@ -20,10 +20,10 @@ Sizing (position_size)
 - The stop distance is the trade's own (strategy.stop_pct_for: 1.5x the
   stock's daily range), so volatility is priced in: a trade that goes wrong
   costs about risk_pct of the account whichever stock it was.
-- conviction is a nudge by the AI's confidence (60 -> x0.75 .. 100 -> x1.25)
-  and the story's impact (CRITICAL x0.85). Deliberately small: nothing yet
-  shows the model's confidence is calibrated. The ledger keeps confidence
-  per trade so that can be checked, and the nudge widened if it earns it.
+- conviction is a nudge by the story's impact (CRITICAL x0.85). It used to
+  scale with the AI's confidence too (60 -> x0.75 .. 100 -> x1.25), until the
+  ledger showed confidence predicting results backwards; that scale is now
+  flat (CONVICTION_LOW/HIGH).
 - Capped at PAPER_MAX_POSITION_PCT of the account and at the cash free; a
   position that would come out under PAPER_MIN_POSITION is refused, and so
   is one so small that the broker's fixed fees (costs.py) would cost more
@@ -52,8 +52,14 @@ SHORT = strategy.SHORT
 
 # Conviction nudge. MIN_CONFIDENCE (60 by default) is the lowest confidence
 # that raises an alert at all, so that is where the scale starts.
+#
+# Flat since strategy v9: the model's confidence turned out inversely related
+# to results (Oct 2026 review: 60-69 averaged +7.7% a trade, 80+ -10.4%), so
+# leaning on it made the losers the biggest positions. The scale is kept for
+# whatever replaces it - sizing by the event type's own record (CHANGE.md
+# C9), once there are enough trades per type to fit it.
 CONFIDENCE_LOW, CONFIDENCE_HIGH = 60, 100
-CONVICTION_LOW, CONVICTION_HIGH = 0.75, 1.25
+CONVICTION_LOW, CONVICTION_HIGH = 1.0, 1.0
 # CRITICAL was x1.15 until strategy v9; the Oct 2026 review found CRITICAL
 # trades averaging -9.7% (7 trades) against +4.1% for HIGH - mostly headlines
 # reporting a move already made. Now a reason for a smaller position.
