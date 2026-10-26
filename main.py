@@ -177,6 +177,7 @@ class StockAppBackend:
         self.collector.is_seen = self.processed_set.__contains__
         self._init_pipeline_state()
         self.collector.is_seen_title = self.processed_titles_set.__contains__
+        self.collector.on_warning = self.log
         # (time.time() the next scan starts at, seconds in the whole wait)
         # while the loop waits between scans, else None. One tuple, so the
         # UIs' countdown (next_scan_countdown) never reads half of an update.

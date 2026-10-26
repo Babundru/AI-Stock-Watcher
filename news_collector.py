@@ -17,6 +17,7 @@ from source_manager import SourceManager, source_trust, OPINION
 from reddit_source import RedditPoller, is_reddit_url, parse_subreddit
 from config import LOOKBACK_MINUTES
 import config
+import edgar
 import feedparser
 
 # Suppress warnings when parsing XML/RSS with html.parser (intended behavior for robustness)
@@ -105,7 +106,10 @@ def title_key(title):
 # formats that are never a single company's new, tradable news: transcripts
 # of calls that were reported when they happened, conference-appearance
 # notices, funds' quarterly letters, buy/watch lists, market wraps and advice
-# columns.
+# columns. Also the law firms' class-action solicitations that fill the
+# press-release wires ("SHAREHOLDER ALERT", "What Should X Investors Know
+# After 23% Stock Drop? The Law Offices of ...") - they advertise a lawsuit
+# over a move that has already happened.
 _NOISE_HEADLINE = re.compile(
     r'earnings call transcript|\btranscript\s*$'
     r'|\bq[1-4] \d{4} (?:commentary|letter)\b'
@@ -113,7 +117,12 @@ _NOISE_HEADLINE = re.compile(
     r'|\b(?:stocks?|shares|etfs?) to (?:buy|watch|sell|avoid|own)\b'
     r'|\bstock market today\b'
     r'|\bstocks making the biggest moves\b'
-    r'|\bshould (?:i|we)\b',
+    r'|\bshould (?:i|we)\b'
+    r'|\b(?:shareholder|investor)s? (?:alert|reminder|notice)\b'
+    r'|\blead plaintiff\b|\blaw (?:offices?|firm)\b'
+    r'|\binvestors? (?:should know|know after|who (?:lost|purchased|bought)|with (?:losses|large losses))\b'
+    r'|\b(?:encourages?|reminds?) (?:investors|shareholders)\b'
+    r'|\binvestigation on behalf of\b',
     re.I)
 
 
@@ -208,6 +217,14 @@ MAX_SCRAPE_WORKERS = 6
 # offered next cycle, while they remain inside the lookback window.
 MAX_ARTICLES_PER_SCAN = 24
 
+# A feed that has returned no entries at all - an HTTP error, a page that
+# isn't a feed, an empty one - this many scans in a row is reported once as
+# dead (at the weekday scan interval, half an hour). Both Yahoo Finance feeds
+# 404'd for three weeks in October 2026 with nothing but a per-scan line in
+# the journal to show for it. Its per-scan error lines are muted from then
+# on, until it answers again.
+FEED_DEAD_AFTER_SCANS = 30
+
 
 def _interleave_newest(groups, limit):
     """Up to `limit` articles taken a round at a time - each group's newest
@@ -256,11 +273,32 @@ def is_public_url(url):
 
 class NewsCollector:
     # Major financial news RSS feeds (free, no API key needed).
+    #
+    # Yahoo Finance's US feed (finance.yahoo.com/news/rssindex) has returned
+    # 404 since 2026-10-06, and no other US Yahoo feed URL answers; Seeking
+    # Alpha's market news desk replaces it - short factual items, usually
+    # within minutes. Investing.com was dropped at the same time: its pages
+    # 403 the scraper, so every story was judged on the headline alone, and
+    # those headlines are mostly "why X stock is surging today" - the move
+    # already done.
     US_RSS_FEEDS = [
         ('https://www.cnbc.com/id/100003114/device/rss/rss.html', 'CNBC Top News'),
         ('https://feeds.content.dowjones.io/public/rss/mw_topstories', 'MarketWatch'),
-        ('https://finance.yahoo.com/news/rssindex', 'Yahoo Finance'),
-        ('https://www.investing.com/rss/news.rss', 'Investing.com')
+        ('https://seekingalpha.com/market_currents.xml', 'Seeking Alpha Market News'),
+    ]
+
+    # Primary sources (config.SCAN_PRESS_RELEASES): the companies' own
+    # announcements as they cross the press-release wires - what the feeds
+    # above report on, minutes to hours later and often after the price has
+    # moved. Speed is the edge for a news strategy. GlobeNewswire's main host
+    # 403s the VM; its rss. host serves the same feed. SEC 8-K filings are
+    # added when config.SEC_USER_AGENT is set (see edgar.py). The London
+    # Stock Exchange's RNS has no free feed left to poll.
+    PRESS_RELEASE_FEEDS = [
+        ('https://www.prnewswire.com/rss/news-releases-list.rss', 'PR Newswire'),
+        ('https://rss.globenewswire.com/RssFeed/orgclass/1/feedTitle/'
+         'GlobeNewswire%20-%20News%20about%20Public%20Companies', 'GlobeNewswire'),
+        ('https://feed.businesswire.com/rss/home/?rss=G1QFDERJXkJeEFtRWA==', 'Business Wire'),
     ]
 
     # European coverage (config.SCAN_EUROPE). The US wires above do report
@@ -275,7 +313,8 @@ class NewsCollector:
     # handles it - see the README.
     EU_RSS_FEEDS = [
         ('https://www.ft.com/companies?format=rss', 'FT Companies'),
-        ('https://uk.finance.yahoo.com/news/rssindex', 'Yahoo Finance UK'),
+        # news/rssindex 404s like the US one; topstories still answers.
+        ('https://uk.finance.yahoo.com/rss/topstories', 'Yahoo Finance UK'),
         ('https://www.cityam.com/feed/', 'City AM'),
         ('https://www.euronews.com/rss?level=theme&name=business', 'Euronews Business'),
     ]
@@ -293,6 +332,10 @@ class NewsCollector:
         """The built-in feeds to poll this cycle. Read live from config, so
         turning Europe off in settings takes effect on the next scan."""
         feeds = list(self.US_RSS_FEEDS)
+        if getattr(config, 'SCAN_PRESS_RELEASES', True):
+            feeds += self.PRESS_RELEASE_FEEDS
+            if getattr(config, 'SEC_USER_AGENT', ''):
+                feeds.append((edgar.FEED_URL, edgar.SOURCE_NAME))
         if getattr(config, 'SCAN_EUROPE', True):
             feeds += self.EU_RSS_FEEDS
         return feeds
@@ -326,6 +369,12 @@ class NewsCollector:
         # that answered last (tried first next time).
         self._nitter_down_until = {}
         self._nitter_last_good = None
+        # Feed URL -> scans in a row it returned no entries (see
+        # FEED_DEAD_AFTER_SCANS). Bounded by the number of sources.
+        self._feed_misses = {}
+        # Optional callback for a dead or recovered feed, so it shows in the
+        # dashboard's log as well as the journal. Set by the backend.
+        self.on_warning = None
 
     def _seen(self, url):
         return bool(url and self.is_seen and self.is_seen(url))
@@ -345,6 +394,9 @@ class NewsCollector:
 
     def _get(self, url, timeout=15, allow_redirects=True, headers=None):
         """GET a URL, reading at most MAX_DOWNLOAD_BYTES of the body."""
+        if edgar.is_edgar_url(url):
+            # SEC 403s a browser's User-Agent; it wants one naming the caller.
+            headers = dict(headers or {}, **{'User-Agent': config.SEC_USER_AGENT})
         response = self.session.get(
             url, timeout=timeout, allow_redirects=allow_redirects, stream=True,
             headers=headers,
@@ -372,11 +424,13 @@ class NewsCollector:
         Only failures are printed: on the VM stdout is journald, and a line
         per successful scrape was dozens of disk writes a scan.
         """
+        if edgar.is_edgar_url(url):
+            return self._scrape_filing(url)
         soup = None
         try:
             body = self._get(url, timeout=15)
 
-            soup = BeautifulSoup(body, 'html.parser', parse_only=ARTICLE_STRAINER)
+            soup =BeautifulSoup(body, 'html.parser', parse_only=ARTICLE_STRAINER)
             # Drop the raw bytes as soon as the tree exists - with several of
             # these running concurrently, holding both at once is the peak.
             body = None
@@ -407,6 +461,22 @@ class NewsCollector:
             # process from ratcheting upward one scan cycle at a time.
             if soup is not None:
                 soup.decompose()
+
+    def _scrape_filing(self, index_url):
+        """The text of an 8-K's press release (or of the 8-K itself), from
+        the filing index page an EDGAR feed entry links to. None on failure,
+        printed like scrape_article's."""
+        try:
+            doc = edgar.document_url(self._get(index_url, timeout=15))
+            if not doc:
+                print(f"✗ No document found in filing: {index_url[:80]}...")
+                return None
+            return edgar.document_text(self._get(doc, timeout=15), MAX_CONTENT_CHARS)
+        except requests.exceptions.HTTPError as e:
+            print(f"✗ HTTP {e.response.status_code} error: {index_url[:80]}...")
+        except Exception as e:
+            print(f"✗ Failed to read filing ({type(e).__name__}): {index_url[:80]}...")
+        return None
 
     def _scrape_cached(self, url):
         """scrape_article through the scrape cache: a page already scraped
@@ -740,10 +810,46 @@ class NewsCollector:
         """
         try:
             feed = self._load_feed(feed_url)
+        except Exception as e:
+            if not self._feed_is_dead(feed_url):
+                print(f"Error parsing RSS feed {feed_url}: {e}")
+            self._note_feed(feed_url, source_name, False)
+            return []
+        self._note_feed(feed_url, source_name, bool(feed.entries))
+        try:
             return self._feed_to_articles(feed, source_name, limit, match, scrape)
         except Exception as e:
             print(f"Error parsing RSS feed {feed_url}: {e}")
             return []
+
+    def _feed_is_dead(self, feed_url):
+        return self._feed_misses.get(feed_url, 0) >= FEED_DEAD_AFTER_SCANS
+
+    def _note_feed(self, feed_url, source_name, answered):
+        """Count a feed's empty fetches in a row, and say so once when the
+        count reaches FEED_DEAD_AFTER_SCANS - and once when it comes back."""
+        was_dead = self._feed_is_dead(feed_url)
+        if answered:
+            self._feed_misses.pop(feed_url, None)
+            if was_dead:
+                self._warn(f"✓ Feed {source_name} is returning entries again")
+            return
+        self._feed_misses[feed_url] = self._feed_misses.get(feed_url, 0) + 1
+        if not was_dead and self._feed_is_dead(feed_url):
+            self._warn(f"⚠ Feed {source_name} has returned nothing for {FEED_DEAD_AFTER_SCANS} "
+                       f"scans in a row - it may have moved or died: {feed_url}")
+
+    def dead_feeds(self):
+        """URLs of the feeds currently counted as dead."""
+        return [url for url in self._feed_misses if self._feed_is_dead(url)]
+
+    def _warn(self, message):
+        print(message)
+        if self.on_warning:
+            try:
+                self.on_warning(message)
+            except Exception:
+                pass
 
     def _load_feed(self, feed_url):
         """Download a feed through the shared session (timeout, browser
@@ -755,6 +861,9 @@ class NewsCollector:
         try:
             body = self._get(feed_url, timeout=15, headers={'Accept': FEED_ACCEPT})
         except requests.exceptions.HTTPError as e:
+            if self._feed_is_dead(feed_url):
+                # Already reported; a line a scan for weeks helps nobody.
+                return feedparser.FeedParserDict(entries=[])
             print(f"Feed fetch failed (HTTP {e.response.status_code}) for {feed_url[:60]}, "
                   f"retrying via feedparser...")
             return feedparser.parse(feed_url)
@@ -784,10 +893,16 @@ class NewsCollector:
 
             link = clean_url(entry.get('link'))
             title = ' '.join((entry.get('title') or '').split())
+            summary = _strip_html(entry.get('summary', ''))
+            if edgar.is_edgar_url(link):
+                # Routine filings are dropped by their item numbers before
+                # any download; the rest get a headline saying what was filed.
+                items = edgar.items(summary)
+                if not edgar.is_material(items):
+                    continue
+                title = edgar.headline(title, items)
             if not link or self._seen_article(link, title) or is_noise_headline(title, link):
                 continue
-
-            summary = _strip_html(entry.get('summary', ''))
 
             if match:
                 haystack = f"{title} {summary}".lower()

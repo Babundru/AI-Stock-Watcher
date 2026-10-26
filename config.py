@@ -53,6 +53,18 @@ GLOBAL_SCAN = True
 # to look at all is decided here.
 SCAN_EUROPE = True
 
+# Whether the press-release wires (PR Newswire, GlobeNewswire, Business Wire)
+# are polled alongside the news feeds: the companies' own announcements, as
+# they are published, rather than the reporting that follows them. See
+# NewsCollector.PRESS_RELEASE_FEEDS.
+SCAN_PRESS_RELEASES = True
+
+# SEC 8-K filings (edgar.py) are polled only when this is set. SEC refuses
+# requests that don't say who is making them: the expected form is a name
+# and a contact address, "Stock Watcher you@example.com". Empty here because
+# this file is committed - set it in data/settings.json.
+SEC_USER_AGENT = ""
+
 # --- LOCAL LLM (OLLAMA) SETTINGS ---
 # True  -> articles are analysed by a local Ollama model (the LLM variant)
 # False -> falls back to the offline weighted-keyword analyzer, which needs
@@ -547,6 +559,8 @@ def _MODELS(value):
 
 USER_SETTINGS = {
     "SCAN_EUROPE": _BOOL,
+    "SCAN_PRESS_RELEASES": _BOOL,
+    "SEC_USER_AGENT": _STR,
     "NTFY_TOPIC": _STR,
     "NOTIFICATIONS_ENABLED": _BOOL,
     "NOTIFY_OWNERSHIP": _BOOL,

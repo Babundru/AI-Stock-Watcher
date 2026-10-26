@@ -8,12 +8,29 @@ come from" are the two halves of the same discovery pipeline).
 ## Two independent article streams, per scan cycle
 
 1. **Global market scan** (`fetch_general_market_news`, only when
-   `GLOBAL_SCAN=True`, the default): polls 4 hardcoded RSS feeds in
-   parallel (`NewsCollector.MARKET_RSS_FEEDS` - CNBC, MarketWatch, Yahoo
-   Finance, Investing.com), sorts all candidates by publish time, keeps
-   only the newest 20, and *only then* scrapes full article text for
-   those 20 (scraping happens after the cap specifically so the app never
-   pays for full-page fetches on articles that get discarded anyway).
+   `GLOBAL_SCAN=True`, the default): polls the hardcoded RSS feeds in
+   parallel (`NewsCollector.MARKET_RSS_FEEDS`), takes the newest
+   `MAX_ARTICLES_PER_SCAN` (24) a round at a time across feeds, and *only
+   then* scrapes full article text for those (scraping happens after the
+   cap specifically so the app never pays for full-page fetches on articles
+   that get discarded anyway). The feeds:
+   - `US_RSS_FEEDS` - CNBC, MarketWatch, Seeking Alpha market news. Yahoo
+     Finance (404 since 2026-10-06) and Investing.com (pages 403, headlines
+     mostly "why X is surging") were dropped in Oct 2026.
+   - `PRESS_RELEASE_FEEDS` (`SCAN_PRESS_RELEASES`, on) - PR Newswire,
+     GlobeNewswire, Business Wire: the companies' own announcements, ahead
+     of the reporting. The law firms' class-action solicitations that fill
+     these wires are dropped by `is_noise_headline`.
+   - SEC 8-K filings (`edgar.py`) - only when `SEC_USER_AGENT` is set (SEC
+     403s requests without a contact in the User-Agent). Routine items
+     (vote results, bylaws, exhibit-only) are dropped by item number before
+     any download; the model reads the filing's EX-99 press release.
+   - `EU_RSS_FEEDS` (`SCAN_EUROPE`) - FT, Yahoo Finance UK (`rss/topstories`),
+     City AM, Euronews. No free LSE RNS feed exists any more.
+
+   A feed that returns no entries for `FEED_DEAD_AFTER_SCANS` (30) scans in
+   a row is reported once - journal and dashboard log - and its per-scan
+   error lines are muted until it answers again (`_note_feed`).
 2. **Custom sources** (`fetch_from_custom_sources`): whatever the user
    added via the dashboard/GUI, stored in `data/news_sources.json`
    (`source_manager.py`). Fetched concurrently, one thread per source.
