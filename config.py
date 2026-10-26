@@ -348,6 +348,16 @@ MIN_MOVE_ATR_MULT = 1.2
 #   "on"     - articles the screener rejects are not sent to the model.
 SCREENER_MODE = "shadow"
 
+# --- AGENT PANEL (C12, panel.py) ---
+# A panel of agents - catalyst analyst, "priced-in" skeptic, event
+# specialist, historian, devil's advocate - each on its own model from
+# CLOUD_AI_MODEL's list, run on every alert that reaches the price check.
+#   "shadow" - their votes are recorded (data/panel_votes.json) and change
+#              nothing; paper_report.py scores each agent once trades close.
+#   "off"    - not run.
+# Cloud AI only; five calls per alert, a few hundred a month.
+PANEL_MODE = "shadow"
+
 # --- STRATEGY: ENTRIES ---
 # The AI rates its own confidence (0-100) in direction and size. Alerts
 # below this are dropped before they notify or trade.
@@ -663,6 +673,7 @@ USER_SETTINGS = {
     "STOP_ATR_MULT": _FLOAT,
     "LET_WINNERS_RUN": _BOOL,
     "TAKE_HALF_AT_TARGET": _BOOL,
+    "PANEL_MODE": lambda v: "off" if str(v).strip().lower() == "off" else "shadow",
     "SCREENER_MODE": lambda v: str(v).strip().lower() if str(v).strip().lower() in ("off", "shadow", "on") else "shadow",
     "EXITS_REGULAR_HOURS_ONLY": _BOOL,
     "ENTRY_MAX_SPREAD_PCT": _FLOAT,

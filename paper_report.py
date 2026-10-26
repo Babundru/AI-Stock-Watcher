@@ -12,6 +12,7 @@ the watcher is running.
 import sys
 
 from config import PAPER_COST_PCT, PAPER_BENCHMARK, PAPER_BENCHMARK_EU
+from panel import Panel, agent_scores
 from paper_trader import PaperTrader
 from shadow_trades import RULE_LABELS, ShadowBook
 
@@ -40,6 +41,28 @@ def print_skipped():
     if summary['closed']:
         print("    (a rule whose skipped trades show a positive expectancy is keeping\n"
               "     the app out of winners - same small-sample caveat as above)")
+
+
+def print_panel(paper):
+    """How the agent panel's votes (panel.py, shadow mode) did against the
+    results of the trades and skipped trades they were about."""
+    records = Panel([]).load()
+    if not records:
+        return
+    outcomes = {t.get('url'): t['net_pct'] for t in paper.closed() if t.get('url')}
+    outcomes.update({r.get('url'): r['net_pct'] for r in ShadowBook(cost_pct=PAPER_COST_PCT).closed()
+                     if r.get('url') and r.get('url') not in outcomes})
+    scores = agent_scores(records, outcomes)
+    print(f"\n  Agent panel (shadow) - {len(records)} alerts voted on, "
+          f"{sum(1 for r in records if r.get('url') in outcomes)} with a result:")
+    if not scores:
+        print("    no results yet")
+        return
+    for agent, row in scores.items():
+        print(f"    {agent:<12} TRADE {row['TRADE']['n']:>3} → {pct(row['TRADE']['avg'])}   "
+              f"PASS {row['PASS']['n']:>3} → {pct(row['PASS']['avg'])}")
+    print("    (an agent worth listening to has TRADE well above PASS - same\n"
+          "     small-sample caveat as above)")
 
 
 def main():
@@ -155,6 +178,7 @@ def main():
                   f"{pct(t['net_pct']):>9}  {t['reason']}")
 
     print_skipped()
+    print_panel(paper)
 
     if '--stops' not in args and '--stop' not in args:
         print("\n  (--trades for the full list, --stops for the stop-loss study)")

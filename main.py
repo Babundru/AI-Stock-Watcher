@@ -18,6 +18,7 @@ from source_manager import article_trust, OPINION
 import costs
 import fills
 import markets
+import panel
 import price_lookup
 import reddit_source
 import strategy
@@ -26,6 +27,7 @@ import time
 import datetime
 import threading
 import collections
+from concurrent.futures import ThreadPoolExecutor
 import gc
 import ctypes
 import json
@@ -883,11 +885,13 @@ class StockAppBackend:
                     'headline': title,
                     'url': url,
                     'is_owned': is_owned,
-                    'trade': {k: v for k, v in decision.items() if k != 'watch'},
+                    'trade': {k: v for k, v in decision.items()
+                              if k != 'watch' and not k.startswith('_')},
                 })
             except Exception as e:
                 self.log(f"  (alert view update failed: {e})")
 
+        self._run_panel(article, analysis, decision)
         self.status("Idle")
 
     def _screen(self, company_hint, article, open_markets):
@@ -895,7 +899,8 @@ class StockAppBackend:
         when it would drop it, False when it would pass it on, None when it
         is off - or when the keyword engine is the analysis engine anyway.
         Counted in the stats either way."""
-        if config.SCREENER_MODE not in ('shadow', 'on') or isinstance(self.analyzer, KeywordAnalyzer):
+        if (config.SCREENER_MODE not in ('shadow', 'on')
+                or isinstance(getattr(self, 'analyzer', None), KeywordAnalyzer)):
             return None
         if getattr(self, '_screener', None) is None:
             self._screener = KeywordAnalyzer()
@@ -1045,6 +1050,8 @@ class StockAppBackend:
         context = price_lookup.fetch_context(ticker, article.get('published_ts'),
                                              benchmark=benchmark)
         self.log(f"   📈 {_describe_context(context)}")
+        # For the agent panel (_run_panel); not part of the alert.
+        decision['_context'] = context
         trust = article_trust(article)
         horizon = analysis.get('horizon')
         plan = strategy.plan_trade(
@@ -1052,6 +1059,7 @@ class StockAppBackend:
             needs_confirmation=trust == OPINION,
             capped=strategy.parse_flag(analysis.get('value_is_capped')) is True,
             reported_pct=reported, event_type=analysis.get('event_type'), horizon=horizon)
+        decision['_plan'] = plan
         # A merger-arbitrage plan sets its own horizon (strategy._merger_arb).
         horizon = plan.get('horizon') or horizon
         # What the trade would really have opened at - the ask for a long,
@@ -1082,6 +1090,7 @@ class StockAppBackend:
         # Too small or too thinly traded to trade at a real broker (C8):
         # followed as a skipped trade, so what the floor costs shows up.
         thin = self._universe_problem(context, fill)
+        decision['market_cap_usd'] = fill.get('market_cap_usd')
         if thin:
             if tracked:
                 self._follow_skipped(ticker, company, direction, impact, horizon, confidence,
@@ -1193,6 +1202,7 @@ class StockAppBackend:
             except Exception as e:
                 self.log(f"  ✗ Entry check failed: {e}")
                 continue
+            self._run_panel(article, analysis, decision)
             if not decision['opened']:
                 self.log(f"  ✗ No trade: {decision['reason']}")
                 continue
@@ -1204,6 +1214,31 @@ class StockAppBackend:
             if direction == SHORT and not is_owned and not config.NOTIFY_SHORTS:
                 continue
             self.notifier.notify(company, article, analysis, is_owned=is_owned, decision=decision)
+
+    def _run_panel(self, article, analysis, decision):
+        """Put an alert that reached the price check before the agent panel
+        (panel.py), in shadow mode: its votes are recorded, nothing it says
+        changes the trade. On a worker thread of its own - five model calls
+        must not hold up the scan - with snapshots of what it reads."""
+        analyzer = getattr(self, 'analyzer', None)
+        if (config.PANEL_MODE != 'shadow' or not isinstance(analyzer, CloudAnalyzer)
+                or decision.get('_context') is None or not analyzer.providers):
+            return
+        history = [dict(r) for r in (self.paper.trades if self.paper else [])]
+        history += [dict(r) for r in (self.shadows.records if self.shadows else [])]
+        if getattr(self, '_panel_pool', None) is None:
+            self._panel_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='panel')
+        agents = panel.Panel(analyzer.providers, log=self.log)
+        snapshot = {k: v for k, v in decision.items() if k != 'watch'}
+        snapshot['watch'] = {'id': (decision.get('watch') or {}).get('id')}
+
+        def job():
+            try:
+                agents.run(dict(article), dict(analysis), snapshot, decision.get('_context'),
+                           decision.get('_plan'), history)
+            except Exception as e:
+                self.log(f"   (panel failed: {e})")
+        self._panel_pool.submit(job)
 
     def _signal_info(self, analysis, article):
         """paper_trader.SIGNAL_FIELDS for a trade or skipped trade on this
