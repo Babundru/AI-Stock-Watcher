@@ -25,6 +25,9 @@ stock's normal daily range (14-day ATR):
     already, by at least CONFIRM_ATR_MULT daily ranges its way.
   * Capped: the news pins the stock to a set price (a cash takeover's
     target), so there is nothing left to ride.
+  * Reported: the headline itself reports the move ("jumps 30%") by at
+    least REPORTED_MOVE_MAX_PCT - by the time a feed says so the move is
+    done. Not applied to M&A, where a bid can still be raised or topped.
   * Too small (rule 'reward_risk'): the story has to be expected to move
     the stock clearly more than an ordinary day does - at least
     MIN_MOVE_ATR_MULT daily ranges. Until v4 it had to reach
@@ -58,6 +61,7 @@ exit is priced where it could have traded.
 """
 
 import datetime
+import re
 
 import pytz
 
@@ -89,7 +93,10 @@ import markets
 # pays a fixed fee per order and a currency-conversion fee (costs.py) on
 # top of PAPER_COST_PCT, and positions open only on an exchange whose
 # session is known (markets.py, learned from Yahoo for ones it doesn't model).
-STRATEGY_VERSION = "v8"
+# v9 (Oct 2026 review, CHANGE.md): a headline that reports the move is
+# refused ('reported', not for M&A), EXHAUSTED_MAX_ATR_MULT 6 -> 4, and a
+# CRITICAL rating shrinks a position instead of growing it.
+STRATEGY_VERSION = "v9"
 LEGACY_STRATEGY = "v1"
 
 # Normal daily range assumed for a stock whose ATR couldn't be worked out.
@@ -124,6 +131,66 @@ HORIZON_TRADING_DAYS = {
 DEFAULT_HORIZON = "DAYS"
 
 ET = pytz.timezone("US/Eastern")
+
+# The event_type the prompt gives a takeover story: a continuation setup,
+# where a reported move is the start (a bid can be raised or topped) rather
+# than the end.
+MA_EVENT = "M&A"
+
+# A move a headline reports: "shares jump 30%", "sinks LQDA 48%", "stock is
+# down more than 20%", "9.7% stock surge". The backup for the model's own
+# reported_move_pct, which it may leave out.
+_MOVE_VERBS = (r"jump|surg|soar|rall(?:y|ies|ied)|climb|spik|rocket|skyrocket|leap|gain|rise|rose|"
+               r"plung|tumbl|sink|sank|slump|crash|fall|fell|drop|slid|plummet|tank|div|dove|"
+               r"crater|skid|shed|los[est]|add|pop|declin|sour|jolt|sell-?off")
+_MOVE_PATTERNS = [
+    # verb, up to two words (a ticker, "as much as"), the figure
+    re.compile(r"\b(?:%s)\w*\b(?:\s+(?!to\b)\S+){0,2}?\s+(\d+(?:\.\d+)?)\s?%%" % _MOVE_VERBS, re.I),
+    re.compile(r"\b(?:shares?|stocks?)\s+(?:is |are |was |were )?(?:up|down)\s+"
+               r"(?:(?:more than|over|nearly|almost|about|as much as)\s+)?(\d+(?:\.\d+)?)\s?%", re.I),
+    re.compile(r"(\d+(?:\.\d+)?)\s?%%\s+(?:(?:stock|share)s?\s+)?(?:%s)\w*\b" % _MOVE_VERBS, re.I),
+]
+# A figure that follows one of these is the business's number, not the
+# stock's: "revenue rises 20%", "stake rises to 10%".
+_NOT_THE_STOCK = re.compile(
+    r"\b(?:revenues?|sales|profits?|earnings|income|eps|margins?|dividends?|orders|bookings|"
+    r"volumes?|production|output|traffic|deliveries|rates?|yields?|inflation|unemployment|"
+    r"stake|holdings?|interest|costs?|prices?|users|subscribers|guidance|forecast)\W*$", re.I)
+
+
+def headline_move_pct(title):
+    """The stock move a headline reports, as a positive fraction - 0.30 for
+    "New Era jumps 30% after ..." - or None when it reports none."""
+    for pattern in _MOVE_PATTERNS:
+        for m in pattern.finditer(title or ""):
+            if _NOT_THE_STOCK.search(title[max(0, m.start() - 30):m.start()]):
+                continue
+            return float(m.group(1)) / 100.0
+    return None
+
+
+EVENT_TYPES = ("M&A", "EARNINGS", "GUIDANCE", "CLINICAL", "REGULATORY", "CONTRACT", "OFFERING",
+               "LEGAL", "MANAGEMENT", "ANALYST", "PRODUCT", "RESTRUCTURING", "MACRO", "OTHER")
+_EVENT_SYNONYMS = {"MERGER": "M&A", "ACQUISITION": "M&A", "TAKEOVER": "M&A", "MA": "M&A",
+                   "M_AND_A": "M&A", "RESULTS": "EARNINGS", "FDA": "REGULATORY",
+                   "TRIAL": "CLINICAL", "LAWSUIT": "LEGAL", "LITIGATION": "LEGAL"}
+
+
+def parse_event_type(value):
+    """The analysis's event_type as one of EVENT_TYPES; None when the engine
+    gave none (the keyword engine, a p1 prompt), OTHER when unrecognised."""
+    if not value or not isinstance(value, str):
+        return None
+    v = value.strip().upper().replace(" ", "_")
+    v = _EVENT_SYNONYMS.get(v, v).replace("_", " ")
+    return v if v in EVENT_TYPES else "OTHER"
+
+
+def reported_move(model_pct, title):
+    """The move a story's headline reports: the model's reported_move_pct
+    or the headline's own figure, whichever is larger. None if neither."""
+    found = [v for v in (parse_pct(model_pct), headline_move_pct(title)) if v]
+    return max(found) if found else None
 
 
 # --- parsing the model's numbers ------------------------------------------
@@ -238,13 +305,15 @@ def news_move(direction, context):
     return {'pct': -move if direction == SHORT else move, 'from': since, 'market_pct': market}
 
 
-def plan_trade(direction, impact, expected_pct, context, needs_confirmation=False, capped=False):
+def plan_trade(direction, impact, expected_pct, context, needs_confirmation=False, capped=False,
+               reported_pct=None, event_type=None):
     """Decide whether a signal is worth trading now, and size its exits.
 
     `expected_pct` is the analysis's expected total move (a fraction, or None
     to fall back to the impact bucket). `needs_confirmation` is set for a
     story from an opinion source, `capped` when the analysis says the news
-    pins the stock to a set price.
+    pins the stock to a set price. `reported_pct` is a move the headline
+    itself reports (reported_move), `event_type` the analysis's category.
 
     Returns a dict with 'ok'; when not ok, the 'rule' that refused it and a
     readable 'reason'. The sizing is filled in either way, so a refused
@@ -284,6 +353,15 @@ def plan_trade(direction, impact, expected_pct, context, needs_confirmation=Fals
     if capped:
         return skip('capped', "the news pins the stock to a set price (a cash takeover, say) - "
                               "nothing left to ride")
+    # Before any price check: a feed only writes "surges 22%" once the 22%
+    # has happened. Closed trades on such headlines averaged -2.2% against
+    # +7.6% for the rest (Oct 2026 review). A takeover is the exception - the
+    # first bid is often not the last.
+    if (reported_pct and config.REPORTED_MOVE_MAX_PCT
+            and reported_pct >= config.REPORTED_MOVE_MAX_PCT
+            and (event_type or '').upper() != MA_EVENT):
+        return skip('reported', f"the headline already reports a {reported_pct * 100:.0f}% move - "
+                                f"the news is in the price")
     if moved is None:
         if needs_confirmation:
             return skip('unconfirmed', "opinion source, and no price data to confirm it")

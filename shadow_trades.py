@@ -43,6 +43,7 @@ RULE_LABELS = {
     'exhausted': "move already spent",
     'unconfirmed': "opinion source, unconfirmed",
     'capped': "price capped by the news",
+    'reported': "headline already reports the move",
     'reward_risk': "story too small for the stock",
     'cash': "not enough cash in the paper account",
     # fills.entry_problem. A 'stale' record opened at the old price it was

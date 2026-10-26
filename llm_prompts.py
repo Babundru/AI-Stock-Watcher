@@ -17,8 +17,9 @@ from reddit_source import SOURCE_PREFIX, is_reddit_article
 # Recorded on every trade next to strategy.STRATEGY_VERSION, so results from
 # different prompts aren't pooled. Bump it with any change to what the model
 # is asked or told - ANALYSIS_INSTRUCTIONS or build_market_prompt. p1: the
-# prompt as of strategy v8.
-PROMPT_VERSION = "p1"
+# prompt as of strategy v8. p2: asks for event_type and reported_move_pct,
+# and warns against rating a reported move or dramatic wording as CRITICAL.
+PROMPT_VERSION = "p2"
 
 # Stands in for the article text when only the headline could be got.
 HEADLINE_ONLY = ("(Only the headline is available - the article itself could not be retrieved. "
@@ -112,6 +113,11 @@ Calibration - be conservative:
 - Most company news moves a large-cap stock by less than 2%. HIGH and CRITICAL are rare.
 - Size the move relative to the company: a $50M contract is huge for a small-cap and noise for a mega-cap.
 - When unsure between two impact levels, pick the lower one, and lower your confidence.
+- A headline that reports the stock's move ("shares jump 30%", "stock plunges 20%") describes the
+  market's reaction, not a new catalyst: the news is already in the price. Rate the underlying
+  event, never the size of the reported move, and do not copy that figure into expected_move_pct.
+- CRITICAL is for an event that changes what the company is worth by 15% or more AND that the
+  market cannot have absorbed yet. A dramatic move or dramatic wording is not enough.
 
 Respond in JSON format, and with JSON only - no other text before or after it.
 
@@ -128,6 +134,8 @@ Structure for RELEVANT news:
     "is_new_information": true,
     "is_company_specific": true,
     "value_is_capped": false,
+    "event_type": "EARNINGS",
+    "reported_move_pct": null,
     "explanation": "Concise summary of why this matters.",
     "prediction": "GAP UP",
     "horizon": "DAYS"
@@ -160,6 +168,14 @@ Definitions:
 - value_is_capped: true only when the news fixes the stock at a set price, so it jumps once and
   then sits there - the target of an agreed cash acquisition or tender offer, say. false for
   everything else, including the acquirer.
+- event_type: the kind of event, one of: M&A (bid, merger, takeover, deal talks, for either side),
+  EARNINGS (results or a pre-announcement of them), GUIDANCE (an outlook change outside results),
+  CLINICAL (trial data), REGULATORY (an approval, rejection or ruling by a regulator), CONTRACT
+  (an order, deal or partnership), OFFERING (a share sale, placing or convertible), LEGAL (a lawsuit
+  or investigation), MANAGEMENT (a CEO or board change), ANALYST (a rating or target change),
+  PRODUCT, RESTRUCTURING (job cuts, closures, a spin-off), MACRO, OTHER.
+- reported_move_pct: if the article says how far the stock has ALREADY moved on this news
+  ("shares jump 30%"), that figure as a plain positive number (30); null if it reports none.
 - Prediction: GAP UP / GAP DOWN (if closed) or RALLY / DROP (if open)
 - Horizon: how long this specific news item should keep moving the price
   before the market has fully priced it in - i.e. how long until it's

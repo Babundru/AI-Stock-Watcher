@@ -53,7 +53,8 @@ class SizingTest(unittest.TestCase):
     def test_conviction(self):
         self.assertAlmostEqual(paper_account.conviction(60, "HIGH"), 0.75)
         self.assertAlmostEqual(paper_account.conviction(100, "HIGH"), 1.25)
-        self.assertAlmostEqual(paper_account.conviction(80, "CRITICAL"), 1.0 * 1.15)
+        # v9: CRITICAL shrinks a position (it used to be x1.15).
+        self.assertAlmostEqual(paper_account.conviction(80, "CRITICAL"), 1.0 * 0.85)
         self.assertAlmostEqual(paper_account.conviction(None, None), 1.0)
 
     def test_volatile_stock_gets_a_smaller_position(self):

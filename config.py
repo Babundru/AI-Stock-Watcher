@@ -332,7 +332,16 @@ EXHAUSTED_ATR_MULT = 3.0
 # headline that reports the move itself ("uniQure plunges 65%") it simply
 # repeats it - so a 60% crash, 11 daily ranges, still counted as "short of
 # the 65% expected" and was shorted at the bottom (strategy v7).
-EXHAUSTED_MAX_ATR_MULT = 6.0
+#
+# Lowered from 6 to 4 in strategy v9: closed trades whose headline already
+# reported the move lost on average (CHANGE.md, C4).
+EXHAUSTED_MAX_ATR_MULT = 4.0
+
+# A headline that itself reports a move of at least this much ("jumps 30%")
+# is not traded (rule 'reported', strategy.plan_trade) - unless the story is
+# M&A, where a raised or rival bid can still follow. By the time an RSS
+# headline reports a move, the move is done. 0 turns the rule off.
+REPORTED_MOVE_MAX_PCT = 0.05
 
 # A move the other way is the warning sign: the market reads the story
 # differently. Beyond this many daily ranges against it, the trade is skipped.
@@ -572,6 +581,7 @@ USER_SETTINGS = {
     "ENTRY_MAX_SPREAD_PCT": _FLOAT,
     "ENTRY_MAX_PRICE_AGE_MIN": _FLOAT,
     "MIN_CONFIDENCE": _INT,
+    "REPORTED_MOVE_MAX_PCT": _FLOAT,
     "MAX_OPEN_POSITIONS": _INT,
     "ALLOW_SHORTS": _BOOL,
     "NOTIFY_SHORTS": _BOOL,

@@ -21,7 +21,7 @@ Sizing (position_size)
   stock's daily range), so volatility is priced in: a trade that goes wrong
   costs about risk_pct of the account whichever stock it was.
 - conviction is a nudge by the AI's confidence (60 -> x0.75 .. 100 -> x1.25)
-  and the story's impact (CRITICAL x1.15). Deliberately small: nothing yet
+  and the story's impact (CRITICAL x0.85). Deliberately small: nothing yet
   shows the model's confidence is calibrated. The ledger keeps confidence
   per trade so that can be checked, and the nudge widened if it earns it.
 - Capped at PAPER_MAX_POSITION_PCT of the account and at the cash free; a
@@ -54,7 +54,10 @@ SHORT = strategy.SHORT
 # that raises an alert at all, so that is where the scale starts.
 CONFIDENCE_LOW, CONFIDENCE_HIGH = 60, 100
 CONVICTION_LOW, CONVICTION_HIGH = 0.75, 1.25
-IMPACT_CONVICTION = {"CRITICAL": 1.15}
+# CRITICAL was x1.15 until strategy v9; the Oct 2026 review found CRITICAL
+# trades averaging -9.7% (7 trades) against +4.1% for HIGH - mostly headlines
+# reporting a move already made. Now a reason for a smaller position.
+IMPACT_CONVICTION = {"CRITICAL": 0.85}
 
 
 def conviction(confidence, impact):

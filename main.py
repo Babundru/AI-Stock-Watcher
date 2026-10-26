@@ -902,6 +902,11 @@ class StockAppBackend:
         # equivalent in the small hours of the user's evening.
         decision = {'opened': False, 'direction': direction, 'ticker': ticker,
                     'reason': None, 'watch': None}
+        # A move the headline already reports - the model's figure or the
+        # headline's own (strategy.reported_move), as a fraction.
+        reported = strategy.reported_move(analysis.get('reported_move_pct'), title)
+        analysis['reported_move_pct'] = round(reported, 4) if reported else None
+        analysis['event_type'] = strategy.parse_event_type(analysis.get('event_type'))
         signal = self._signal_info(analysis, article)
 
         def no(reason):
@@ -960,7 +965,8 @@ class StockAppBackend:
         plan = strategy.plan_trade(
             direction, impact, expected_pct, context,
             needs_confirmation=trust == OPINION,
-            capped=strategy.parse_flag(analysis.get('value_is_capped')) is True)
+            capped=strategy.parse_flag(analysis.get('value_is_capped')) is True,
+            reported_pct=reported, event_type=analysis.get('event_type'))
         # What the trade would really have opened at - the ask for a long,
         # the bid for a short - worked out from the context's last trade,
         # which was fetched seconds ago from the same 1-minute chart the

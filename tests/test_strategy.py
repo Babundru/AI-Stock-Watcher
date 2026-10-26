@@ -24,7 +24,7 @@ class RulesMixin:
 
     SETTINGS = dict(STOP_LOSS_PCT=0.08, STOP_ATR_MULT=1.5, STOP_MIN_PCT=0.02, MIN_REWARD_RISK=1.2,
                     MIN_MOVE_ATR_MULT=1.2, EXHAUSTED_ATR_MULT=3.0, EXHAUSTED_MAX_ATR_MULT=6.0, AGAINST_NEWS_ATR_MULT=0.5, CONFIRM_ATR_MULT=0.5,
-                    MAX_SHADOW_POSITIONS=20, LET_WINNERS_RUN=True, BREAKEVEN_AT=0.5,
+                    MAX_SHADOW_POSITIONS=20, LET_WINNERS_RUN=True, BREAKEVEN_AT=0.5, REPORTED_MOVE_MAX_PCT=0.05,
                     PAPER_FEE_PER_ORDER=0.0, PAPER_FX_FEE_PCT=0.0, PAPER_MAX_FEE_PCT=0.0)
 
     def setUp(self):
@@ -269,3 +269,64 @@ class SessionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReportedMoveTests(RulesMixin, unittest.TestCase):
+    """C4: a headline that already reports the move is not traded."""
+
+    def test_headline_moves(self):
+        cases = {
+            "New Era jumps 30% after signing 207 MW Vistra PPA": 0.30,
+            "Liquidia options activity surges after patent ruling sinks LQDA 48%": 0.48,
+            "MongoDB's stock is down more than 20% as CEO decamps to Meta": 0.20,
+            "Byggmax Q3 2026 slides: margin gains drive 9.7% stock surge": 0.097,
+            "Leadership change and unchanged forecast send Avient stock tumbling 8%": 0.08,
+            "Voyager Technologies: A 16% Selloff As Dilution Funds Growth": 0.16,
+            "Equifax Q3 2026 slides: AI drives margins up 130 bps, stock jumps 11%": 0.11,
+        }
+        for headline, move in cases.items():
+            self.assertAlmostEqual(strategy.headline_move_pct(headline), move, msg=headline)
+
+    def test_business_figures_are_not_stock_moves(self):
+        for headline in ("Tuas FY26 slides: profit jumps 328% as M1 deal fails, stock sinks",
+                         "Acme sales drop 12% in the third quarter",
+                         "Fairfax selected to acquire 60.72% stake in IDBI Bank",
+                         "Acme raises stake to 10% in Beta",
+                         "Acme cuts 10% of jobs",
+                         "Micron data center revenue jumps 11-fold",
+                         "Kodiak Sciences stock soars on positive AMD trial data"):
+            self.assertIsNone(strategy.headline_move_pct(headline), headline)
+
+    def test_reported_move_takes_the_larger_of_model_and_headline(self):
+        self.assertAlmostEqual(strategy.reported_move(30, "Acme soars"), 0.30)
+        self.assertAlmostEqual(strategy.reported_move(None, "Acme jumps 12% on bid"), 0.12)
+        self.assertAlmostEqual(strategy.reported_move("8%", "Acme jumps 12% on bid"), 0.12)
+        self.assertIsNone(strategy.reported_move(None, "Acme wins contract"))
+
+    def plan(self, reported, event_type=None):
+        return strategy.plan_trade('LONG', 'HIGH', 0.06, ctx(publish=0.0), reported_pct=reported,
+                                   event_type=event_type)
+
+    def test_a_reported_move_is_refused_before_any_price_rule(self):
+        plan = self.plan(0.22)
+        self.assertEqual(plan['rule'], 'reported')
+        # Sized all the same, so it can be followed as a skipped trade.
+        self.assertTrue(plan['stop_pct'] and plan['target_pct'])
+        self.assertTrue(self.plan(0.04)['ok'])
+        self.assertTrue(self.plan(None)['ok'])
+
+    def test_m_and_a_is_a_continuation_setup(self):
+        self.assertTrue(self.plan(0.22, event_type='M&A')['ok'])
+
+    def test_the_rule_can_be_turned_off(self):
+        config.REPORTED_MOVE_MAX_PCT = 0
+        self.assertTrue(self.plan(0.50)['ok'])
+
+    def test_event_types(self):
+        self.assertEqual(strategy.parse_event_type("m&a"), "M&A")
+        self.assertEqual(strategy.parse_event_type("Takeover"), "M&A")
+        self.assertEqual(strategy.parse_event_type("FDA"), "REGULATORY")
+        self.assertEqual(strategy.parse_event_type("earnings"), "EARNINGS")
+        self.assertEqual(strategy.parse_event_type("weather"), "OTHER")
+        self.assertIsNone(strategy.parse_event_type(None))
+        self.assertIsNone(strategy.parse_event_type(7))
