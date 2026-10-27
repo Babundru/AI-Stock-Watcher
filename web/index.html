@@ -983,6 +983,33 @@
         </div>
 
         <div class="card">
+          <div class="card-title">IBKR paper account</div>
+          <div class="form-grid">
+            <label class="check-row"><span class="txt">Mirror paper trades on IBKR<small>Every paper trade is also placed as a market order on an Interactive Brokers paper account, to compare real fills with the simulated ones. IBKR has no API key: run IB Gateway logged in to your paper account, and point the app at it here. Turning this on or off takes effect when the monitoring is next started.</small></span>
+              <span class="switch"><input type="checkbox" id="st-ibkr-enabled"><span class="track"></span></span></label>
+            <div class="hint" id="st-ibkr-status"></div>
+          </div>
+          <div class="form-grid two" style="margin-top:16px;">
+            <div class="field"><label for="st-ibkr-host">IB Gateway host</label><input id="st-ibkr-host" placeholder="127.0.0.1" autocomplete="off" spellcheck="false"></div>
+            <div class="field">
+              <label for="st-ibkr-port">Port</label>
+              <input id="st-ibkr-port" type="number" min="1" max="65535" step="1" inputmode="numeric">
+              <div class="hint">IB Gateway paper: 4002. TWS paper: 7497.</div>
+            </div>
+            <div class="field">
+              <label for="st-ibkr-account">Paper account</label>
+              <input id="st-ibkr-account" placeholder="DU1234567" autocomplete="off" autocapitalize="characters" spellcheck="false">
+              <div class="hint">Only needed if your login sees several accounts. Live accounts are refused.</div>
+            </div>
+            <div class="field">
+              <label for="st-ibkr-client">Client ID</label>
+              <input id="st-ibkr-client" type="number" min="0" step="1" inputmode="numeric">
+              <div class="hint">Any number no other program connected to the same Gateway uses.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
           <div class="card-title">Dashboard login</div>
           <div class="form-grid two">
             <div class="field"><label for="st-user">Username</label><input id="st-user" autocomplete="username" autocapitalize="none" spellcheck="false"></div>
@@ -2499,6 +2526,18 @@ function renderSettings(s) {
   $('#st-risk').value = +(((s.PAPER_RISK_PCT ?? 0.01) * 100).toFixed(2));
   $('#st-max-position').value = +(((s.PAPER_MAX_POSITION_PCT ?? 0.25) * 100).toFixed(2));
 
+  $('#st-ibkr-enabled').checked = !!s.IBKR_ENABLED;
+  $('#st-ibkr-host').value = s.IBKR_HOST || '';
+  $('#st-ibkr-port').value = s.IBKR_PORT ?? 4002;
+  $('#st-ibkr-account').value = s.IBKR_ACCOUNT || '';
+  $('#st-ibkr-client').value = s.IBKR_CLIENT_ID ?? 17;
+  const ib = s.ibkr_status;
+  $('#st-ibkr-status').textContent = !ib
+    ? (s.IBKR_ENABLED ? 'On - starts with the next start of the monitoring.' : 'Off.')
+    : ib.connected
+      ? `Connected to paper account ${ib.account || ''}. ${ib.filled} of ${ib.orders} orders filled.`
+      : `Not connected${ib.last_error ? ': ' + ib.last_error : ' yet.'}`;
+
   $('#st-scan-europe').checked = s.SCAN_EUROPE !== false;
   $('#st-min-conf').value = s.MIN_CONFIDENCE ?? 60;
   $('#st-let-run').checked = !!s.LET_WINNERS_RUN;
@@ -2551,6 +2590,10 @@ $('#st-save').addEventListener('click', async () => {
   if (!isFinite(redditComments) || redditComments < 0 || redditComments > 25) { setSettingsMsg('Reddit comments per post must be between 0 and 25.', 'err'); return; }
   const redditDelay = parseInt($('#st-reddit-delay').value, 10);
   if (!isFinite(redditDelay) || redditDelay < 0 || redditDelay > 240) { setSettingsMsg('Minutes to wait for Reddit comments must be between 0 and 240.', 'err'); return; }
+  const ibkrPort = parseInt($('#st-ibkr-port').value, 10);
+  if (!isFinite(ibkrPort) || ibkrPort < 1 || ibkrPort > 65535) { setSettingsMsg('The IBKR port must be between 1 and 65535.', 'err'); return; }
+  const ibkrClient = parseInt($('#st-ibkr-client').value, 10);
+  if (!isFinite(ibkrClient) || ibkrClient < 0) { setSettingsMsg('The IBKR client ID must be a whole number.', 'err'); return; }
   const body = {
     NTFY_TOPIC: $('#st-topic').value.trim(),
     NOTIFY_OWNERSHIP: $('#st-ownership').checked,
@@ -2583,6 +2626,11 @@ $('#st-save').addEventListener('click', async () => {
     REDDIT_CAN_TRADE: $('#st-reddit-trade').checked,
     REDDIT_COMMENTS_PER_POST: redditComments,
     REDDIT_COMMENT_DELAY_MIN: redditDelay,
+    IBKR_ENABLED: $('#st-ibkr-enabled').checked,
+    IBKR_HOST: $('#st-ibkr-host').value.trim(),
+    IBKR_PORT: ibkrPort,
+    IBKR_CLIENT_ID: ibkrClient,
+    IBKR_ACCOUNT: $('#st-ibkr-account').value.trim(),
     DASHBOARD_USERNAME: $('#st-user').value.trim(),
     DASHBOARD_PASSWORD: $('#st-pass').value,
   };

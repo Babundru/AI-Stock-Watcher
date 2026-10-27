@@ -257,5 +257,31 @@ class BrokerTest(unittest.TestCase):
         self.assertIn("pip install ib_async", b.last_error)
 
 
+class SyncBrokerTest(unittest.TestCase):
+    """Turning the mirror on or off from the dashboard applies at the next
+    start of the monitoring."""
+
+    def setUp(self):
+        import main
+        self.main = main
+        self.backend = main.StockAppBackend.__new__(main.StockAppBackend)
+        self.backend.broker = None
+        self.backend.log = lambda m: None
+
+    def test_created_when_enabled_and_dropped_when_disabled(self):
+        fake = mock.Mock()
+        with mock.patch.object(self.main, "Broker", return_value=fake), \
+                mock.patch.object(self.main, "PAPER_TRADING", True):
+            with mock.patch.object(config, "IBKR_ENABLED", True):
+                self.backend._sync_broker()
+                self.assertIs(self.backend.broker, fake)
+                self.assertEqual(self.backend.broker_status(), fake.status())
+            with mock.patch.object(config, "IBKR_ENABLED", False):
+                self.backend._sync_broker()
+                self.assertIsNone(self.backend.broker)
+                fake.stop.assert_called_once()
+                self.assertIsNone(self.backend.broker_status())
+
+
 if __name__ == "__main__":
     unittest.main()

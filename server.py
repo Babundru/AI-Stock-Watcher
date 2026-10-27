@@ -35,6 +35,7 @@ from flask import Flask, jsonify, request, send_from_directory
 
 import alert_history
 import config
+from broker import is_paper_account
 import strategy
 from cloud_providers import PROVIDERS
 from local_time import now_local
@@ -193,6 +194,7 @@ _SETTINGS_PUBLIC = (
     "MIN_CONFIDENCE", "LET_WINNERS_RUN",
     "MAX_OPEN_POSITIONS", "STOP_ATR_MULT",
     "REDDIT_COMMENTS_PER_POST", "REDDIT_COMMENT_DELAY_MIN", "REDDIT_CAN_TRADE",
+    "IBKR_ENABLED", "IBKR_HOST", "IBKR_PORT", "IBKR_CLIENT_ID", "IBKR_ACCOUNT",
 )
 _SETTINGS_SECRET = ("CLOUD_AI_API_KEY", "DASHBOARD_PASSWORD")
 
@@ -206,6 +208,7 @@ def _settings_payload():
     out["providers"] = list(PROVIDERS)
     out["engine"] = backend.engine_description()
     out["ai_active"] = bool(config.USE_CLOUD_AI or config.USE_LOCAL_LLM)
+    out["ibkr_status"] = backend.broker_status()
     return out
 
 
@@ -259,6 +262,17 @@ def api_settings():
                 return jsonify({"error": "REDDIT_COMMENTS_PER_POST must be between 0 and 25"}), 400
             if "REDDIT_COMMENT_DELAY_MIN" in updates and not (0 <= int(updates["REDDIT_COMMENT_DELAY_MIN"]) <= 240):
                 return jsonify({"error": "REDDIT_COMMENT_DELAY_MIN must be between 0 and 240"}), 400
+            if "IBKR_PORT" in updates and not (1 <= int(updates["IBKR_PORT"]) <= 65535):
+                return jsonify({"error": "IBKR_PORT must be between 1 and 65535"}), 400
+            if "IBKR_CLIENT_ID" in updates and not (0 <= int(updates["IBKR_CLIENT_ID"]) <= 999999):
+                return jsonify({"error": "IBKR_CLIENT_ID must be between 0 and 999999"}), 400
+            # broker.py refuses a live account at connect; refusing it here
+            # too says so before anything is saved.
+            account = str(updates.get("IBKR_ACCOUNT") or "").strip().upper()
+            if account and not is_paper_account(account):
+                return jsonify({"error": "IBKR_ACCOUNT must be a paper account (DU...)"}), 400
+            if "IBKR_ACCOUNT" in updates:
+                updates["IBKR_ACCOUNT"] = account
             config.save_settings(updates)
         except (KeyError, TypeError, ValueError) as e:
             return jsonify({"error": f"invalid setting: {e}"}), 400

@@ -274,7 +274,9 @@ which holds the login:
    Configure -> Settings -> API -> Settings: enable "ActiveX and Socket
    Clients", turn off "Read-Only API", keep port 4002, and allow
    connections from 127.0.0.1 only.
-3. `pip install ib_async`, then in `data/settings.json`:
+3. `pip install ib_async`, then turn it on in the dashboard (Settings ->
+   IBKR paper account: switch on, port, paper account id), or in
+   `data/settings.json`:
 
    ```json
    "IBKR_ENABLED": true,
@@ -282,7 +284,8 @@ which holds the login:
    "IBKR_ACCOUNT": "DU1234567"
    ```
 
-4. Restart the monitoring. The log shows `🏦 IBKR connected - paper account DU...`.
+4. Stop and start the monitoring. The log shows `🏦 IBKR connected - paper
+   account DU...`, and the Settings card shows the connection state.
 
 The app refuses any account that isn't a paper one (`DU...`), so a Gateway
 logged in to the live account by mistake is never sent an order.

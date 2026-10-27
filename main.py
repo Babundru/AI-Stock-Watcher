@@ -371,6 +371,7 @@ class StockAppBackend:
         # Attaches to an already-running Ollama rather than starting a second.
         if self.ollama:
             self.ollama.start()
+        self._sync_broker()
         if self.broker:
             self.broker.start()
         self.log(f"Monitoring started. Check interval: {CHECK_INTERVAL // 60} min, "
@@ -378,6 +379,24 @@ class StockAppBackend:
         self.thread = threading.Thread(target=self._run_loop, args=(self._generation,))
         self.thread.daemon = True
         self.thread.start()
+
+    def _sync_broker(self):
+        """Create or drop the IBKR mirror to match IBKR_ENABLED, so turning it
+        on or off from the dashboard takes effect at the next start of the
+        monitoring rather than only at a restart of the process. Host, port
+        and account are read at each connect, so a running mirror needs
+        nothing for those."""
+        wanted = bool(config.IBKR_ENABLED and PAPER_TRADING)
+        if wanted and not self.broker:
+            self.broker = Broker(log=self.log)
+        elif not wanted and self.broker:
+            self.broker.stop()
+            self.broker = None
+
+    def broker_status(self):
+        """The IBKR mirror's connection state for the dashboard, or None when
+        it is off."""
+        return self.broker.status() if self.broker else None
 
     def stop(self):
         self.running = False
