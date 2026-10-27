@@ -16,6 +16,17 @@ must never raise out of complete() - on failure it logs and returns None so
 one bad call doesn't take down the scan loop.
 """
 
+import threading
+
+# One model request in flight at a time, across the whole process. The scan
+# loop, the agent panel and the weekly reviewer each run on their own thread
+# but share one API key, and Routera caps how many requests a key may have
+# open at once: with the panel mid-alert, the scan's request came back
+# "429 Concurrency limit exceeded" - and the SDK's own retries of that made
+# one article cost minutes. Waiting here for the other call to finish is
+# cheaper than being refused.
+_CALL_LOCK = threading.Lock()
+
 # Seconds to wait for one completion. Generous for a long article, but far
 # below the SDKs' 10-minute defaults, which would freeze the scan loop on a
 # single stuck connection.
@@ -89,7 +100,8 @@ class AnthropicProvider(BaseCloudProvider):
             }
             if system:
                 kwargs["system"] = system
-            response = self._client.messages.create(**kwargs)
+            with _CALL_LOCK:
+                response = self._client.messages.create(**kwargs)
             text = next((b.text for b in response.content if b.type == "text"), "")
             if getattr(response, "stop_reason", None) == "max_tokens":
                 self._log(f"Cloud AI warning: {self.model} ran out of tokens ({MAX_TOKENS}) "
@@ -137,9 +149,10 @@ class OpenAIProvider(BaseCloudProvider):
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
         try:
-            response = self._client.chat.completions.create(
-                model=self.model, max_tokens=MAX_TOKENS, messages=messages,
-            )
+            with _CALL_LOCK:
+                response = self._client.chat.completions.create(
+                    model=self.model, max_tokens=MAX_TOKENS, messages=messages,
+                )
             choice = response.choices[0]
             text = choice.message.content or ""
             if getattr(choice, "finish_reason", None) == "length":
