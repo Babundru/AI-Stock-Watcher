@@ -164,9 +164,13 @@ def _intraday_prices(tickers):
     if not tickers:
         return prices
     try:
+        # threads=False: threaded downloads leak. yfinance starts them through
+        # `multitasking`, which keeps every thread in a list and never joins
+        # it, so each finished thread's stack stays mapped - the leak behind
+        # the October 2026 stalls (handoff/incidents.md).
         data = yf.download(
             tickers, period="1d", interval="1m", prepost=True,
-            progress=False, auto_adjust=False, threads=True,
+            progress=False, auto_adjust=False, threads=False,
         )
     except Exception as e:
         print(f"Price fetch failed: {e}")
@@ -505,9 +509,10 @@ def _intraday_bars(tickers):
     if not tickers:
         return bars
     try:
+        # threads=False: see _intraday_prices.
         data = yf.download(
             tickers, period="1d", interval="1m", prepost=True,
-            progress=False, auto_adjust=False, threads=True, group_by="column",
+            progress=False, auto_adjust=False, threads=False, group_by="column",
         )
     except Exception as e:
         print(f"Bar fetch failed: {e}")

@@ -10,6 +10,53 @@ them before pasting (bash reads a literal `<zone>` as a redirect).
 
 ---
 
+## 2026-10-31: app frozen while `active` - the leak found
+
+### What it looked like
+
+`systemctl` said `active` and SSH worked, but the last log line was 12 hours
+old, no data file had changed since Friday 21:54Z and the dashboard did not
+answer. Scans had fallen from up to 30 an hour to 0-3 from Friday 08:00Z, during
+market hours. `yfinance` logged `SPY: possibly delisted` and the like, which is
+false: most likely failed requests during the stall.
+
+### Diagnosis
+
+- The app was at `MemoryHigh` (~430M) with swap at `MemorySwapMax` (100M), so it
+  had nowhere to go, and spent ~80% of its time stalled on memory (the cgroup's
+  `memory.pressure`). In a 30s sample: 34.5s kernel, 0.23s user. The stack was
+  `mem_cgroup_handle_over_high` -> `try_to_free_mem_cgroup_pages`.
+- **That state is stable.** `MemoryHigh` throttles the process so hard that it
+  never reaches `MemoryMax`: `oom_kill` stayed 0. The previous run sat like this
+  for ~29 hours until `RuntimeMaxSec`, and even then the SIGTERM timed out and
+  it was SIGKILLed, so the save on shutdown probably did not finish.
+- Each of the last two runs got there within 18-30 hours of a restart, while
+  the Oct 24-26 run stayed flat for two days. Why it got faster after the
+  Oct 26-27 deploy is not established.
+- **The leak:** 7,779 mappings of ~8MB with guard pages, 62GB virtual, and only
+  8 live threads. They held 85MB of RAM, 97 of the 100MB of swap, and ~33MB of
+  page tables. `yf.download(threads=True)` starts threads through the
+  `multitasking` library, which keeps each one in `config["TASKS"]`, and yfinance
+  never joins them, so a finished thread's stack stays mapped. Reproduced in the
+  app's venv (Python 3.13.5): 200 finished tasks left 200 stacks; joining them
+  and clearing the list left 4. A real 25-ticker download left 25 retained tasks
+  with `threads=True` and 0 with `threads=False`.
+
+### Changes
+
+- `price_lookup.py`: `threads=False` on both `yf.download` calls.
+- `server.py` / `main.py`: a watchdog thread pings systemd while the scan loop
+  makes progress (`loop_stalled`, 30 minutes without a beat stops the pings).
+- Unit (`DEPLOY.md` section 6): `WatchdogSec=5min`, `WatchdogSignal=SIGTERM`,
+  `MemoryHigh` removed, `MemoryMax=500M`.
+- VM: journal capped at 200M. The cap the September entry below lists was not in
+  place, and the journal had reached 2.8GB.
+
+**Lesson:** `active` means little here. Check that `Memory in use` is still being
+logged, and the count of ~8MB anonymous regions in `/proc/<pid>/maps`.
+
+---
+
 ## 2026-10-24: memory full again - the October unit fixes were never applied
 
 ### What it looked like
@@ -81,7 +128,8 @@ stocks-ai.service: Consumed 1h 34min 41.461s CPU time, 373.9M memory peak, 405.7
 - The `period=1y` yfinance errors that start in the same hours come from the
   `fast_info` price fallback after Yahoo requests began failing. They look
   like a symptom of the thrashing, not the cause.
-- Leak source **not yet found**. Possibly part of it: 120 repeated
+- Leak source not found at the time (found 2026-10-31, see the entry above).
+  Possibly part of it: 120 repeated
   `price_lookup.fetch_prices` calls grew process memory ~13 MB on Windows
   (~0.1 MB a call, ~1 MB/h at the watch-check rate). Unconfirmed on the VM.
 - Log timestamps from before the fix are flush times, not event times:

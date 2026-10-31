@@ -85,8 +85,13 @@ these to the dashboard's in-memory buffer only, **not** to stdout/journal.
 Only raw `print()` calls (scattered in `news_collector.py`,
 `price_lookup.py`, `watch_manager.py`, etc.) reach `journalctl` on the VM.
 If you're debugging via SSH logs and something looks quiet, check the
-dashboard's Logs tab before assuming the loop is stuck. That includes the
-per-cycle `Memory in use` line - it's dashboard-only.
+dashboard's Logs tab before assuming the loop is stuck. The per-cycle
+`Memory in use` line goes to both.
+
+**Watchdog**: `server.py` pings systemd (`WatchdogSec`) while
+`backend.loop_stalled()` is false. The loop beats in `_sleep`, at each article
+and at the top of each scan; anything that can block it for over 30 minutes
+without one of those gets the service restarted.
 
 `cloud_providers.py: _log` used to do both (print *and* callback), which
 put every AI prompt preview and response into the journal as well as the
@@ -184,6 +189,8 @@ It already got tight once - see `incidents.md`. Rules that came out of it:
 - **Anything whose cost scales with the number of open watches, holdings
   or tickers must be chunked or capped.** That was the bug: one unbounded
   `yf.download` over a set that only ever grew.
+- **Never call `yf.download` with `threads=True`.** Its threads are never
+  joined, so each one leaves its stack behind (see `incidents.md`, 2026-10-31).
 - Everything else in the process is deliberately bounded - `DashboardState`
   deques (`MAX_LOG_LINES=2000`, `MAX_ALERTS=500`), 500 processed URLs and 500
   headlines, the 64-entry scrape cache, the 60-post Reddit backlog, the

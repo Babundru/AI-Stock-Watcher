@@ -130,6 +130,7 @@ class StockAppBackend:
         self.stats = self._load_stats()
         self.running = False
         self.thread = None
+        self._last_beat = 0.0  # when the scan loop last showed progress
         # Bumped on every start(). A scan loop only keeps going while it is
         # the current generation, so a stop() followed quickly by a start()
         # cannot leave two loops alive: the old thread may still be inside a
@@ -366,6 +367,7 @@ class StockAppBackend:
         if self.thread and self.thread.is_alive():
             self.thread.join(timeout=3)
         self._generation += 1
+        self._last_beat = time.time()
         self.running = True
         # Bring the model server up before the first article arrives.
         # Attaches to an already-running Ollama rather than starting a second.
@@ -415,11 +417,18 @@ class StockAppBackend:
         """Whether the loop of this generation should keep going."""
         return self.running and self._generation == generation
 
+    def loop_stalled(self, limit):
+        """Whether the monitoring is on but its loop has made no progress for
+        `limit` seconds. The loop beats while it sleeps and at each article.
+        A stopped monitoring is not a stall."""
+        return self.running and time.time() - self._last_beat > limit
+
     def _sleep(self, seconds, generation):
         """Sleep in 1s steps so stop() stays responsive."""
         for _ in range(int(seconds)):
             if not self._alive(generation):
                 break
+            self._last_beat = time.time()
             time.sleep(1)
 
     def _wait(self, seconds, generation, status=None):
@@ -491,6 +500,7 @@ class StockAppBackend:
             for hint, article, discovery in queued:
                 if not self._alive(generation):
                     break
+                self._last_beat = time.time()
                 # Counted before it runs: a post whose processing raises is
                 # not put back, or it would abort every pass after this one.
                 done += 1
@@ -550,6 +560,7 @@ class StockAppBackend:
         prev_scan_start = None
         while self._alive(generation):
             try:
+                self._last_beat = time.time()
                 scan_start = datetime.datetime.now(datetime.timezone.utc)
                 self.collector.window_start = (
                     prev_scan_start - datetime.timedelta(minutes=config.LOOKBACK_MINUTES)

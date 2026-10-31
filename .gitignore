@@ -34,6 +34,8 @@ data/broker_orders.json.tmp
 data/panel_votes.json
 data/panel_votes.json.tmp
 data/reviews/
+# Hand-made backups, e.g. settings.json.bak-20261026: may hold secrets.
+data/*.bak-*
 
 
 # Environments / tooling

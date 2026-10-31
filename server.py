@@ -23,8 +23,10 @@ import datetime
 import hmac
 import os
 import signal
+import socket
 import sys
 import threading
+import time
 
 # Every data file is addressed as "data/..." relative to the working
 # directory. Pin it to this file's folder so the service behaves the same
@@ -669,6 +671,35 @@ def api_keywords_delete(keyword):
     return jsonify(keyword_mgr.get_all_keywords())
 
 
+# How long the scan loop may show no progress before systemd is left to restart
+# the service (WatchdogSec, DEPLOY.md section 6). Generous: one article takes
+# minutes at worst, so half an hour with no beat is a stall, not a slow pass.
+LOOP_STALL_LIMIT = 30 * 60
+WATCHDOG_PING_SECONDS = 60
+
+
+def _watchdog_loop(address):
+    """Tell systemd the app is alive for as long as its scan loop is.
+
+    systemd sees a frozen process as `active`, and in October 2026 the app sat
+    frozen for a day at a time like that (handoff/incidents.md). If the whole
+    process stalls this thread stalls with it; if only the scan loop does, the
+    check below stops the pings. Either way WatchdogSec then restarts it.
+    """
+    if address.startswith("@"):
+        address = "\0" + address[1:]  # abstract socket
+    with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
+        while True:
+            if backend.loop_stalled(LOOP_STALL_LIMIT):
+                print("Scan loop stalled: no longer pinging the systemd watchdog", flush=True)
+            else:
+                try:
+                    sock.sendto(b"WATCHDOG=1", address)
+                except OSError as e:
+                    print(f"Watchdog ping failed: {e}", flush=True)
+            time.sleep(WATCHDOG_PING_SECONDS)
+
+
 if __name__ == "__main__":
     if not config.DASHBOARD_PASSWORD:
         print("WARNING: DASHBOARD_USERNAME/DASHBOARD_PASSWORD are not set "
@@ -686,6 +717,10 @@ if __name__ == "__main__":
 
     signal.signal(signal.SIGTERM, _shutdown)
     backend.start()
+    # Set by systemd only when the unit has WatchdogSec.
+    if os.environ.get("WATCHDOG_USEC") and os.environ.get("NOTIFY_SOCKET"):
+        threading.Thread(target=_watchdog_loop, args=(os.environ["NOTIFY_SOCKET"],),
+                         name="watchdog", daemon=True).start()
     try:
         from waitress import serve
         print(f"Serving dashboard on http://{HOST}:{PORT} (waitress)")

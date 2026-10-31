@@ -101,6 +101,19 @@ echo 'net.ipv4.conf.default.log_martians=0' | sudo tee -a /etc/sysctl.d/99-quiet
 sudo sysctl --system
 ```
 
+And cap the journal. The default limit is 10% of the disk, ~3GB here, and the
+hourly reads of it cost a lot on this disk:
+
+```bash
+sudo mkdir -p /etc/systemd/journald.conf.d
+sudo tee /etc/systemd/journald.conf.d/size.conf >/dev/null <<'EOF'
+[Journal]
+SystemMaxUse=200M
+RuntimeMaxUse=50M
+EOF
+sudo systemctl restart systemd-journald
+```
+
 ## 4. Configure
 
 Only the dashboard login has to be set by hand, before the service is
@@ -165,25 +178,32 @@ RestartSec=30
 # Log lines reach journald as they are written. Block-buffered, they came
 # out in bursts stamped with the time of the flush, not of the event.
 Environment=PYTHONUNBUFFERED=1
-# Planned restart every two days. The process grows slowly with uptime
-# (October 2026: past MemoryHigh after 2.7-4.6 days, killed at ~4.5 - see
-# handoff/incidents.md); restarting well before that keeps the box healthy.
-# Reaching the limit counts as a failure, so Restart=on-failure brings it
-# back; server.py saves its state on the SIGTERM first.
+# Planned restart every two days, a safety net against slow growth. Reaching
+# the limit counts as a failure, so Restart=on-failure brings it back; server.py
+# saves its state on the SIGTERM first.
 RuntimeMaxSec=2d
+# A frozen process is still `active` to systemd. server.py pings this watchdog
+# for as long as its scan loop makes progress (LOOP_STALL_LIMIT, 30 minutes);
+# without a ping for 5 minutes systemd restarts the service. SIGTERM rather
+# than the default SIGABRT: the state gets a chance to be saved, and no core
+# dump lands on this disk.
+WatchdogSec=5min
+WatchdogSignal=SIGTERM
 
 # THE IMPORTANT PART on a 1GB VM. Without a cap, this process growing past
 # what the box has does not kill *this* service - it takes down sshd,
 # tailscaled and journald with it, and you lose all access to the machine.
 # With the cap the kernel kills only this unit and systemd restarts it,
 # while everything you need to get in stays alive.
+#
+# No MemoryHigh, on purpose: it throttles without ever killing. In October 2026
+# it held the app at its limit in constant reclaim, frozen for up to ~29 hours,
+# never reaching MemoryMax (handoff/incidents.md).
 MemoryAccounting=yes
-MemoryHigh=420M
-MemoryMax=550M
+MemoryMax=500M
 # MemoryMax caps RAM only, not swap: in October 2026 the process went on into
 # zram (374M RAM + 406M swap) until the whole VM ran out and thrashed for ~19
-# hours before the kernel killed it. Capping swap makes the cgroup kill this
-# service instead, in minutes.
+# hours before the kernel killed it.
 MemorySwapMax=100M
 OOMPolicy=stop
 
@@ -196,12 +216,11 @@ IOSchedulingClass=idle
 WantedBy=multi-user.target
 ```
 
-`MemoryHigh` throttles the process and forces reclaim as it approaches the
-limit; `MemoryMax` is the hard kill. Confirm both took effect - a typo here
-silently gives you no protection at all:
+Confirm the limits took effect - a typo here silently gives you no protection
+at all:
 
 ```bash
-systemctl show stocks-ai -p MemoryHigh -p MemoryMax -p MemorySwapMax -p OOMPolicy -p RuntimeMaxUSec
+systemctl show stocks-ai -p MemoryHigh -p MemoryMax -p MemorySwapMax -p OOMPolicy -p RuntimeMaxUSec -p WatchdogUSec -p WatchdogTimestamp
 systemctl status stocks-ai | grep -i memory      # shows live usage
 journalctl -u stocks-ai | grep "Memory in use"   # the app's own reading, once per scan
 ```
