@@ -1094,7 +1094,10 @@ class StockAppBackend:
             direction, impact, expected_pct, context,
             needs_confirmation=trust == OPINION,
             capped=strategy.parse_flag(analysis.get('value_is_capped')) is True,
-            reported_pct=reported, event_type=analysis.get('event_type'), horizon=horizon)
+            reported_pct=reported, event_type=analysis.get('event_type'), horizon=horizon,
+            queued=queued and (article.get('published_ts') is None
+                               or strategy.market_open(ticker, _parse_time(
+                                   article.get('published_ts'), None)) is False))
         decision['_plan'] = plan
         # A merger-arbitrage plan sets its own horizon (strategy._merger_arb).
         horizon = plan.get('horizon') or horizon
@@ -1683,6 +1686,12 @@ class StockAppBackend:
             # or - a position older than that - the last pass's worth.
             opened = _parse_time(position.get('opened_at'), now).timestamp()
             after = max(opened // 60 * 60, now_ts - 2 * WATCH_CHECK_INTERVAL)
+            # Kept, so the next pass carries on from here. Left unset, a
+            # delayed feed never caught up: Yahoo's London, Paris and Swiss
+            # minutes arrive ~15 minutes late, every bar was older than this
+            # sliding "last 10 minutes", and such positions were never priced
+            # until no_price closed them (CCC.L, MCG.L, BSLN.SW, Oct-Nov 2026).
+            position['last_bar_ts'] = after
         gated = config.EXITS_REGULAR_HOURS_ONLY
         ticker = position['ticker']
         if not position.get('last_price_at'):

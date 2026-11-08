@@ -64,6 +64,12 @@ minutes into the session (and out-of-hours news waits for the open instead
 of being dropped), the stop is wider on news day, half the position is sold
 at the target, INTRADAY stories and illiquid or out-of-scope listings are
 skipped, and confidence no longer sizes trades.
+Strategy `v10` (Nov 2026, from v9's first 14 trades: -2.6% average, 21%
+won) changed two things: out-of-hours news of a type in
+`QUEUED_SKIP_EVENT_TYPES` (default `EARNINGS`) is no longer bought at the
+next open - rule `queued`, followed as a skipped trade - and the break-even
+stop counts every cost (below). The same release fixed European positions
+never being priced (see Exit).
 
 **Entry** (`main.py:_decide_trade`, cheapest checks first):
 - Only exchanges `markets.py` models (US + the European venues), narrowed by
@@ -89,7 +95,11 @@ skipped, and confidence no longer sizes trades.
   of that moment (`_run_pending_entries`, once per scan). The alert says it
   is waiting; the BUY/SHORT notification follows when it opens. Only for the
   first session after the story (with 30 minutes' grace before a close);
-  older news out of hours is passed over as before.
+  older news out of hours is passed over as before. News published while
+  the market was shut whose `event_type` is in `QUEUED_SKIP_EVENT_TYPES`
+  (`EARNINGS`) is refused at that point (`queued`): the opening gap has
+  already priced it, and all three v9 trades bought that way (CHYM, OPK,
+  CXW) were stopped out at about -7%.
 - `price_lookup.fetch_context(ticker, published, benchmark=SPY)` (two
   small single-ticker requests each for the stock and for SPY), then
   `strategy.plan_trade`. "Moved" is the story's own move
@@ -153,12 +163,23 @@ skipped, and confidence no longer sizes trades.
   `last_bar_ts` on the record marks where it got to. The exit is filled
   half the spread beyond the trigger level (`fills.exit_fill(at_level=True)`),
   not at the bid/ask of the moment the pass runs.
+- **Delayed feeds.** Yahoo's London, Paris and Swiss minutes arrive ~15
+  minutes late. A position that has never read a bar starts at its opening
+  minute (or the last two passes, for an old one), and that start is saved
+  as `last_bar_ts` straight away. Until Nov 2026 it was not, so each pass
+  recomputed "the last 10 minutes", every delayed bar fell before it, and
+  CCC.L, MCG.L and BSLN.SW were never priced until `no_price` closed them.
+  Their entries still use a price ~15 minutes old - the same delay.
 - **No exit on a stale price.** Exits only read bars; the stale last close
   `fetch_prices` falls back to is never acted on.
 - **Stop** always on, stored as `stop_gain` (the stop's level as a gain on
   the position) and mirrored to `stop_loss_price` for the UI. It only
   ratchets up: it trails the best price by the initial distance, jumps to
-  break-even once `BREAKEVEN_AT` (50%) of the target is gained, and - for
+  break-even once `BREAKEVEN_AT` (50%) of the target is gained (v10: the
+  level where closing nets zero, `strategy.breakeven_gain` - `PAPER_COST_PCT`,
+  the fixed fees on the position's size, FX and the exit's half spread - and
+  only once the price has been above it; before, `PAPER_COST_PCT` alone left
+  "break-even" exits at -1.3% to -2.3% net on ~$120 positions), and - for
   a watch opened with `LET_WINNERS_RUN` (`let_run`) - tightens to
   `TRAIL_AFTER_TARGET_MULT` (0.5) x the distance once the target is hit
   (`trailing: true`, one "TARGET REACHED" notification). Fires as

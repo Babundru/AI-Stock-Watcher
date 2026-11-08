@@ -258,3 +258,52 @@ automatically.
 2. C2, C4 - news speed and the "already priced in" problem.
 3. C5, C7, C8 - strategy changes, each judged as its own strategy version.
 4. C12 in shadow mode, then C9 and C10 once there is data to fit them.
+
+---
+
+# Review of v9 - 2026-11-08 (strategy v10)
+
+From the VM's data on 2026-11-08: 57 closed paper trades (+2.24% average,
+-0.72% median, 42% won; +0.00% without the 3 best), of which 14 under v9:
+**-2.60% average, 21% won**, and v9's 72 skipped trades -4.4%. Prices were
+checked against Yahoo's daily history for 12 trades and are real.
+
+## C13. European positions never priced - done
+
+Yahoo's London, Paris and Swiss 1-minute bars arrive ~15 minutes late.
+`main._run_bars` recomputed its start ("the last 10 minutes") on every pass
+until a position had read a bar, so every delayed bar fell before it: CCC.L,
+MCG.L and BSLN.SW had 0 price checks and were closed by `no_price` at about
+-2% (costs only); ENX.PA was open in the same state. The start is now saved
+on the first pass. Their entries still use the ~15-minute-old price - not
+fixed.
+
+## C14. Out-of-hours earnings bought after the gap - done
+
+The three closed v9 trades queued on out-of-hours earnings (CHYM, OPK, CXW)
+were all stopped out at about -7%. `QUEUED_SKIP_EVENT_TYPES` (`EARNINGS`)
+refuses them as rule `queued`, followed as skipped trades. Three trades is
+little; the skipped record will say whether to keep it.
+
+## C15. Break-even stop below break-even - done
+
+The stop moved to `PAPER_COST_PCT` only; with $1 per order on ~$120
+positions the fees alone are 1.6%, so PCOR, HELE and NOVO-B.CO closed
+"at break-even" at -1.3% to -2.3%. `strategy.breakeven_gain` includes
+fees, FX and the exit's half spread, and the stop only moves there once the
+price has been above it.
+
+## C16. Weekly reviewer judged the pooled record - done
+
+The Nov 7 review called the results "encouraging" from the pooled +2.24%.
+The prompt now shows each strategy version separately (median, and the
+average without the 3 best) and the last 14 days, and says to judge the
+running one.
+
+## Still open
+
+- A $1,000 paper budget makes the $1 fixed fee 1.6% of a typical trade -
+  consider a budget closer to what would really be traded.
+- The pooled edge is not significant (t = 1.4, bootstrap 90% interval
+  -0.1% to +5.0% a trade). Nothing here should go live before v10 has ~30
+  closed trades with a positive median.

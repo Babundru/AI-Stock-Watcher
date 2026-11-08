@@ -424,6 +424,14 @@ ENTRY_DELAY_AFTER_OPEN_MIN = 20
 # story. Before strategy v9 such news raised its alert but never traded.
 ENTRY_WAIT_FOR_SESSION = True
 
+# Event types (comma-separated, strategy.parse_event_type's names) whose
+# out-of-hours news is NOT bought at the next open: the overnight gap has
+# already done the work by then. All three closed v9 entries queued on
+# out-of-hours earnings (CHYM, OPK, CXW, Nov 2026) were stopped out at about
+# -7%. Refused as rule 'queued' and followed as skipped trades, so the cost of
+# the rule shows up. "" queues every type.
+QUEUED_SKIP_EVENT_TYPES = "EARNINGS"
+
 # On news day the stop starts this many times wider than usual and settles
 # to the usual STOP_ATR_MULT distance after the first session. The position
 # is sized on the wider stop, so the money at risk is unchanged - it is
@@ -552,6 +560,12 @@ IMPACT_LEVELS = ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
 # Set from the sensitivity slider in the app; both surfaces persist it to
 # data/settings.json and apply it live, with no restart.
 MIN_IMPACT = "HIGH"
+
+
+def queued_skip_event_types():
+    """QUEUED_SKIP_EVENT_TYPES as a set of upper-cased event types."""
+    return {part.strip().upper() for part in str(QUEUED_SKIP_EVENT_TYPES or "").split(",")
+            if part.strip()}
 
 
 def allowed_markets():
@@ -690,6 +704,7 @@ USER_SETTINGS = {
     "MERGER_ARB": _BOOL,
     "ENTRY_DELAY_AFTER_OPEN_MIN": _INT,
     "ENTRY_WAIT_FOR_SESSION": _BOOL,
+    "QUEUED_SKIP_EVENT_TYPES": _STR,
     "FIRST_DAY_STOP_MULT": _FLOAT,
     "SKIP_INTRADAY": _BOOL,
     "MAX_OPEN_POSITIONS": _INT,

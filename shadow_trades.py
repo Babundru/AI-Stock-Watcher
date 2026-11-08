@@ -45,6 +45,7 @@ RULE_LABELS = {
     'capped': "price capped by the news",
     'reported': "headline already reports the move",
     'intraday': "intraday story",
+    'queued': "out-of-hours earnings, bought after the gap",
     'illiquid': "too small or thinly traded",
     'reward_risk': "story too small for the stock",
     'cash': "not enough cash in the paper account",

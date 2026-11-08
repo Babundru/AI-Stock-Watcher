@@ -68,6 +68,7 @@ import re
 import pytz
 
 import config
+import costs
 import markets
 
 # Recorded on every watch and paper trade, so the ledger can compare rule
@@ -100,7 +101,13 @@ import markets
 # CRITICAL rating shrinks a position instead of growing it. A takeover target
 # ('capped') is held as merger arbitrage (mode 'merger_arb') rather than
 # refused, when config.MERGER_ARB is on.
-STRATEGY_VERSION = "v9"
+# v10 (Nov 2026, from the v9 results): out-of-hours EARNINGS news is no longer
+# bought at the next open (rule 'queued', config.QUEUED_SKIP_EVENT_TYPES), and
+# the break-even stop includes the fixed fees, FX and exit spread
+# (breakeven_gain) instead of PAPER_COST_PCT alone. Also: positions on
+# exchanges whose Yahoo minutes arrive late (London, Paris, Swiss) are now
+# priced at all - main._run_bars kept sliding past their bars.
+STRATEGY_VERSION = "v10"
 LEGACY_STRATEGY = "v1"
 
 # Normal daily range assumed for a stock whose ATR couldn't be worked out.
@@ -320,7 +327,7 @@ def _first_day_mult():
 
 
 def plan_trade(direction, impact, expected_pct, context, needs_confirmation=False, capped=False,
-               reported_pct=None, event_type=None, horizon=None):
+               reported_pct=None, event_type=None, horizon=None, queued=False):
     """Decide whether a signal is worth trading now, and size its exits.
 
     `expected_pct` is the analysis's expected total move (a fraction, or None
@@ -328,7 +335,8 @@ def plan_trade(direction, impact, expected_pct, context, needs_confirmation=Fals
     story from an opinion source, `capped` when the analysis says the news
     pins the stock to a set price. `reported_pct` is a move the headline
     itself reports (reported_move), `event_type` the analysis's category,
-    `horizon` its INTRADAY/DAYS/WEEKS.
+    `horizon` its INTRADAY/DAYS/WEEKS. `queued` is set when the signal came
+    in while its market was shut and is being judged at the next session.
 
     Returns a dict with 'ok'; when not ok, the 'rule' that refused it and a
     readable 'reason'. The sizing is filled in either way, so a refused
@@ -389,6 +397,11 @@ def plan_trade(direction, impact, expected_pct, context, needs_confirmation=Fals
     if config.SKIP_INTRADAY and (horizon or '').upper() == 'INTRADAY':
         return skip('intraday', "an intraday story - its effect is expected to fade within the "
                                 "session, too soon to beat the costs")
+    # Out-of-hours news bought at the next open: for these types the gap
+    # is the reaction, and buying after it bought the top (C7 follow-up).
+    if queued and (event_type or '').upper() in config.queued_skip_event_types():
+        return skip('queued', f"{(event_type or '').lower()} news from while the market was shut - "
+                              f"the opening gap has already priced it")
     if moved is None:
         if needs_confirmation:
             return skip('unconfirmed', "opinion source, and no price data to confirm it")
@@ -661,8 +674,11 @@ def update_exit(watch, price, cost_pct=0.0, when=None):
 
     # Ratchet: each rule can only raise the stop.
     stop = max(stop, peak - distance)
-    if peak >= config.BREAKEVEN_AT * target:
-        stop = max(stop, cost_pct)
+    # Only once the price has been past break-even: a stop above the best
+    # price seen would "fill" at a level the stock never traded at.
+    breakeven = breakeven_gain(watch, cost_pct)
+    if peak >= config.BREAKEVEN_AT * target and peak > breakeven:
+        stop = max(stop, breakeven)
     if watch.get('trailing'):
         stop = max(stop, peak - max(config.TRAIL_AFTER_TARGET_MULT * settled, 0.005))
 
@@ -675,6 +691,19 @@ def update_exit(watch, price, cost_pct=0.0, when=None):
         # cutting a loss - reported separately so the record shows which.
         return _stop_reason(stop), target_just_reached
     return None, target_just_reached
+
+
+def breakeven_gain(position, cost_pct=0.0):
+    """The gain on `position` at which closing it nets zero: every cost the
+    close will book (costs.round_trip_pct - `cost_pct`, the fixed fees on its
+    size, FX for a foreign listing) plus the half spread the exit pays.
+
+    Until v10 the break-even stop sat at `cost_pct` alone, i.e. before fees
+    and spread: on a ~$120 position the $1-per-order fees are 1.6% by
+    themselves, and "break-even" exits closed at -1.3% to -2.3% net (PCOR,
+    HELE, NOVO-B.CO, Nov 2026)."""
+    return (costs.round_trip_pct(position, base_pct=cost_pct)
+            + (position.get('spread_pct') or 0.0) / 2)
 
 
 def blended_gain(position, final_gain):
