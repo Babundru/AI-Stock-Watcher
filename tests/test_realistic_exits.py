@@ -131,6 +131,22 @@ class WatchPassTest(unittest.TestCase):
         self.assertIsNone(seen['reason'])
         self.assertIsNone(seen['close'])
 
+    def test_a_delayed_feed_is_read_once_its_bars_arrive(self):
+        # A London-style feed ~15 minutes behind: at the first pass after the
+        # position opened there are no bars from after its opening minute yet.
+        opened = NOW - datetime.timedelta(minutes=2)
+        p = position(opened_at=opened.isoformat())
+        early = [bar(17, 100, 100, 100, 100)]
+        seen = self.run_bars(p, early)
+        self.assertIsNone(seen['close'])
+        # Twenty minutes on, the minutes after the open have arrived - still
+        # ~15 minutes old, i.e. before "now - 10 minutes". They are read.
+        later = NOW + datetime.timedelta(minutes=20)
+        rows = early + [((opened + datetime.timedelta(minutes=m)).timestamp(), 100, 100, 94, 99)
+                        for m in (1, 2, 3)]
+        seen = self.main.StockAppBackend._run_bars(p, rows, later, 0.0)
+        self.assertEqual((seen['reason'], seen['price']), ('stop_loss', 95.0))
+
     def test_bars_outside_the_session_do_nothing(self):
         # 08:00 ET, pre-market: a crash there fires nothing.
         early = datetime.datetime(2026, 9, 30, 12, 0, tzinfo=UTC)

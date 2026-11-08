@@ -127,7 +127,11 @@ instead of model reasoning.
 - **Weekly reviewer** (`weekly_review.py`, `WEEKLY_REVIEW`): at the weekend,
   once a week, one call with the ledger's breakdowns, the skipped trades by
   rule and the panel scores; writes proposed rule changes to
-  `data/reviews/review-<date>.md` and notifies. Nothing is applied.
+  `data/reviews/review-<date>.md` and notifies. Nothing is applied. The
+  prompt shows each strategy version on its own (newest first, with median
+  and the average without the 3 best trades) and the last 14 days, and tells
+  the model to judge the running version: the Nov 7 review called the
+  pooled +2.24% "encouraging" while v9 stood at -2.6% over 14 trades.
   `py weekly_review.py` writes one now.
 
 ## Engine 1: Local (`analyzer.py` + `ollama_manager.py`)

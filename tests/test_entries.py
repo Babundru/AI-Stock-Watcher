@@ -77,7 +77,8 @@ class FirstDayStopTests(unittest.TestCase):
         p = mock.patch.multiple(config, STOP_LOSS_PCT=0.08, STOP_ATR_MULT=1.5, STOP_MIN_PCT=0.02,
                                 MIN_REWARD_RISK=1.2, MIN_MOVE_ATR_MULT=1.2, FIRST_DAY_STOP_MULT=1.5,
                                 BREAKEVEN_AT=0.5, TRAIL_AFTER_TARGET_MULT=0.5, SKIP_INTRADAY=True,
-                                REPORTED_MOVE_MAX_PCT=0.05, MERGER_ARB=True)
+                                REPORTED_MOVE_MAX_PCT=0.05, MERGER_ARB=True,
+                                QUEUED_SKIP_EVENT_TYPES="EARNINGS")
         p.start()
         self.addCleanup(p.stop)
 
@@ -125,6 +126,52 @@ class FirstDayStopTests(unittest.TestCase):
         config.SKIP_INTRADAY = False
         self.assertTrue(strategy.plan_trade('LONG', 'HIGH', 0.06, {'atr_pct': 0.02},
                                             horizon='INTRADAY')['ok'])
+
+    def test_out_of_hours_earnings_are_not_bought_at_the_open(self):
+        config.QUEUED_SKIP_EVENT_TYPES = "EARNINGS"
+        ctx = {'atr_pct': 0.02}
+        plan = strategy.plan_trade('LONG', 'HIGH', 0.06, ctx, event_type='EARNINGS', queued=True)
+        self.assertEqual(plan['rule'], 'queued')
+        # Earnings that come out in the session, and other queued news, trade.
+        self.assertTrue(strategy.plan_trade('LONG', 'HIGH', 0.06, ctx, event_type='EARNINGS')['ok'])
+        self.assertTrue(strategy.plan_trade('LONG', 'HIGH', 0.06, ctx, event_type='GUIDANCE',
+                                            queued=True)['ok'])
+        config.QUEUED_SKIP_EVENT_TYPES = ""
+        self.assertTrue(strategy.plan_trade('LONG', 'HIGH', 0.06, ctx, event_type='EARNINGS',
+                                            queued=True)['ok'])
+
+
+class BreakevenTests(unittest.TestCase):
+    """The break-even stop sits where closing nets zero: fees, FX and the
+    exit's half spread included, not PAPER_COST_PCT alone."""
+
+    def setUp(self):
+        p = mock.patch.multiple(config, BREAKEVEN_AT=0.5, TRAIL_AFTER_TARGET_MULT=0.5,
+                                PAPER_COST_PCT=0.001, PAPER_FEE_PER_ORDER=1.0, PAPER_FX_FEE_PCT=0.0)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def watch(self):
+        return {'ticker': 'AAA', 'direction': 'LONG', 'entry_price': 100.0, 'target_pct': 0.08,
+                'stop_pct': 0.08, 'stop_gain': -0.08, 'let_run': True, 'spread_pct': 0.006,
+                'position_usd': 100.0}
+
+    def test_the_level_counts_every_cost(self):
+        # 0.1% + 2 x $1 on $100 + half the 0.6% spread.
+        self.assertAlmostEqual(strategy.breakeven_gain(self.watch(), 0.001), 0.001 + 0.02 + 0.003)
+
+    def test_the_stop_moves_to_it_once_the_price_is_past_it(self):
+        w = self.watch()
+        strategy.update_exit_bar(w, (100.0, 105.0, 100.0, 104.5), cost_pct=0.001)
+        self.assertAlmostEqual(w['stop_gain'], 0.024)
+
+    def test_never_above_the_best_price_seen(self):
+        # Half the target (4%) reached... but with $1 fees on $25 the costs
+        # are 8.4%: no stop above the price, which would fill where nothing traded.
+        w = dict(self.watch(), position_usd=25.0)
+        reason, _, _ = strategy.update_exit_bar(w, (100.0, 104.5, 100.0, 104.0), cost_pct=0.001)
+        self.assertIsNone(reason)
+        self.assertLess(w['stop_gain'], 0.045)
 
 
 class HalfAtTargetTests(unittest.TestCase):
@@ -230,7 +277,8 @@ class QueuedEntryTests(unittest.TestCase):
                                 ENTRY_MAX_SPREAD_PCT=0.015, MAX_OPEN_POSITIONS=20,
                                 PAPER_FEE_PER_ORDER=0.0, PAPER_FX_FEE_PCT=0.0, PAPER_MAX_FEE_PCT=0.0,
                                 FIRST_DAY_STOP_MULT=1.0, ENTRY_DELAY_AFTER_OPEN_MIN=20,
-                                ENTRY_WAIT_FOR_SESSION=True, NOTIFY_SHORTS=True)
+                                ENTRY_WAIT_FOR_SESSION=True, NOTIFY_SHORTS=True,
+                                QUEUED_SKIP_EVENT_TYPES="EARNINGS")
         p.start()
         self.addCleanup(p.stop)
         tmp = tempfile.TemporaryDirectory()
@@ -278,6 +326,18 @@ class QueuedEntryTests(unittest.TestCase):
         self.assertEqual(len(self.b.paper.trades), 1)
         decision = self.b.notifier.notify.call_args[1]['decision']
         self.assertTrue(decision['opened'])
+
+    def test_queued_earnings_are_followed_as_skipped_not_bought(self):
+        config.QUEUED_SKIP_EVENT_TYPES = "EARNINGS"
+        self.b._pending_entries.append({
+            'ticker': "AAA", 'ready_at': datetime.datetime.now(datetime.timezone.utc),
+            'args': ("AAA", "Acme", "LONG", "HIGH", "RALLY", 0.08, 80,
+                     {'horizon': 'DAYS', 'event_type': 'EARNINGS'}, {}, "u", "t")})
+        with mock.patch.object(self.main.strategy, 'market_open', return_value=True),              mock.patch.object(self.main.price_lookup, 'fetch_context', return_value=self.ctx),              mock.patch.object(self.main.price_lookup, 'fetch_quote', return_value=self.quote):
+            self.b._run_pending_entries()
+        self.assertEqual(self.b.paper.trades, [])
+        self.b.notifier.notify.assert_not_called()
+        self.assertEqual(self.b.shadows.track.call_args[0][4]['rule'], 'queued')
 
     def test_a_queued_entry_on_a_holiday_does_not_open(self):
         self.b._pending_entries.append({
